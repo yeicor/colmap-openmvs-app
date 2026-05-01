@@ -1,0 +1,7 @@
+[application]
+name = "Photogrammetry App"
+
+[bundle]
+identifier = "com.github.yeicor.colmap-openmvs-app"
+publisher = "Yeicor"
+icon = ["assets/icon.png"]
