@@ -1,1 +1,1 @@
-mod settings;
+// Common module - currently empty, can be used for shared types

@@ -1,17 +1,14 @@
-use std::convert::Infallible;
-
-use dioxus::{fullstack::Lazy, prelude::*};
+use dioxus::fullstack::Lazy;
+use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use tokio::sync::RwLock;
 
-/// The settings struct that will hold all the settings for the application
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
-    /// The path to the folder containing all the projects
     pub projects_folder: String,
 }
 
-#[cfg(feature = "server")]
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -21,7 +18,7 @@ impl Default for Settings {
 }
 
 #[cfg(feature = "server")]
-static SETTINGS: Lazy<RwLock<Settings>> =
+pub static SETTINGS: Lazy<RwLock<Settings>> =
     Lazy::new(|| async move { Ok::<_, Infallible>(RwLock::new(Settings::default())) });
 
 #[get("/settings")]

@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 mod views;
-use views::{Projects, Settings};
+use views::{ProjectDetail, Projects, Settings};
 
 mod common;
 
@@ -14,8 +14,8 @@ enum Route {
     Projects {},
     #[route("/settings")]
     Settings {},
-    // #[route("/project/:project_id")]
-    // Project { project_id: String },
+    #[route("/project/:name")]
+    ProjectDetail { name: String },
 }
 
 fn main() {
