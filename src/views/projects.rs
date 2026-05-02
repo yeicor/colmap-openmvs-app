@@ -1,6 +1,7 @@
+use crate::server::get_projects;
 use crate::Route;
 use dioxus::prelude::*;
-use dioxus_free_icons::icons::bs_icons::{BsArrowClockwise, BsCamera, BsGear, BsPlusCircle};
+use dioxus_free_icons::icons::bs_icons::{BsCamera, BsGear, BsPlusCircle};
 use dioxus_free_icons::Icon;
 use dioxus_primitives::alert_dialog::{
     AlertDialogAction, AlertDialogActions, AlertDialogContent, AlertDialogRoot, AlertDialogTitle,
@@ -10,7 +11,7 @@ use dioxus_primitives::alert_dialog::{
 pub fn Projects() -> Element {
     let mut create_project_open = use_signal(|| false);
     let mut create_project_name = use_signal(|| String::new());
-    let mut get_projects = use_resource(|| get_projects());
+    let project_list = use_resource(|| get_projects());
     rsx! {
         link { rel: "stylesheet", href: asset!("/assets/views/projects.css") }
         div {
@@ -28,14 +29,6 @@ pub fn Projects() -> Element {
                 },
                 Icon {
                     icon: BsPlusCircle,
-                }
-            }
-            a {
-                onclick: move |_| {
-                    get_projects.restart();
-                },
-                Icon {
-                    icon: BsArrowClockwise,
                 }
             }
             AlertDialogRoot {
@@ -73,7 +66,7 @@ pub fn Projects() -> Element {
                     icon: BsGear,
                 }
             }
-            match &*get_projects.read_unchecked() {
+            match &*project_list.read_unchecked() {
                 Some(Ok(projects)) => rsx! { ul { for project in projects {
                     li { "{project}" }
                 } }},
@@ -82,10 +75,4 @@ pub fn Projects() -> Element {
             }
         }
     }
-}
-
-#[get("/projects")]
-pub async fn get_projects() -> Result<Vec<String>> {
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    Err(dioxus::CapturedError::from_display("TODO: implement get_projects (settings first to support changing projects folder location)"))
 }

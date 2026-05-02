@@ -3,6 +3,10 @@ use dioxus::prelude::*;
 mod views;
 use views::{Projects, Settings};
 
+mod common;
+
+mod server;
+
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
 enum Route {

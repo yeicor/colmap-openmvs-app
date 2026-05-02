@@ -9,6 +9,11 @@ dioxus = { version = "0.7.7", features = ["router", "fullstack"] }
 dioxus-free-icons = {version = "0.10.0", features = ["bootstrap"] }
 dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version = "0.0.1", default-features = false }
 
+serde = { version = "*", features = ["derive"] } # Same version as dioxus
+serde_derive_default = "0.1"
+
+tokio = { version = "*", features = ["sync"] }
+
 [features]
 default = ["desktop"]
 web = ["dioxus/web"]

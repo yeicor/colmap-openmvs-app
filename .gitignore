@@ -1,1 +1,6 @@
+# Ignore build artifacts
 /target/
+
+
+# Ignore runtime files
+/projects/
