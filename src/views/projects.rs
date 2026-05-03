@@ -169,7 +169,7 @@ pub fn Projects(
                     extra_tooltip: rsx! { "Configure application settings" },
                     onclick: move |_| {
                         dioxus::prelude::navigator().push(Route::Settings {});
-                        eval("document.querySelector('.dx-sidebar-trigger').click()");
+                        eval("if (window.innerWidth <= 768) { document.querySelector('.dx-sidebar-trigger').click(); }");
                     },
                 }
             }
@@ -200,7 +200,7 @@ pub fn Projects(
                                     if dialog_type().is_none() { // Ignore clicks from the action buttons
                                         if let Some(proj) = projects().get(idx) {
                                             dioxus::prelude::navigator().push(Route::Project { name: proj.name.clone() });
-                                            eval("document.querySelector('.dx-sidebar-trigger').click()");
+                                            eval("if (window.innerWidth <= 768) { document.querySelector('.dx-sidebar-trigger').click(); }");
                                         }
                                     }
                                 },

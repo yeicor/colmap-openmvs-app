@@ -14,13 +14,20 @@ serde_derive_default = "0.1"
 
 tokio = { version = "*", features = ["sync", "macros", "rt"] }
 
+# Web/WASM dependencies for file handling
+web-sys = { version = "0.3", features = ["Document", "Element", "HtmlInputElement", "FileList", "File", "FileReader", "Window", "console"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+
 # Runtime system dependencies
-reqwest = { version = "0.11", features = ["json", "rustls"] }
+reqwest = { version = "0.11", features = ["json", "stream", "rustls"] }
 serde_json = "1.0"
 thiserror = "1.0"
 which = "5.0"
 tar = "0.4"
 xz2 = "0.1"
+sevenz-rust2 = "0.21"
 
 [features]
 default = ["desktop"]

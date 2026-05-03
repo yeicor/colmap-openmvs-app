@@ -1,11 +1,25 @@
-use crate::components::tabs::{TabContent, TabList, TabTrigger, Tabs};
-use crate::mycomponents::page_header::{BackButton, PageHeaderButton};
-use crate::mycomponents::PageHeader;
+use crate::components::{
+    progress::{Progress, ProgressIndicator},
+    tabs::{TabContent, TabList, TabTrigger, Tabs},
+};
+use crate::mycomponents::{BackButton, PageHeader, PageHeaderButton};
 use crate::Route;
 use dioxus::prelude::*;
+
 use dioxus_free_icons::icons::bs_icons::{BsBoxSeam, BsCamera2, BsFileText, BsGear, BsImages};
 use dioxus_free_icons::Icon;
-use dioxus_primitives::progress::{Progress, ProgressIndicator};
+
+mod images;
+use images::ImagesTab;
+
+mod config;
+use config::ConfigTab;
+
+mod logs;
+use logs::LogsTab;
+
+mod outputs;
+use outputs::OutputsTab;
 
 #[component]
 pub fn Project(name: String) -> Element {
@@ -13,6 +27,7 @@ pub fn Project(name: String) -> Element {
 
     rsx! {
         document::Link { rel: "stylesheet", href: asset!("/assets/views/project.css") }
+        document::Link { rel: "stylesheet", href: asset!("/assets/views/project/images.css") }
 
         div {
             id: "project",
@@ -23,12 +38,13 @@ pub fn Project(name: String) -> Element {
                     icon: rsx! { "▶️" },
                     extra: rsx! { "Run" },
                     extra_tooltip: Some(rsx! { "Start/stop the reconstruction pipeline for this project" }),
-                    onclick: move |_| { dioxus::prelude::navigator().push(Route::Settings {}); }
+                    onclick: move |_| { /* TODO */ }
                 }
                 BackButton {
                     onclick: move |_| { dioxus::prelude::navigator().push(Route::Projects {}); }
                 }
                 Progress {
+                    value: 0.0,
                     ProgressIndicator {}
                 }
             }
@@ -70,22 +86,22 @@ pub fn Project(name: String) -> Element {
                     TabContent {
                         value: "images".to_string(),
                         index: 0usize,
-                        div { class: "tab-content", "Images CRUD - Placeholder" }
+                        ImagesTab { project_name: name.clone() }
                     }
                     TabContent {
                         value: "config".to_string(),
                         index: 1usize,
-                        div { class: "tab-content", "Config CRUD - Placeholder" }
+                        ConfigTab { project_name: name.clone() }
                     }
                     TabContent {
                         value: "logs".to_string(),
                         index: 2usize,
-                        div { class: "tab-content", "Logs View - Placeholder" }
+                        LogsTab { project_name: name.clone() }
                     }
                     TabContent {
                         value: "outputs".to_string(),
                         index: 3usize,
-                        div { class: "tab-content", "Outputs View - Placeholder" }
+                        OutputsTab { project_name: name.clone() }
                     }
                 }
             }

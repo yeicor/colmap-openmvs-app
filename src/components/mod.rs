@@ -6,3 +6,4 @@ pub mod sheet;
 pub mod sidebar;
 pub mod alert_dialog;
 pub mod tabs;
+pub mod progress;

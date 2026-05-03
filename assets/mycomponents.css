@@ -78,37 +78,6 @@
     }
 }
 
-/** Progress bar */
-[role="progressbar"][data-state="indeterminate"],
-[role="progressbar"][aria-valuenow] {
-    position: relative;
-    background: var(--primary-info-color, #e0e7ef);
-    border-radius: 5px;
-    overflow: hidden;
-    height: 2px;
-    width: 100%;
-}
-
-[role="progressbar"][data-state="indeterminate"] > div {
-    position: absolute;
-    left: 0;
-    top: 0;
-    height: 100%;
-    width: 40%;
-    background: linear-gradient(90deg, var(--secondary-info-color, #4f8cff) 0%, var(--primary-info-color, #e0e7ef) 100%);
-    border-radius: 5px;
-    animation: indeterminate-bar-move 1.2s infinite linear;
-}
-
-/* TODO: @keyframes indeterminate-bar-move {
-    0% {
-        left: -40%;
-    }
-    100% {
-        left: 100%;
-    }
-}*/
-
 /* Banner component styles */
 .error-banner,
 .info-banner {
