@@ -91,7 +91,7 @@ impl Runtime {
     pub fn proot() -> Self {
         #[cfg(target_os = "android")]
         let default_dir =
-            PathBuf::from("/data/data/com.yeicor.colmap_openmvs_app/files/runtimes/proot");
+            PathBuf::from("/data/data/com.github.yeicor.colmap_openmvs_app/files/runtimes/proot");
         #[cfg(not(target_os = "android"))]
         let default_dir = PathBuf::from("./runtimes/proot");
         Runtime::PRoot(PRoot::new(default_dir))

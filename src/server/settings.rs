@@ -16,7 +16,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             #[cfg(target_os = "android")]
-            projects_folder: "/data/data/com.yeicor.colmap_openmvs_app/files/projects".to_string(),
+            projects_folder: "/data/data/com.github.yeicor.colmap_openmvs_app/files/projects"
+                .to_string(),
             #[cfg(not(target_os = "android"))]
             projects_folder: "./projects".to_string(),
         }
