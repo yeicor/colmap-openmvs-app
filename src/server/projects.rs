@@ -1,6 +1,8 @@
+#[cfg(feature = "server")]
 use dioxus::core::anyhow;
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "server")]
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -1,7 +1,9 @@
+use crate::components::button::{Button, ButtonVariant};
 use crate::server::{get_settings, update_settings};
 use crate::Route;
+use dioxus::document::eval;
 use dioxus::prelude::*;
-use dioxus_free_icons::icons::bs_icons::{BsArrowLeft, BsGear};
+use dioxus_free_icons::icons::bs_icons::{BsFolder, BsGear};
 use dioxus_free_icons::Icon;
 
 #[component]
@@ -18,12 +20,8 @@ pub fn Settings() -> Element {
                 loading.set(true);
                 error.set(String::new());
                 match get_settings().await {
-                    Ok(s) => {
-                        projects_folder.set(s.projects_folder);
-                    }
-                    Err(e) => {
-                        error.set(format!("Failed to load settings: {}", e));
-                    }
+                    Ok(s) => projects_folder.set(s.projects_folder),
+                    Err(e) => error.set(format!("Failed to load settings: {}", e)),
                 }
                 loading.set(false);
             }
@@ -51,9 +49,22 @@ pub fn Settings() -> Element {
                         success.set("Settings saved successfully!".to_string());
                         has_changed.set(false);
                     }
-                    Err(e) => {
-                        error.set(format!("Failed to save settings: {}", e));
+                    Err(e) => error.set(format!("Failed to save settings: {}", e)),
+                }
+            }
+        });
+    };
+
+    let handle_cancel = move |_| {
+        spawn({
+            async move {
+                match get_settings().await {
+                    Ok(s) => {
+                        projects_folder.set(s.projects_folder);
+                        has_changed.set(false);
+                        error.set(String::new());
                     }
+                    Err(e) => error.set(format!("Failed to reload settings: {}", e)),
                 }
             }
         });
@@ -66,15 +77,16 @@ pub fn Settings() -> Element {
             id: "settings",
             div {
                 class: "header",
-                Link {
-                    to: Route::Projects {},
-                    class: "btn-icon btn-primary",
-                    title: "Back to projects",
-                    Icon { icon: BsArrowLeft }
-                }
                 h1 {
                     Icon { icon: BsGear }
                     "Settings"
+                }
+                Link {
+                    to: Route::Projects {},
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        "← Back"
+                    }
                 }
             }
 
@@ -82,13 +94,23 @@ pub fn Settings() -> Element {
                 div {
                     class: "error-banner",
                     "{error}"
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        onclick: move |_| error.set(String::new()),
+                        "×"
+                    }
                 }
             }
 
             if !success().is_empty() {
                 div {
-                    class: "success-banner",
+                    class: "info-banner",
                     "{success}"
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        onclick: move |_| success.set(String::new()),
+                        "×"
+                    }
                 }
             }
 
@@ -96,12 +118,12 @@ pub fn Settings() -> Element {
                 p { class: "loading", "Loading settings..." }
             } else {
                 div {
-                    class: "settings-container",
+                    class: "settings-form flex-responsive",
                     div {
-                        class: "settings-item",
+                        class: "form-group grow",
                         label { "Projects Folder" }
                         div {
-                            class: "input-group",
+                            class: "folder-row",
                             input {
                                 r#type: "text",
                                 value: "{projects_folder}",
@@ -112,40 +134,43 @@ pub fn Settings() -> Element {
                                     error.set(String::new());
                                     success.set(String::new());
                                 },
+                                class: "folder-input",
                             }
-                        }
-                        p {
-                            class: "help-text",
-                            "Path to the directory containing your projects"
+                            input {
+                                r#type: "file",
+                                directory: true,
+                                style: "display: none;",
+                                onchange: move |evt| {
+                                    for file in evt.files() {
+                                        projects_folder.set(file.path().to_str().expect("Invalid path").to_string());
+                                        has_changed.set(true);
+                                        error.set(String::new());
+                                        success.set(String::new());
+                                        break;
+                                    }
+                                }
+                            }
+                            Button {
+                                variant: ButtonVariant::Secondary,
+                                onclick: move |_| {
+                                    eval("document.querySelector('#settings input[type=file]').click()");
+                                },
+                                Icon { icon: BsFolder },
+                            }
                         }
                     }
 
                     if has_changed() {
                         div {
-                            class: "button-group",
-                            button {
-                                class: "btn-primary btn-save",
+                            class: "form-actions",
+                            Button {
+                                variant: ButtonVariant::Primary,
                                 onclick: handle_save,
                                 "Save"
                             }
-                            button {
-                                class: "btn-secondary btn-cancel",
-                                onclick: move |_| {
-                                    spawn({
-                                        async move {
-                                            match get_settings().await {
-                                                Ok(s) => {
-                                                    projects_folder.set(s.projects_folder);
-                                                    has_changed.set(false);
-                                                    error.set(String::new());
-                                                }
-                                                Err(e) => {
-                                                    error.set(format!("Failed to reload settings: {}", e));
-                                                }
-                                            }
-                                        }
-                                    });
-                                },
+                            Button {
+                                variant: ButtonVariant::Secondary,
+                                onclick: handle_cancel,
                                 "Cancel"
                             }
                         }

@@ -1,0 +1,70 @@
+/* Project view styles - scoped under #project */
+#project .header {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem;
+}
+
+#project .header h1 {
+    margin: 0;
+    margin-left: 32px;
+    font-size: 1.5rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    white-space: nowrap;
+    line-height: 1;
+    flex-shrink: 0;
+    min-width: 0;
+    width: calc(100% - 32px); /* Account for left margin */
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#project .header h1 svg {
+    width: 2rem;
+    height: 2rem;
+}
+
+#project .dx-tabs-list {
+    width: 100%;
+    justify-content: center;
+}
+
+#project .dx-tabs-trigger {
+    display: flex;
+    gap: 0.25rem;
+}
+
+@media (max-width: 400px) {
+    #project .dx-tabs-trigger {
+        display: block;
+    }
+}
+
+/* Main content area for tabs */
+#project .main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+/* Tab content styling */
+#project .tab-content {
+    flex: 1;
+    padding: 1rem;
+    overflow-y: auto;
+}
+
+/* Hide tab labels on mobile, keep icons */
+#project .tab-label {
+    display: block;
+}
+
+@media (max-width: 300px) {
+    #project .tab-label {
+        display: none;
+    }
+}

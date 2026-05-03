@@ -1,0 +1,21 @@
+:root {
+    /* Focus */
+    --focused-border-color: var(--dark, #3b82f6) var(--light, #2563eb);
+
+    /* Success */
+    --primary-success-color: var(--dark, #052e1f) var(--light, #ecfdf5);
+    --secondary-success-color: var(--dark, #34d399) var(--light, #10b981);
+
+    /* Warning */
+    --primary-warning-color: var(--dark, #3b2f05) var(--light, #fffbeb);
+    --secondary-warning-color: var(--dark, #fbbf24) var(--light, #f59e0b);
+
+    /* Error */
+    --primary-error-color: var(--dark, #3f1d1d) var(--light, #fef2f2);
+    --secondary-error-color: var(--dark, #f87171) var(--light, #ef4444);
+    --contrast-error-color: var(--dark, #dc2626) var(--light, #b91c1c);
+
+    /* Info */
+    --primary-info-color: var(--dark, #0c2e4e) var(--light, #eff6ff);
+    --secondary-info-color: var(--dark, #60a5fa) var(--light, #3b82f6);
+}

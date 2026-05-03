@@ -1,7 +1,10 @@
+#[cfg(feature = "server")]
 use dioxus::fullstack::Lazy;
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "server")]
 use std::convert::Infallible;
+#[cfg(feature = "server")]
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -12,6 +15,9 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            #[cfg(target_os = "android")]
+            projects_folder: "/data/data/com.yeicor.colmap_openmvs_app/files/projects".to_string(),
+            #[cfg(not(target_os = "android"))]
             projects_folder: "./projects".to_string(),
         }
     }
@@ -30,5 +36,6 @@ pub async fn get_settings() -> Result<Settings> {
 pub async fn update_settings(new_settings: Settings) -> Result<()> {
     let mut settings = SETTINGS.write().await;
     *settings = new_settings;
+    // TODO: Persist and reload settings from disk, and handle any necessary migrations or validations.
     Ok(())
 }
