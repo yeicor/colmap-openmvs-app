@@ -8,18 +8,25 @@ body {
 }
 
 /* Sidebar */
-
-.dx-sidebar-wrapper,
-.dx-sidebar-trigger {
-    position: absolute;
+#main {
+    display: flex;
+}
+#main > :not([data-slot="sidebar-wrapper"]) {
+    flex: 1;
+}
+.dx-sidebar-wrapper {
     pointer-events: none;
+    width: initial !important;
+    overflow: visible !important;
 }
 .dx-sidebar-trigger {
+    position: absolute;
     top: 0.6rem;
     left: 0.5rem;
     pointer-events: initial;
 }
-.dx-sheet-root {
+.dx-sheet-root,
+[data-slot="sidebar"] {
     pointer-events: initial;
 }
 

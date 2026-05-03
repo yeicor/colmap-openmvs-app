@@ -8,7 +8,7 @@ use crate::components::{
 };
 use crate::server::{create_project, delete_project, get_projects, rename_project};
 use crate::Route;
-use dioxus::prelude::*;
+use dioxus::{document::eval, prelude::*};
 use dioxus_free_icons::icons::bs_icons::{BsGear, BsPencil, BsPlusCircle, BsTrash};
 use dioxus_free_icons::Icon;
 use dioxus_primitives::ContentSide;
@@ -162,6 +162,7 @@ pub fn Projects() -> Element {
                             Link {
                                 to: Route::Settings {},
                                 Button {
+                                    onclick: move |_| { eval("document.querySelector('.dx-sidebar-trigger').click()"); },
                                     variant: ButtonVariant::Ghost,
                                     Icon { icon: BsGear }
                                     span { class: "btn-text", "Settings" }
@@ -209,6 +210,7 @@ pub fn Projects() -> Element {
                                 to: Route::Project { name: project.name.clone() },
                                 class: "project-name-link",
                                 div {
+                                    onclick: move |_| { eval("document.querySelector('.dx-sidebar-trigger').click()"); },
                                     class: "project-item",
                                     span {
                                         class: "project-name",
