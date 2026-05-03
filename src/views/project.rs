@@ -1,10 +1,11 @@
 use crate::components::tabs::{TabContent, TabList, TabTrigger, Tabs};
-use crate::mycomponents::page_header::BackButton;
+use crate::mycomponents::page_header::{BackButton, PageHeaderButton};
 use crate::mycomponents::PageHeader;
 use crate::Route;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{BsBoxSeam, BsCamera2, BsFileText, BsGear, BsImages};
 use dioxus_free_icons::Icon;
+use dioxus_primitives::progress::{Progress, ProgressIndicator};
 
 #[component]
 pub fn Project(name: String) -> Element {
@@ -18,8 +19,17 @@ pub fn Project(name: String) -> Element {
             PageHeader {
                 title: name.clone(),
                 icon: Some(rsx! { Icon { icon: BsCamera2 } }),
+                PageHeaderButton {
+                    icon: rsx! { "▶️" },
+                    extra: rsx! { "Run" },
+                    extra_tooltip: Some(rsx! { "Start/stop the reconstruction pipeline for this project" }),
+                    onclick: move |_| { dioxus::prelude::navigator().push(Route::Settings {}); }
+                }
                 BackButton {
                     onclick: move |_| { dioxus::prelude::navigator().push(Route::Projects {}); }
+                }
+                Progress {
+                    ProgressIndicator {}
                 }
             }
 
