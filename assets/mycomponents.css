@@ -1,0 +1,130 @@
+/* PageHeader component styles */
+.page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+    padding: 0px;
+    gap: 1rem;
+}
+
+.page-header .header-left {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    flex: 1;
+}
+
+.page-header h1 {
+    margin: 0;
+    margin-left: 32px;
+    font-size: 1.5rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    white-space: nowrap;
+    line-height: 1;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.page-header h1.no-left-margin {
+    margin-left: 0;
+}
+
+.page-header h1 svg {
+    width: 2rem;
+    height: 2rem;
+}
+
+.page-header {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    flex-shrink: 0;
+    align-items: center;
+}
+
+.page-header .dx-tooltip:has(.dx-button) {
+    flex: 0.7;
+    width: 100%;
+}
+.page-header .dx-tooltip > *,
+.page-header .dx-tooltip > * > * {
+    width: 100%;
+}
+.page-header .dx-button {
+    padding: 0px;
+    height: 32px;
+    overflow: hidden;
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    container-name: page-header-right-buttons;
+    container-type: size;
+}
+.page-header .dx-button .btn-label {
+    margin-left: 0.25rem;
+}
+@container page-header-right-buttons (max-width: 100px) {
+    .btn-label {
+        display: none;
+    }
+}
+
+/* Banner component styles */
+.error-banner,
+.info-banner {
+    padding: 0.5rem;
+    border-radius: 0.5rem;
+    margin-bottom: 0.5rem;
+    font-size: 1rem;
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.error-banner {
+    background: var(--primary-error-color);
+    color: var(--secondary-error-color);
+    border: 1px solid var(--secondary-error-color);
+}
+
+.info-banner {
+    background: var(--primary-info-color);
+    color: var(--secondary-info-color);
+    border: 1px solid var(--secondary-info-color);
+    animation: fadeOut 10s forwards;
+}
+
+.error-banner .dx-button,
+.info-banner .dx-button {
+    flex-shrink: 0;
+    margin: 0;
+}
+
+.error-banner .dx-button:hover,
+.info-banner .dx-button:hover {
+    background-color: rgba(0, 0, 0, 0.1);
+}
+
+@keyframes fadeOut {
+    0% {
+        opacity: 1;
+    }
+    90% {
+        opacity: 1;
+    }
+    100% {
+        opacity: 0;
+        display: none;
+    }
+}

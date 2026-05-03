@@ -1,4 +1,6 @@
 use crate::components::button::{Button, ButtonVariant};
+use crate::mycomponents::page_header::BackButton;
+use crate::mycomponents::{Banner, BannerType, PageHeader};
 use crate::server::{get_settings, update_settings};
 use crate::Route;
 use dioxus::document::eval;
@@ -75,43 +77,24 @@ pub fn Settings() -> Element {
 
         div {
             id: "settings",
-            div {
-                class: "header",
-                h1 {
-                    Icon { icon: BsGear }
-                    "Settings"
-                }
-                Link {
-                    to: Route::Projects {},
-                    Button {
-                        variant: ButtonVariant::Ghost,
-                        "← Back"
-                    }
+            PageHeader {
+                title: "Settings".to_string(),
+                icon: Some(rsx! { Icon { icon: BsGear } }),
+                BackButton {
+                    onclick: move |_| { dioxus::prelude::navigator().push(Route::Projects {}); }
                 }
             }
 
-            if !error().is_empty() {
-                div {
-                    class: "error-banner",
-                    "{error}"
-                    Button {
-                        variant: ButtonVariant::Ghost,
-                        onclick: move |_| error.set(String::new()),
-                        "×"
-                    }
-                }
+            Banner {
+                message: error(),
+                banner_type: BannerType::Error,
+                on_close: move |_| error.set(String::new()),
             }
 
-            if !success().is_empty() {
-                div {
-                    class: "info-banner",
-                    "{success}"
-                    Button {
-                        variant: ButtonVariant::Ghost,
-                        onclick: move |_| success.set(String::new()),
-                        "×"
-                    }
-                }
+            Banner {
+                message: success(),
+                banner_type: BannerType::Info,
+                on_close: move |_| success.set(String::new()),
             }
 
             if loading() {

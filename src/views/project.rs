@@ -1,4 +1,7 @@
 use crate::components::tabs::{TabContent, TabList, TabTrigger, Tabs};
+use crate::mycomponents::page_header::BackButton;
+use crate::mycomponents::PageHeader;
+use crate::Route;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{BsBoxSeam, BsCamera2, BsFileText, BsGear, BsImages};
 use dioxus_free_icons::Icon;
@@ -12,9 +15,12 @@ pub fn Project(name: String) -> Element {
 
         div {
             id: "project",
-            div {
-                class: "header",
-                h1 { Icon { icon: BsCamera2 }, "{name}" }
+            PageHeader {
+                title: name.clone(),
+                icon: Some(rsx! { Icon { icon: BsCamera2 } }),
+                BackButton {
+                    onclick: move |_| { dioxus::prelude::navigator().push(Route::Projects {}); }
+                }
             }
 
             div {

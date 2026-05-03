@@ -1,5 +1,5 @@
 mod projects;
-pub use projects::{Projects, Sidebar};
+pub use projects::{Projects, ProjectsSidebar};
 
 mod settings;
 pub use settings::Settings;

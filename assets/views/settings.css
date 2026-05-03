@@ -10,90 +10,6 @@
     container-type: size;
 }
 
-#settings .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 1rem;
-    padding: 0px;
-    gap: 1rem;
-}
-
-#settings .header h1 {
-    margin: 0;
-    margin-left: 32px;
-    font-size: 1.5rem;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    white-space: nowrap;
-    line-height: 1;
-    flex-shrink: 0;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-#settings .header h1 svg {
-    width: 2rem;
-    height: 2rem;
-}
-
-#settings .header .dx-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.25rem;
-    min-width: fit-content;
-    font-weight: 600;
-    font-size: 1rem;
-    white-space: nowrap;
-    transition: all 0.2s;
-    margin-left: auto;
-    flex-shrink: 0;
-}
-
-/* Shared banner styles */
-#settings .error-banner,
-#settings .info-banner {
-    padding: 0.5rem;
-    border-radius: 0.5rem;
-    margin-bottom: 0.5rem;
-    font-size: 1rem;
-    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
-    text-align: center;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-}
-
-#settings .error-banner {
-    background: var(--primary-error-color);
-    color: var(--secondary-error-color);
-    border: 1px solid var(--secondary-error-color);
-}
-
-#settings .info-banner {
-    background: var(--primary-info-color);
-    color: var(--secondary-info-color);
-    border: 1px solid var(--secondary-info-color);
-    animation: fadeOut 10s forwards;
-}
-
-#settings .error-banner .dx-button,
-#settings .info-banner .dx-button {
-    flex-shrink: 0;
-    margin: 0;
-}
-
-#settings .error-banner .dx-button:hover,
-#settings .info-banner .dx-button:hover {
-    background-color: rgba(0, 0, 0, 0.1);
-}
-
 #settings .loading {
     text-align: center;
     color: var(--secondary-color-6);
@@ -169,17 +85,4 @@
     white-space: nowrap;
     transition: all 0.2s;
     padding: 0.5rem 1rem;
-}
-
-@keyframes fadeOut {
-    0% {
-        opacity: 1;
-    }
-    90% {
-        opacity: 1;
-    }
-    100% {
-        opacity: 0;
-        display: none;
-    }
 }

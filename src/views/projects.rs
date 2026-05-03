@@ -1,15 +1,21 @@
-use crate::components::{
-    alert_dialog::{
-        AlertDialogAction, AlertDialogActions, AlertDialogCancel, AlertDialogContent,
-        AlertDialogRoot, AlertDialogTitle,
-    },
-    button::{Button, ButtonVariant},
-    tooltip::{Tooltip, TooltipContent, TooltipTrigger},
-};
+use crate::mycomponents::page_header::PageHeaderButton;
+use crate::mycomponents::{Banner, BannerType};
 use crate::server::{create_project, delete_project, get_projects, rename_project};
 use crate::Route;
+use crate::{
+    components::{
+        alert_dialog::{
+            AlertDialogAction, AlertDialogActions, AlertDialogCancel, AlertDialogContent,
+            AlertDialogRoot, AlertDialogTitle,
+        },
+        button::{Button, ButtonVariant},
+        sidebar::{Sidebar as BaseSidebar, SidebarProvider, SidebarTrigger},
+        tooltip::{Tooltip, TooltipContent, TooltipTrigger},
+    },
+    mycomponents::PageHeader,
+};
 use dioxus::{document::eval, prelude::*};
-use dioxus_free_icons::icons::bs_icons::{BsGear, BsPencil, BsPlusCircle, BsTrash};
+use dioxus_free_icons::icons::bs_icons::{BsCardList, BsGear, BsPencil, BsPlusCircle, BsTrash};
 use dioxus_free_icons::Icon;
 use dioxus_primitives::ContentSide;
 
@@ -19,16 +25,19 @@ enum DialogType {
     Rename(usize),
     Delete(usize),
 }
-use crate::components::sidebar::{Sidebar as BaseSidebar, SidebarProvider, SidebarTrigger};
 
 #[component]
-pub fn Sidebar() -> Element {
+pub fn ProjectsSidebar() -> Element {
+    let cur_route = use_route::<crate::Route>();
     rsx! {
         SidebarProvider {
-            SidebarTrigger {}
+            // Only show the SidebarTrigger if not on root
+            if !matches!(cur_route, Route::Projects {}) {
+                SidebarTrigger {}
+            }
             BaseSidebar {
                 SidebarTrigger {}
-                Projects {}
+                Projects { is_sidebar: true, selected: if let Route::Project { name } = cur_route { Some(name.clone()) } else { None } }
             }
         }
         Outlet::<Route> {}
@@ -36,7 +45,10 @@ pub fn Sidebar() -> Element {
 }
 
 #[component]
-pub fn Projects() -> Element {
+pub fn Projects(
+    #[props(default)] is_sidebar: bool,
+    #[props(default)] selected: Option<String>,
+) -> Element {
     let mut dialog_type = use_signal(|| None::<DialogType>);
     let mut input_value = use_signal(|| String::new());
     let mut error_message = use_signal(|| String::new());
@@ -136,64 +148,41 @@ pub fn Projects() -> Element {
 
         div {
             id: "projects",
-            div {
-                class: "header",
-                h1 { "Projects" }
-                div {
-                    class: "header-actions",
-                    Tooltip {
-                        TooltipTrigger {
-                            Button {
-                                variant: ButtonVariant::Ghost,
-                                onclick: move |_| {
-                                    input_value.set(String::new());
-                                    error_message.set(String::new());
-                                    info_message.set(String::new());
-                                    dialog_type.set(Some(DialogType::Create));
-                                },
-                                Icon { icon: BsPlusCircle }
-                                span { class: "btn-text", "New" }
-                            }
-                        }
-                        TooltipContent { side: ContentSide::Bottom, "Create a new project" }
-                    }
-                    Tooltip {
-                        TooltipTrigger {
-                            Link {
-                                to: Route::Settings {},
-                                Button {
-                                    onclick: move |_| { eval("document.querySelector('.dx-sidebar-trigger').click()"); },
-                                    variant: ButtonVariant::Ghost,
-                                    Icon { icon: BsGear }
-                                    span { class: "btn-text", "Settings" }
-                                }
-                            }
-                        }
-                        TooltipContent { side: ContentSide::Bottom, "Settings" }
-                    }
+            PageHeader {
+                title: "Projects".to_string(),
+                icon: Some(rsx! { Icon { icon: BsCardList } }),
+                no_left_margin: !is_sidebar,
+                PageHeaderButton {
+                    icon: rsx! { Icon { icon: BsPlusCircle } },
+                    extra: rsx! { "New" },
+                    extra_tooltip: rsx! { "Create a new project" },
+                    onclick: move |_| {
+                        input_value.set(String::new());
+                        error_message.set(String::new());
+                        info_message.set(String::new());
+                        dialog_type.set(Some(DialogType::Create));
+                    },
+                },
+                PageHeaderButton {
+                    icon: rsx! { Icon { icon: BsGear } },
+                    extra: rsx! { "Settings" },
+                    extra_tooltip: rsx! { "Configure application settings" },
+                    onclick: move |_| {
+                        dioxus::prelude::navigator().push(Route::Settings {});
+                        eval("document.querySelector('.dx-sidebar-trigger').click()");
+                    },
                 }
             }
 
-            if !error_message().is_empty() {
-                div {
-                    class: "error-banner",
-                    "{error_message}"
-                    Button {
-                        variant: ButtonVariant::Ghost,
-                        onclick: move |_| error_message.set(String::new()),
-                        "×"
-                    }
-                }
-            } else if !info_message().is_empty() {
-                div {
-                    class: "info-banner",
-                    "{info_message}"
-                    Button {
-                        variant: ButtonVariant::Ghost,
-                        onclick: move |_| info_message.set(String::new()),
-                        "×"
-                    }
-                }
+            Banner {
+                message: error_message(),
+                banner_type: BannerType::Error,
+                on_close: move |_| error_message.set(String::new()),
+            }
+            Banner {
+                message: info_message(),
+                banner_type: BannerType::Info,
+                on_close: move |_| info_message.set(String::new()),
             }
 
             if loading() {
@@ -206,48 +195,57 @@ pub fn Projects() -> Element {
                     for (idx, project) in projects().iter().enumerate() {
                         li {
                             key: "{project.name}",
-                            Link {
-                                to: Route::Project { name: project.name.clone() },
-                                class: "project-name-link",
-                                div {
-                                    onclick: move |_| { eval("document.querySelector('.dx-sidebar-trigger').click()"); },
-                                    class: "project-item",
-                                    span {
-                                        class: "project-name",
-                                        "{project.name}"
-                                    }
-                                    div {
-                                        class: "project-actions",
-                                        Tooltip {
-                                            TooltipTrigger {
-                                                Button {
-                                                    variant: ButtonVariant::Secondary,
-                                                    onclick: move |_| {
-                                                        if let Some(proj) = projects().get(idx) {
-                                                            input_value.set(proj.name.clone());
-                                                            error_message.set(String::new());
-                                                            info_message.set(String::new());
-                                                            dialog_type.set(Some(DialogType::Rename(idx)));
-                                                        }
-                                                    },
-                                                    Icon { icon: BsPencil }
-                                                }
-                                            }
-                                            TooltipContent { "Rename" }
+                            div {
+                                onclick: move |_| {
+                                    if dialog_type().is_none() { // Ignore clicks from the action buttons
+                                        if let Some(proj) = projects().get(idx) {
+                                            dioxus::prelude::navigator().push(Route::Project { name: proj.name.clone() });
+                                            eval("document.querySelector('.dx-sidebar-trigger').click()");
                                         }
-                                        Tooltip {
-                                            TooltipTrigger {
-                                                Button {
-                                                    variant: ButtonVariant::Destructive,
-                                                    onclick: move |_| {
+                                    }
+                                },
+                                class: format!("project-item{}", if Some(project.name.clone()) == selected {" selected" } else { "" }),
+                                span {
+                                    class: "project-name",
+                                    "{project.name}"
+                                }
+                                div {
+                                    class: "project-actions",
+                                    Tooltip {
+                                        TooltipTrigger {
+                                            Button {
+                                                variant: ButtonVariant::Secondary,
+                                                onclick: move |_| {
+                                                    if let Some(proj) = projects().get(idx) {
+                                                        input_value.set(proj.name.clone());
                                                         error_message.set(String::new());
                                                         info_message.set(String::new());
-                                                        dialog_type.set(Some(DialogType::Delete(idx)));
-                                                    },
-                                                    Icon { icon: BsTrash }
-                                                }
+                                                        dialog_type.set(Some(DialogType::Rename(idx)));
+                                                    }
+                                                },
+                                                Icon { icon: BsPencil }
                                             }
-                                            TooltipContent { "Delete" }
+                                        }
+                                        TooltipContent {
+                                            side: ContentSide::Left,
+                                            "Rename"
+                                        }
+                                    }
+                                    Tooltip {
+                                        TooltipTrigger {
+                                            Button {
+                                                variant: ButtonVariant::Destructive,
+                                                onclick: move |_| {
+                                                    error_message.set(String::new());
+                                                    info_message.set(String::new());
+                                                    dialog_type.set(Some(DialogType::Delete(idx)));
+                                                },
+                                                Icon { icon: BsTrash }
+                                            }
+                                        }
+                                        TooltipContent {
+                                            side: ContentSide::Left,
+                                            "Delete"
                                         }
                                     }
                                 }

@@ -15,27 +15,6 @@
     padding: 0px;
 }
 
-#projects .header h1 {
-    margin: 0;
-    margin-left: 32px;
-    font-size: 1.5rem;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    white-space: nowrap;
-    line-height: 1;
-    flex-shrink: 0;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-#projects .header h1 svg {
-    width: 2rem;
-    height: 2rem;
-}
-
 #projects .header-actions {
     display: flex;
     gap: 0.5rem;
@@ -73,50 +52,6 @@
     }
 }
 
-/* --- Banners --- */
-#projects .error-banner {
-    padding: 0.5rem;
-    background: var(--primary-error-color);
-    color: var(--secondary-error-color);
-    border: 1px solid var(--secondary-error-color);
-    border-radius: 0.5rem;
-    margin-bottom: 0.5rem;
-    font-size: 1rem;
-    box-shadow: var(--shadow);
-    text-align: center;
-    position: relative;
-}
-#projects .error-banner .dx-button {
-    position: absolute;
-    top: -0.25rem;
-    right: -0.25rem;
-}
-#projects .error-banner .dx-button:hover {
-    background-color: rgba(0, 0, 0, 0.1);
-}
-
-#projects .info-banner {
-    padding: 0.5rem;
-    background: var(--primary-info-color);
-    color: var(--secondary-info-color);
-    border: 1px solid var(--secondary-info-color);
-    border-radius: 0.5rem;
-    margin-bottom: 0.5rem;
-    font-size: 1rem;
-    box-shadow: var(--shadow);
-    text-align: center;
-    animation: fadeOut 10s forwards;
-    position: relative;
-}
-#projects .info-banner .dx-button {
-    position: absolute;
-    top: -0.25rem;
-    right: -0.25rem;
-}
-#projects .info-banner .dx-button:hover {
-    background-color: rgba(0, 0, 0, 0.1);
-}
-
 #projects .loading,
 #projects .empty {
     text-align: center;
@@ -150,7 +85,11 @@
 }
 
 #projects .project-item:hover {
-    box-shadow: var(--shadow);
+    border-color: var(--focused-border-color);
+}
+
+#projects .project-item.selected {
+    background: var(--focused-border-color);
     border-color: var(--focused-border-color);
 }
 

@@ -1,30 +1,10 @@
 /* Project view styles - scoped under #project */
-#project .header {
-    display: flex;
-    align-items: center;
+#project {
+    width: calc(100% - 1rem);
+    min-height: 100vh;
     padding: 0.5rem;
-}
-
-#project .header h1 {
-    margin: 0;
-    margin-left: 32px;
-    font-size: 1.5rem;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    white-space: nowrap;
-    line-height: 1;
-    flex-shrink: 0;
-    min-width: 0;
-    width: calc(100% - 32px); /* Account for left margin */
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-#project .header h1 svg {
-    width: 2rem;
-    height: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
 }
 
 #project .dx-tabs-list {
