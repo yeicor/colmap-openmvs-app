@@ -39,7 +39,6 @@
 /* Tab content styling */
 #project .tab-content {
     flex: 1;
-    padding: 1rem;
     overflow-y: auto;
 }
 

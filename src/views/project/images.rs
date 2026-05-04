@@ -1,30 +1,41 @@
+use crate::components::alert_dialog::{
+    AlertDialogAction, AlertDialogActions, AlertDialogCancel, AlertDialogContent, AlertDialogRoot,
+    AlertDialogTitle,
+};
 use crate::mycomponents::{Banner, BannerType};
+use crate::server::DownloadProgressEvent;
+use crate::server::ResizeProgressEvent;
+use dioxus::document::eval;
+use dioxus::fullstack::get_server_url;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
-    BsArrowsFullscreen, BsCamera, BsDownload, BsImage, BsTrash3, BsUpload, BsXCircle,
+    BsArrowsFullscreen, BsCheckAll, BsImage, BsStar, BsTextareaResize, BsTrash3, BsUpload,
+    BsXCircle,
 };
 use dioxus_free_icons::Icon;
 
 #[component]
 pub fn ImagesTab(project_name: String) -> Element {
-    let mut images = use_signal(|| Vec::<String>::new());
+    let mut image_paths = use_signal(|| Vec::<String>::new());
     let mut selected_images = use_signal(|| Vec::<String>::new());
     let mut demo_loading = use_signal(|| false);
-    let mut demo_progress = use_signal(|| 0u32);
+    let mut resize_loading = use_signal(|| false);
+    let mut resize_dialog_open = use_signal(|| false);
+    let mut resize_max_dimension = use_signal(|| 1024u32);
     let mut error_message = use_signal::<Option<String>>(|| None);
-    let mut success_message = use_signal::<Option<String>>(|| None);
+    let mut info_message = use_signal::<Option<String>>(|| None);
     let mut fullscreen_image = use_signal::<Option<String>>(|| None);
     let mut uploading = use_signal(|| false);
 
-    // Load images on mount
+    // Load image list on mount
     let project_name_clone = project_name.clone();
     use_effect(move || {
+        info_message.read_unchecked();
         let project_name = project_name_clone.clone();
         spawn(async move {
             match crate::server::get_project_images(project_name).await {
                 Ok(imgs) => {
-                    images.set(imgs);
-                    error_message.set(None);
+                    image_paths.set(imgs);
                 }
                 Err(e) => {
                     error_message.set(Some(format!("Failed to load images: {}", e)));
@@ -45,9 +56,8 @@ pub fn ImagesTab(project_name: String) -> Element {
                 }
                 match crate::server::get_project_images(project_name).await {
                     Ok(imgs) => {
-                        images.set(imgs);
-                        success_message.set(Some("Images deleted successfully".to_string()));
-                        error_message.set(None);
+                        image_paths.set(imgs);
+                        info_message.set(Some("Images deleted successfully".to_string()));
                     }
                     Err(e) => {
                         error_message.set(Some(format!("Failed to reload images: {}", e)));
@@ -62,24 +72,95 @@ pub fn ImagesTab(project_name: String) -> Element {
         let project_name = project_name.clone();
         move |_| {
             demo_loading.set(true);
-            demo_progress.set(0);
-            error_message.set(None);
-            success_message.set(None);
+            info_message.set(Some("Starting download...".to_string()));
             let project_name = project_name.clone();
             spawn(async move {
                 match crate::server::download_demo_images(project_name.clone()).await {
-                    Ok(_) => {
-                        demo_progress.set(100);
-                        match crate::server::get_project_images(project_name).await {
-                            Ok(imgs) => {
-                                images.set(imgs);
-                                success_message
-                                    .set(Some("Demo images downloaded successfully".to_string()));
-                                error_message.set(None);
+                    Ok(mut stream) => {
+                        let mut total_files = 0;
+                        let mut total_bytes = 0;
+                        while let Some(Ok(event)) = stream.recv().await {
+                            match event {
+                                DownloadProgressEvent::DownloadStarted { total_bytes } => {
+                                    let size_mb = total_bytes as f64 / 1_000_000.0;
+                                    info_message.set(Some(format!(
+                                        "Downloading... (0 / {:.1} MB)",
+                                        size_mb
+                                    )));
+                                }
+                                DownloadProgressEvent::DownloadProgress {
+                                    downloaded_bytes,
+                                    total_bytes,
+                                } => {
+                                    let downloaded_mb = downloaded_bytes as f64 / 1_000_000.0;
+                                    let total_mb = total_bytes as f64 / 1_000_000.0;
+                                    info_message.set(Some(format!(
+                                        "Downloading... ({:.1} / {:.1} MB)",
+                                        downloaded_mb, total_mb
+                                    )));
+                                }
+                                DownloadProgressEvent::DownloadComplete { total_bytes } => {
+                                    let size_mb = total_bytes as f64 / 1_000_000.0;
+                                    info_message.set(Some(format!(
+                                        "Downloaded {:.1} MB, extracting...",
+                                        size_mb
+                                    )));
+                                }
+                                DownloadProgressEvent::ExtractionStarted => {
+                                    info_message
+                                        .set(Some("Extracting images... (0/?)".to_string()));
+                                }
+                                DownloadProgressEvent::FileExtracted { name, size } => {
+                                    let size_kb = size as f64 / 1024.0;
+                                    info_message.set(Some(format!(
+                                        "Extracted: {} ({:.1} KB)",
+                                        name, size_kb
+                                    )));
+                                }
+                                DownloadProgressEvent::ExtractionProgress {
+                                    count,
+                                    total_bytes,
+                                } => {
+                                    let size_mb = total_bytes as f64 / 1_000_000.0;
+                                    info_message.set(Some(format!(
+                                        "Extracting... ({} files, {:.1} MB)",
+                                        count, size_mb
+                                    )));
+                                }
+                                DownloadProgressEvent::ExtractionComplete {
+                                    total_files: files,
+                                    total_bytes: bytes,
+                                } => {
+                                    total_files = files;
+                                    total_bytes = bytes;
+                                    let size_mb = bytes as f64 / 1_000_000.0;
+                                    info_message.set(Some(format!(
+                                        "Extraction complete: {} files ({:.1} MB)",
+                                        files, size_mb
+                                    )));
+                                }
+                                DownloadProgressEvent::Error { message } => {
+                                    error_message.set(Some(message));
+                                    demo_loading.set(false);
+                                    return;
+                                }
                             }
-                            Err(e) => {
-                                error_message
-                                    .set(Some(format!("Failed to load demo images: {}", e)));
+                        }
+
+                        if total_files > 0 {
+                            match crate::server::get_project_images(project_name.clone()).await {
+                                Ok(imgs) => {
+                                    image_paths.set(imgs);
+                                    info_message.set(Some(format!(
+                                        "Demo downloaded ({} images, {:.1} MB). You may want to optimize them using the 'Optimize Images' button.",
+                                        total_files,
+                                        total_bytes as f64 / 1_000_000.0
+                                    )));
+                                }
+                                Err(e) => {
+                                    error_message
+                                        .set(Some(format!("Failed to reload images: {}", e)));
+                                }
                             }
                         }
                     }
@@ -99,10 +180,9 @@ pub fn ImagesTab(project_name: String) -> Element {
             spawn(async move {
                 match crate::server::clear_project_images(project_name).await {
                     Ok(_) => {
-                        images.set(Vec::new());
+                        image_paths.set(Vec::new());
                         selected_images.set(Vec::new());
-                        success_message.set(Some("All images cleared successfully".to_string()));
-                        error_message.set(None);
+                        info_message.set(Some("All images cleared successfully".to_string()));
                     }
                     Err(e) => {
                         error_message.set(Some(format!("Failed to clear images: {}", e)));
@@ -112,210 +192,120 @@ pub fn ImagesTab(project_name: String) -> Element {
         }
     };
 
-    let on_file_upload = {
+    let on_open_resize_dialog = move |_| {
+        #[cfg(any(feature = "mobile", target_os = "android", target_os = "ios"))]
+        resize_max_dimension.set(1024);
+        #[cfg(not(any(feature = "mobile", target_os = "android", target_os = "ios")))]
+        resize_max_dimension.set(2048);
+        resize_dialog_open.set(true);
+    };
+
+    let on_confirm_resize = {
         let project_name = project_name.clone();
-        move |_evt: FormEvent| {
+        move |_| {
+            resize_dialog_open.set(false);
+            resize_loading.set(true);
+            info_message.set(Some("Starting batch resize...".to_string()));
             let project_name = project_name.clone();
-            
-            // Get files from the file input element
-            #[cfg(target_arch = "wasm32")]
-            {
-                if let Ok(Some(window)) = (|| Ok::<Option<web_sys::Window>, ()>(web_sys::window()) )() {
-                    if let Some(document) = window.document() {
-                        if let Some(input_element) = document.get_element_by_id("file-upload-input") {
-                            if let Some(input) = input_element.dyn_ref::<web_sys::HtmlInputElement>() {
-                                if let Some(file_list) = input.files() {
-                                    let project_name_clone = project_name.clone();
-                                    spawn(async move {
-                                        uploading.set(true);
-                                        error_message.set(None);
-                                        success_message.set(None);
-
-                                        let mut upload_errors = Vec::new();
-                                        let mut successful_uploads = 0;
-
-                                        // Process each selected file
-                                        for i in 0..file_list.length() {
-                                            if let Some(file) = file_list.get(i) {
-                                                let file_name = file.name();
-                                                let file_size = file.size();
-
-                                                // Read file as bytes
-                                                match read_file_as_bytes(&file).await {
-                                                    Ok(bytes) => {
-                                                        // Upload to server
-                                                        match crate::server::add_project_image(
-                                                            project_name_clone.clone(),
-                                                            file_name.clone(),
-                                                            bytes,
-                                                        )
-                                                        .await
-                                                        {
-                                                            Ok(_) => {
-                                                                successful_uploads += 1;
-                                                                println!(
-                                                                    "Successfully uploaded: {} ({} bytes)",
-                                                                    file_name, file_size
-                                                                );
-                                                            }
-                                                            Err(e) => {
-                                                                let err_msg =
-                                                                    format!("Failed to upload '{}': {}", file_name, e);
-                                                                upload_errors.push(err_msg);
-                                                            }
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        let err_msg =
-                                                            format!("Failed to read file '{}': {}", file_name, e);
-                                                        upload_errors.push(err_msg);
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        // Refresh image list
-                                        if successful_uploads > 0 {
-                                            match crate::server::get_project_images(project_name_clone.clone())
-                                                .await
-                                            {
-                                                Ok(imgs) => {
-                                                    images.set(imgs);
-                                                    let msg = if upload_errors.is_empty() {
-                                                        format!("Successfully uploaded {} image(s)", successful_uploads)
-                                                    } else {
-                                                        format!(
-                                                            "Uploaded {} image(s) with {} error(s)",
-                                                            successful_uploads,
-                                                            upload_errors.len()
-                                                        )
-                                                    };
-                                                    success_message.set(Some(msg));
-                                                }
-                                                Err(e) => {
-                                                    error_message
-                                                        .set(Some(format!("Failed to reload images: {}", e)));
-                                                }
-                                            }
-                                        }
-
-                                        // Show errors if any
-                                        if !upload_errors.is_empty() {
-                                            error_message.set(Some(upload_errors.join("; ")));
-                                        }
-
-                                        uploading.set(false);
-
-                                        // Clear file input
-                                        if let Ok(Some(window)) = (|| Ok::<Option<web_sys::Window>, ()>(web_sys::window()) )() {
-                                            if let Some(document) = window.document() {
-                                                if let Some(input_element) = document.get_element_by_id("file-upload-input") {
-                                                    if let Some(input) = input_element.dyn_ref::<web_sys::HtmlInputElement>() {
-                                                        input.set_value("");
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    });
+            let max_dimension = resize_max_dimension();
+            spawn(async move {
+                match crate::server::batch_resize_images(project_name.clone(), max_dimension).await
+                {
+                    Ok(mut stream) => {
+                        while let Some(Ok(event)) = stream.recv().await {
+                            match event {
+                                ResizeProgressEvent::ResizeStarted { total_files } => {
+                                    info_message.set(Some(format!(
+                                        "Resizing {} image(s) (max {}px)...",
+                                        total_files, max_dimension
+                                    )));
+                                }
+                                ResizeProgressEvent::FileResized {
+                                    name,
+                                    original_size,
+                                    new_size,
+                                } => {
+                                    let orig_mb = original_size as f64 / 1_000_000.0;
+                                    let new_mb = new_size as f64 / 1_000_000.0;
+                                    info_message.set(Some(format!(
+                                        "Resized: {} ({:.1} MB → {:.1} MB)",
+                                        name, orig_mb, new_mb
+                                    )));
+                                }
+                                ResizeProgressEvent::ResizeProgress {
+                                    completed,
+                                    total_files,
+                                } => {
+                                    info_message.set(Some(format!(
+                                        "Resizing... ({}/{})",
+                                        completed, total_files
+                                    )));
+                                }
+                                ResizeProgressEvent::ResizeComplete { total_files } => {
+                                    info_message.set(Some(format!(
+                                        "Batch resize complete: {} image(s) optimized",
+                                        total_files
+                                    )));
+                                }
+                                ResizeProgressEvent::Error { message } => {
+                                    error_message.set(Some(message));
+                                    resize_loading.set(false);
+                                    return;
                                 }
                             }
                         }
                     }
+                    Err(e) => {
+                        error_message.set(Some(format!("Failed to start batch resize: {}", e)));
+                    }
                 }
-            }
+                resize_loading.set(false);
+            });
         }
     };
 
-    let on_camera_capture = {
+    let on_file_upload = {
         let project_name = project_name.clone();
-        move |_evt: FormEvent| {
+        move |evt: FormEvent| {
+            uploading.set(true);
+            error_message.set(None);
             let project_name = project_name.clone();
-            
-            // Get file from camera input element
-            #[cfg(target_arch = "wasm32")]
-            {
-                if let Ok(Some(window)) = (|| Ok::<Option<web_sys::Window>, ()>(web_sys::window()) )() {
-                    if let Some(document) = window.document() {
-                        if let Some(input_element) = document.get_element_by_id("camera-input") {
-                            if let Some(input) = input_element.dyn_ref::<web_sys::HtmlInputElement>() {
-                                if let Some(file_list) = input.files() {
-                                    if file_list.length() > 0 {
-                                        if let Some(file) = file_list.get(0) {
-                                            let file_name = file.name();
-                                            spawn(async move {
-                                                uploading.set(true);
-                                                error_message.set(None);
-                                                success_message.set(None);
-
-                                                // Read file as bytes
-                                                match read_file_as_bytes(&file).await {
-                                                    Ok(bytes) => {
-                                                        // Upload to server
-                                                        match crate::server::add_project_image(
-                                                            project_name.clone(),
-                                                            file_name.clone(),
-                                                            bytes,
-                                                        )
-                                                        .await
-                                                        {
-                                                            Ok(_) => {
-                                                                // Refresh image list
-                                                                match crate::server::get_project_images(
-                                                                    project_name.clone(),
-                                                                )
-                                                                .await
-                                                                {
-                                                                    Ok(imgs) => {
-                                                                        images.set(imgs);
-                                                                        success_message.set(Some(
-                                                                            format!("Image '{}' captured and uploaded successfully", file_name),
-                                                                        ));
-                                                                        error_message.set(None);
-                                                                    }
-                                                                    Err(e) => {
-                                                                        error_message.set(Some(
-                                                                            format!("Image uploaded but failed to reload list: {}", e),
-                                                                        ));
-                                                                    }
-                                                                }
-                                                            }
-                                                            Err(e) => {
-                                                                error_message.set(Some(format!(
-                                                                    "Failed to upload image '{}': {}",
-                                                                    file_name, e
-                                                                )));
-                                                            }
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        error_message.set(Some(format!(
-                                                            "Failed to read camera image: {}",
-                                                            e
-                                                        )));
-                                                    }
-                                                }
-
-                                                uploading.set(false);
-
-                                                // Clear file input
-                                                if let Ok(Some(window)) = (|| Ok::<Option<web_sys::Window>, ()>(web_sys::window()) )() {
-                                                    if let Some(document) = window.document() {
-                                                        if let Some(input_element) = document.get_element_by_id("camera-input") {
-                                                            if let Some(input) = input_element.dyn_ref::<web_sys::HtmlInputElement>() {
-                                                                input.set_value("");
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    }
+            spawn(async move {
+                let mut count = 0;
+                for file in evt.files() {
+                    match file.read_bytes().await {
+                        Ok(bytes) => {
+                            match crate::server::add_project_image(
+                                project_name.clone(),
+                                file.name(),
+                                bytes.to_vec(),
+                            )
+                            .await
+                            {
+                                Ok(_) => {
+                                    count += 1;
+                                }
+                                Err(e) => {
+                                    error_message.set(Some(format!(
+                                        "Failed to upload {}: {}",
+                                        file.name(),
+                                        e
+                                    )));
                                 }
                             }
                         }
+                        Err(e) => {
+                            error_message.set(Some(format!(
+                                "Failed to read {}: {}",
+                                file.name(),
+                                e
+                            )));
+                        }
                     }
                 }
-            }
+                info_message.set(Some(format!("Uploaded {} image(s)", count)));
+                uploading.set(false);
+            });
         }
     };
 
@@ -331,145 +321,166 @@ pub fn ImagesTab(project_name: String) -> Element {
     };
 
     let select_all = move |_| {
-        if selected_images().len() == images().len() && !images().is_empty() {
+        if selected_images().len() == image_paths().len() && !image_paths().is_empty() {
             selected_images.set(Vec::new());
         } else {
-            selected_images.set(images());
+            selected_images.set(image_paths());
         }
     };
 
-    let has_images = !images().is_empty();
+    let has_images = !image_paths().is_empty();
     let has_selection = !selected_images().is_empty();
-    let all_selected = selected_images().len() == images().len() && has_images;
-    let num_images = images().len();
+    let all_selected = selected_images().len() == image_paths().len() && has_images;
+    let num_images = image_paths().len();
     let num_selected = selected_images().len();
 
     rsx! {
         div {
             class: "tab-content images-tab",
 
-            // Error banner
             Banner {
                 message: error_message().unwrap_or_default(),
                 banner_type: BannerType::Error,
                 on_close: move |_| error_message.set(None),
             }
 
-            // Success banner
             Banner {
-                message: success_message().unwrap_or_default(),
+                message: info_message().unwrap_or_default(),
                 banner_type: BannerType::Info,
-                on_close: move |_| success_message.set(None),
+                on_close: move |_| info_message.set(None),
             }
 
-            // Fullscreen modal
-            if let Some(image_name) = fullscreen_image() {
-                div {
-                    class: "fullscreen-modal",
-                    onclick: move |_| fullscreen_image.set(None),
-
-                    div {
-                        class: "fullscreen-container",
-                        onclick: move |evt| evt.stop_propagation(),
-
-                        button {
-                            class: "fullscreen-close",
-                            onclick: move |_| fullscreen_image.set(None),
-                            title: "Close (ESC)",
-                            "×"
-                        }
-
-                        img {
-                            src: format!("/api/projects/{}/images/{}", project_name, image_name),
-                            alt: image_name.clone(),
-                            class: "fullscreen-image",
-                        }
-
+            {
+                if let Some(fullscreen_name) = fullscreen_image() {
+                    let safe_fullscreen_name = fullscreen_name.clone();
+                    let safe_project_name = project_name.clone();
+                    let full_image_url = format!("{}/projects/{}/images/{}",
+                        get_server_url(),
+                        safe_project_name,
+                        safe_fullscreen_name
+                    );
+                    let img_id = format!("fullscreen-img-{}", safe_fullscreen_name);
+                    let metadata_id = format!("metadata-fullscreen-{}", safe_fullscreen_name);
+                    rsx! {
                         div {
-                            class: "fullscreen-caption",
-                            "{image_name}"
+                            class: "fullscreen-modal",
+                            onclick: move |_| fullscreen_image.set(None),
+
+                            div {
+                                class: "fullscreen-container",
+                                onclick: move |evt| evt.stop_propagation(),
+
+                                button {
+                                    class: "fullscreen-close",
+                                    onclick: move |_| fullscreen_image.set(None),
+                                    title: "Close (ESC)",
+                                    "×"
+                                }
+
+                                div {
+                                    class: "fullscreen-caption",
+                                    id: metadata_id.clone(),
+                                    "Loading..."
+                                }
+                                img {
+                                    src: full_image_url.clone(),
+                                    alt: fullscreen_name.clone(),
+                                    class: "fullscreen-image",
+                                    id: img_id.clone(),
+                                    onload: move |_| {
+                                        eval(&format!(r#"
+                                            (async () => {{
+                                                const img = document.getElementById('{}');
+                                                const metadataDiv = document.getElementById('{}');
+                                                if (img && metadataDiv) {{
+                                                    const width = img.naturalWidth;
+                                                    const height = img.naturalHeight;
+                                                    let sizeBytes = 0;
+                                                    try {{
+                                                        const res = await fetch('{}', {{ method: 'HEAD' }});
+                                                        const size = res.headers.get('Content-Length');
+                                                        sizeBytes = parseInt(size);
+                                                    }} catch (e) {{}}
+                                                    metadataDiv.innerHTML = `${{width}}x${{height}} · ${{(sizeBytes / 1024 / 1024).toFixed(3)}} MB · {}`;
+                                                }}
+                                            }})();
+                                        "#, img_id, metadata_id, full_image_url, fullscreen_name));
+                                    }
+                                }
+                            }
                         }
                     }
-                }
+                } else { rsx! {}}
             }
 
-            // Toolbar
             div {
                 class: "images-toolbar",
 
                 div {
                     class: "toolbar-group",
 
-                    // Upload from disk
-                    div {
-                        class: "file-input-wrapper",
-                        input {
-                            r#type: "file",
-                            id: "file-upload-input",
-                            class: "hidden-file-input",
-                            multiple: true,
-                            accept: "image/*",
-                            disabled: uploading(),
-                            oninput: on_file_upload,
-                        }
-                        label {
-                            r#for: "file-upload-input",
-                            class: "btn btn-secondary",
-                            title: if uploading() { "Uploading..." } else { "Upload images from disk" },
-                            Icon { icon: BsUpload }
-                            span {
-                                if uploading() {
-                                    "Uploading..."
-                                } else {
-                                    "Upload"
+                    form {
+                        onsubmit: move |evt| {
+                            evt.prevent_default();
+                            eval("document.getElementById('file-upload-input').click()");
+                        },
+                        div {
+                            class: "file-input-wrapper",
+                            input {
+                                id: "file-upload-input",
+                                r#type: "file",
+                                name: "images",
+                                class: "hidden-file-input",
+                                multiple: true,
+                                accept: "image/*",
+                                disabled: uploading() || demo_loading(),
+                                onchange: on_file_upload,
+                            }
+                            button {
+                                r#type: "submit",
+                                class: "btn btn-secondary",
+                                title: if uploading() { "Uploading..." } else { "Upload images from disk" },
+                                disabled: uploading() || demo_loading(),
+                                Icon { icon: BsUpload }
+                                span {
+                                    if uploading() {
+                                        "Uploading..."
+                                    } else {
+                                        "Upload"
+                                    }
                                 }
                             }
                         }
                     }
 
-                    // Camera capture
-                    div {
-                        class: "file-input-wrapper",
-                        input {
-                            r#type: "file",
-                            id: "camera-input",
-                            class: "hidden-file-input",
-                            accept: "image/*",
-                            capture: "environment",
-                            disabled: uploading(),
-                            oninput: on_camera_capture,
-                        }
-                        label {
-                            r#for: "camera-input",
-                            class: "btn btn-secondary",
-                            title: if uploading() { "Uploading..." } else { "Capture image with camera" },
-                            Icon { icon: BsCamera }
-                            span {
-                                if uploading() {
-                                    "Uploading..."
-                                } else {
-                                    "Camera"
-                                }
-                            }
-                        }
-                    }
-
-                    // Download demo images
                     button {
                         class: "btn btn-secondary",
                         onclick: on_load_demo,
                         disabled: demo_loading() || uploading(),
-                        title: "Download demo images from ETH3D",
-                        Icon { icon: BsDownload }
+                        title: "Download demo images from ETH3D (Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License)",
+                        Icon { icon: BsStar }
                         span {
                             if demo_loading() {
-                                if demo_progress() > 0 && demo_progress() < 100 {
-                                    "Downloading {demo_progress()}%"
-                                } else {
-                                    "Downloading..."
-                                }
+                                "Downloading..."
                             } else {
                                 "Demo Images"
+                            }
+                        }
+                    }
+
+                    if has_images {
+                        button {
+                            class: "btn btn-secondary",
+                            onclick: on_open_resize_dialog,
+                            disabled: resize_loading() || uploading() || demo_loading(),
+                            title: "Optimize ALL images by resizing to a maximum dimension",
+                            Icon { icon: BsTextareaResize }
+                            span {
+                                if resize_loading() {
+                                    "Optimizing..."
+                                } else {
+                                    "Optimize Images"
+                                }
                             }
                         }
                     }
@@ -478,21 +489,22 @@ pub fn ImagesTab(project_name: String) -> Element {
                 div {
                     class: "toolbar-group",
 
-                    // Select all / Deselect all
                     if has_images {
                         button {
                             class: "btn btn-tertiary",
                             onclick: select_all,
                             title: if all_selected { "Deselect all" } else { "Select all" },
-                            if all_selected {
-                                "Deselect All"
-                            } else {
-                                "Select All"
+                            Icon { icon: BsCheckAll }
+                            span {
+                                if all_selected {
+                                    "Deselect All"
+                                } else {
+                                    "Select All"
+                                }
                             }
                         }
                     }
 
-                    // Delete selected
                     if has_selection {
                         button {
                             class: "btn btn-danger",
@@ -503,7 +515,6 @@ pub fn ImagesTab(project_name: String) -> Element {
                         }
                     }
 
-                    // Clear all
                     if has_images {
                         button {
                             class: "btn btn-danger",
@@ -514,73 +525,108 @@ pub fn ImagesTab(project_name: String) -> Element {
                         }
                     }
                 }
-            }
 
-            // Image count info
-            if has_images {
-                div {
-                    class: "images-info",
-                    span { "{num_images} image(s)" }
-                    if has_selection {
-                        span { class: "highlight", "{num_selected} selected" }
+                if has_images {
+                    div {
+                        class: "images-info",
+                        span { "{num_images} image(s)" }
+                        if has_selection {
+                            span { class: "highlight", "{num_selected} selected" }
+                        }
                     }
                 }
             }
 
-            // Gallery
             if has_images {
                 div {
                     class: "image-gallery",
-                    for image_name in images() {
-                        {
-                            let image_url = format!("/api/projects/{}/images/{}", project_name, image_name);
-                            let is_selected = selected_images().contains(&image_name);
-                            let image_name2 = image_name.clone();
-                            let image_name3 = image_name.clone();
-                            let image_name4 = image_name.clone();
-
-                            rsx! {
+                    {
+                        let paths = image_paths();
+                        let selected = selected_images();
+                        let mut elements = Vec::new();
+                        for image_name in paths.into_iter() {
+                            let safe_image_name = urlencoding::encode(&image_name);
+                            let safe_project_name = urlencoding::encode(&project_name);
+                            let is_selected = selected.contains(&image_name);
+                            let image_url = format!(
+                                "{}/projects/{}/images/{}",
+                                get_server_url(),
+                                safe_project_name,
+                                safe_image_name
+                            );
+                            let img_id = format!("thumbnail-{}", safe_image_name);
+                            let metadata_id = format!("metadata-{}", safe_image_name);
+                            let image_name_for_checkbox = image_name.clone();
+                            let image_name_for_fullscreen = image_name.clone();
+                            let image_name_for_img = image_name.clone();
+                            elements.push(rsx! {
                                 div {
-                                    key: "{image_name}",
                                     class: if is_selected { "image-item selected" } else { "image-item" },
 
-                                    // Checkbox overlay
                                     div {
                                         class: "image-checkbox",
                                         input {
                                             r#type: "checkbox",
                                             checked: is_selected,
-                                            onchange: move |_| toggle_select(image_name.clone()),
+                                            onchange: move |_| toggle_select(image_name_for_checkbox.clone()),
+                                            id: format!("checkbox-{}", safe_image_name),
                                         }
                                     }
 
-                                    // Fullscreen button overlay (top-right)
                                     button {
                                         class: "image-fullscreen-btn",
                                         title: "View fullscreen",
-                                        onclick: move |_| fullscreen_image.set(Some(image_name4.clone())),
+                                        onclick: move |_| fullscreen_image.set(Some(image_name_for_fullscreen.clone())),
                                         Icon { icon: BsArrowsFullscreen }
                                     }
 
-                                    // Image
-                                    img {
-                                        src: image_url,
-                                        alt: image_name2.clone(),
-                                        title: image_name2.clone(),
-                                        onclick: move |_| toggle_select(image_name2.clone()),
+                                    div {
+                                        class: "image-info-overlay",
+                                        div {
+                                            class: "image-name",
+                                            div {
+                                                class: "image-metadata",
+                                                id: metadata_id.clone(),
+                                                "Loading..."
+                                            }
+                                            "{image_name}"
+                                        }
                                     }
 
-                                    // Image name
-                                    div {
-                                        class: "image-name",
-                                        title: image_name3.clone(),
-                                        "{image_name}"
+                                    img {
+                                        src: image_url.clone(),
+                                        alt: image_name.clone(),
+                                        id: img_id.clone(),
+                                        onclick: move |_| toggle_select(image_name_for_img.clone()),
+                                        class: "thumbnail",
+                                        onload: move |_| {
+                                            let js = format!(r#"
+                                                (async () => {{
+                                                    const img = document.getElementById('{}');
+                                                    const metadataDiv = document.getElementById('{}');
+                                                    if (img && metadataDiv) {{
+                                                        const width = img.naturalWidth;
+                                                        const height = img.naturalHeight;
+                                                        let sizeBytes = 0;
+                                                        try {{
+                                                            const res = await fetch('{}', {{ method: 'HEAD' }});
+                                                            const size = res.headers.get('Content-Length');
+                                                            sizeBytes = parseInt(size);
+                                                        }} catch (e) {{}}
+                                                        metadataDiv.innerHTML = `${{width}}x${{height}}<br/>${{(sizeBytes / 1024 / 1024).toFixed(3)}} MB`;
+                                                    }}
+                                                }})();
+                                            "#, img_id, metadata_id, image_url);
+                                            eval(&js);
+                                        }
                                     }
                                 }
-                            }
+                            });
                         }
+                        rsx! { for element in elements { {element} } }
                     }
                 }
+
             } else {
                 div {
                     class: "empty-gallery",
@@ -592,59 +638,46 @@ pub fn ImagesTab(project_name: String) -> Element {
                     }
                 }
             }
+
+            AlertDialogRoot {
+                open: resize_dialog_open(),
+                AlertDialogContent {
+                    AlertDialogTitle { "Optimize ALL Images" }
+                    div {
+                        class: "resize-dialog-content",
+                        p { "Maximum dimension (in pixels):" }
+                        div {
+                            class: "resize-slider-container",
+                            input {
+                                r#type: "range",
+                                min: "64",
+                                max: "8192",
+                                step: "32",
+                                value: "{resize_max_dimension}",
+                                oninput: move |evt| {
+                                    if let Ok(val) = evt.value().parse::<u32>() {
+                                        resize_max_dimension.set(val);
+                                    }
+                                }
+                            }
+                            span {
+                                class: "resize-value-display",
+                                "{resize_max_dimension()} px"
+                            }
+                        }
+                    }
+                    AlertDialogActions {
+                        AlertDialogAction {
+                            on_click: on_confirm_resize,
+                            "Optimize"
+                        }
+                        AlertDialogCancel {
+                            on_click: move |_| resize_dialog_open.set(false),
+                            "Cancel"
+                        }
+                    }
+                }
+            }
         }
     }
-}
-
-/// Read a web_sys File as bytes using the FileReader API
-/// Only available for wasm32 target
-#[cfg(target_arch = "wasm32")]
-async fn read_file_as_bytes(file: &web_sys::File) -> Result<Vec<u8>, String> {
-    use wasm_bindgen::prelude::*;
-    use wasm_bindgen::JsCast;
-
-    // Create a FileReader
-    let reader = web_sys::FileReader::new()
-        .map_err(|_| "Failed to create FileReader".to_string())?;
-
-    // Channel to signal when load is complete
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let tx = std::sync::Arc::new(tokio::sync::Mutex::new(tx));
-
-    let onload_closure = Closure::once(move |_: web_sys::ProgressEvent| {
-        let tx = tx.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let mut tx_guard = tx.lock().await;
-            let _ = tx_guard.send(()).await;
-        });
-    });
-
-    reader.set_onload(Some(onload_closure.as_ref().unchecked_ref()));
-    onload_closure.forget();
-
-    // Start reading the file
-    reader
-        .read_as_array_buffer(file)
-        .map_err(|_| "Failed to start file read".to_string())?;
-
-    // Wait for the load event
-    rx.recv()
-        .await
-        .ok_or_else(|| "File read was cancelled".to_string())?;
-
-    // Get the ArrayBuffer result
-    let result = reader
-        .result()
-        .map_err(|_| "Failed to get file content".to_string())?;
-
-    // Convert ArrayBuffer to Vec<u8>
-    let typed_array = js_sys::Uint8Array::new(&result);
-    Ok(typed_array.to_vec())
-}
-
-/// Stub implementation for non-wasm targets
-#[cfg(not(target_arch = "wasm32"))]
-#[allow(dead_code)]
-async fn read_file_as_bytes(_file: &web_sys::File) -> Result<Vec<u8>, String> {
-    Err("File reading not supported on this platform".to_string())
 }

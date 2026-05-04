@@ -83,25 +83,33 @@ pub fn Project(name: String) -> Element {
                             span { class: "tab-label", "Outputs" }
                         }
                     }
-                    TabContent {
-                        value: "images".to_string(),
-                        index: 0usize,
-                        ImagesTab { project_name: name.clone() }
+                    if active_tab() == Some("images".to_string()) {
+                        TabContent {
+                            value: "images".to_string(),
+                            index: 0usize,
+                            ImagesTab { project_name: name.clone() }
+                        }
                     }
-                    TabContent {
-                        value: "config".to_string(),
-                        index: 1usize,
-                        ConfigTab { project_name: name.clone() }
+                    if active_tab() == Some("config".to_string()) {
+                        TabContent {
+                            value: "config".to_string(),
+                            index: 1usize,
+                            ConfigTab { project_name: name.clone() }
+                        }
                     }
-                    TabContent {
-                        value: "logs".to_string(),
-                        index: 2usize,
-                        LogsTab { project_name: name.clone() }
+                    if active_tab() == Some("logs".to_string()) {
+                        TabContent {
+                            value: "logs".to_string(),
+                            index: 2usize,
+                            LogsTab { project_name: name.clone() }
+                        }
                     }
-                    TabContent {
-                        value: "outputs".to_string(),
-                        index: 3usize,
-                        OutputsTab { project_name: name.clone() }
+                    if active_tab() == Some("outputs".to_string()) {
+                        TabContent {
+                            value: "outputs".to_string(),
+                            index: 3usize,
+                            OutputsTab { project_name: name.clone() }
+                        }
                     }
                 }
             }
