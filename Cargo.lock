@@ -654,6 +654,7 @@ dependencies = [
 name = "colmap-openmvs-app"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "dioxus",
  "dioxus-free-icons",
  "dioxus-primitives",
@@ -666,7 +667,6 @@ dependencies = [
  "serde_json",
  "sevenz-rust2",
  "tar",
- "thiserror 1.0.69",
  "tokio",
  "urlencoding",
  "which",

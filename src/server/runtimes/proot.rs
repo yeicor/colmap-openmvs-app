@@ -1,4 +1,4 @@
-use super::{ProcessHandle, RuntimeError, RuntimeResult};
+use super::{ProcessHandle, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -57,12 +57,12 @@ impl PRoot {
         match (target_arch, target_os) {
             ("x86_64", "linux") => Ok(()),
             ("aarch64", "android") | ("x86_64", "android") => Ok(()),
-            (arch, os) => Err(RuntimeError::NotSupported(format!(
+            (arch, os) => Err(anyhow::anyhow!(
                 "PRoot cannot be automatically installed on this platform (arch: {}, os: {}).
                  Supported platforms: x86_64-linux, *-android. \
                  You can install proot manually and add it to $PATH to use it on unsupported platforms.",
                 arch, os
-            ))),
+            )),
         }
     }
 
@@ -79,8 +79,8 @@ impl PRoot {
             return self.get_installed_proot_version(&proot_bin).await;
         }
 
-        Err(RuntimeError::NotFound(
-            "PRoot not found in PATH or install directory".to_string(),
+        Err(anyhow::anyhow!(
+            "PRoot not found in PATH or install directory"
         ))
     }
 
@@ -88,7 +88,7 @@ impl PRoot {
         let output = Command::new("proot")
             .arg("--version")
             .output()
-            .map_err(|e| RuntimeError::VersionError(format!("Failed to execute proot: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!("Failed to execute proot: {}", e))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -103,7 +103,7 @@ impl PRoot {
         let output = Command::new(proot_bin)
             .arg("--version")
             .output()
-            .map_err(|e| RuntimeError::VersionError(format!("Failed to execute proot: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!("Failed to execute proot: {}", e))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -153,9 +153,7 @@ impl PRoot {
             }
         }
 
-        Err(RuntimeError::VersionError(
-            "Could not parse PRoot version from output".to_string(),
-        ))
+        Err(anyhow::anyhow!("Could not parse PRoot version from output"))
     }
 
     /// Get available versions for download
@@ -174,9 +172,7 @@ impl PRoot {
             ("aarch64", "android") | ("x86_64", "android") => {
                 self.fetch_android_latest_version().await
             }
-            _ => Err(RuntimeError::NotSupported(
-                "Unsupported platform for version fetching".to_string(),
-            )),
+            _ => Err(anyhow::anyhow!("Unsupported platform for version fetching")),
         }
     }
 
@@ -190,7 +186,7 @@ impl PRoot {
             .header("User-Agent", "colmap-openmvs-app")
             .send()
             .await
-            .map_err(|e| RuntimeError::DownloadError(format!("Failed to fetch versions: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!("Failed to fetch versions: {}", e))?;
 
         #[derive(Deserialize)]
         struct GitLabTag {
@@ -200,7 +196,7 @@ impl PRoot {
         let tags: Vec<GitLabTag> = response
             .json()
             .await
-            .map_err(|e| RuntimeError::DownloadError(format!("Failed to parse versions: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!("Failed to parse versions: {}", e))?;
 
         let mut versions: Vec<String> = tags.iter().map(|t| t.name.clone()).collect();
         versions.sort();
@@ -219,10 +215,10 @@ impl PRoot {
             .header("User-Agent", "colmap-openmvs-app")
             .send()
             .await
-            .map_err(|e| RuntimeError::DownloadError(format!("Failed to fetch versions: {}", e)))?
+            .map_err(|e| anyhow::anyhow!("Failed to fetch versions: {}", e))?
             .text()
             .await
-            .map_err(|e| RuntimeError::DownloadError(format!("Failed to read response: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!("Failed to read response: {}", e))?;
 
         // Parse .deb filenames to extract versions
         let mut versions = Vec::new();
@@ -247,8 +243,8 @@ impl PRoot {
         if let Some(latest) = versions.first() {
             Ok(vec![latest.clone()])
         } else {
-            Err(RuntimeError::DownloadError(
-                "No PRoot versions found in Termux repository".to_string(),
+            Err(anyhow::anyhow!(
+                "No PRoot versions found in Termux repository"
             ))
         }
     }
@@ -266,33 +262,28 @@ impl PRoot {
         match (target_arch, target_os) {
             ("x86_64", "linux") => self.download_linux(version).await,
             ("aarch64", "android") | ("x86_64", "android") => self.download_android(version).await,
-            _ => Err(RuntimeError::NotSupported(
-                "Unsupported platform for download".to_string(),
-            )),
+            _ => Err(anyhow::anyhow!("Unsupported platform for download")),
         }
     }
 
     async fn download_linux(&self, version: &str) -> RuntimeResult<()> {
         // Get latest version
         let latest_versions = self.fetch_linux_versions().await?;
-        let latest = latest_versions.first().ok_or(RuntimeError::DownloadError(
-            "No versions available".to_string(),
-        ))?;
+        let latest = latest_versions
+            .first()
+            .ok_or(anyhow::anyhow!("No versions available"))?;
 
         if version != latest {
-            return Err(RuntimeError::InvalidVersion(format!(
+            return Err(anyhow::anyhow!(
                 "Only latest version ({}) is supported for download, requested: {}",
-                latest, version
-            )));
+                latest,
+                version
+            ));
         }
 
         // Create install directory
-        fs::create_dir_all(&self.install_dir).map_err(|e| {
-            RuntimeError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to create install directory: {}", e),
-            ))
-        })?;
+        fs::create_dir_all(&self.install_dir)
+            .map_err(|e| anyhow::anyhow!("Failed to create install directory: {}", e))?;
 
         // Download proot binary
         let url = "https://proot.gitlab.io/proot/bin/proot";
@@ -301,32 +292,24 @@ impl PRoot {
             .get(url)
             .send()
             .await
-            .map_err(|e| RuntimeError::DownloadError(format!("Failed to download: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!("Failed to download: {}", e))?;
 
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| RuntimeError::DownloadError(format!("Failed to read download: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!("Failed to read download: {}", e))?;
 
         let proot_path = self.install_dir.join("proot");
-        fs::write(&proot_path, bytes).map_err(|e| {
-            RuntimeError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to write proot binary: {}", e),
-            ))
-        })?;
+        fs::write(&proot_path, bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to write proot binary: {}", e))?;
 
         // Make executable
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = fs::Permissions::from_mode(0o755);
-            fs::set_permissions(&proot_path, perms).map_err(|e| {
-                RuntimeError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to set executable: {}", e),
-                ))
-            })?;
+            fs::set_permissions(&proot_path, perms)
+                .map_err(|e| anyhow::anyhow!("Failed to set executable: {}", e))?;
         }
 
         Ok(())
@@ -334,12 +317,8 @@ impl PRoot {
 
     async fn download_android(&self, version: &str) -> RuntimeResult<()> {
         // Create install directory
-        fs::create_dir_all(&self.install_dir).map_err(|e| {
-            RuntimeError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to create install directory: {}", e),
-            ))
-        })?;
+        fs::create_dir_all(&self.install_dir)
+            .map_err(|e| anyhow::anyhow!("Failed to create install directory: {}", e))?;
 
         let client = reqwest::Client::new();
         let base_url = "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/";
@@ -363,22 +342,21 @@ impl PRoot {
         url: &str,
         package_name: &str,
     ) -> RuntimeResult<()> {
-        let response = client.get(url).send().await.map_err(|e| {
-            RuntimeError::DownloadError(format!("Failed to download {}: {}", package_name, e))
-        })?;
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to download {}: {}", package_name, e))?;
 
-        let bytes = response.bytes().await.map_err(|e| {
-            RuntimeError::DownloadError(format!("Failed to read {}: {}", package_name, e))
-        })?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", package_name, e))?;
 
         // Save .deb to temporary file
         let temp_deb = self.install_dir.join(format!("{}.deb", package_name));
-        fs::write(&temp_deb, bytes).map_err(|e| {
-            RuntimeError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to write {}.deb: {}", package_name, e),
-            ))
-        })?;
+        fs::write(&temp_deb, bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to write {}.deb: {}", package_name, e))?;
 
         // Extract data.tar.xz from .deb
         let temp_data = self.install_dir.join("data.tar.xz");
@@ -397,21 +375,15 @@ impl PRoot {
     fn extract_from_ar(&self, ar_path: &Path, output_path: &Path) -> RuntimeResult<()> {
         // Simple ar extraction - data.tar.xz is typically at a fixed offset
         // For a proper implementation, consider using the `ar` crate
-        let file_data = fs::read(ar_path).map_err(|e| {
-            RuntimeError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to read ar file: {}", e),
-            ))
-        })?;
+        let file_data =
+            fs::read(ar_path).map_err(|e| anyhow::anyhow!("Failed to read ar file: {}", e))?;
 
         // ar format: magic (8 bytes) followed by members
         // Member header: name (16), mtime (12), uid (6), gid (6), mode (8), size (10), magic (2)
         // We need to find and extract data.tar.xz
 
         if file_data.len() < 8 || &file_data[0..8] != b"!<arch>\n" {
-            return Err(RuntimeError::DownloadError(
-                "Invalid ar archive format".to_string(),
-            ));
+            return Err(anyhow::anyhow!("Invalid ar archive format"));
         }
 
         let mut offset = 8;
@@ -426,25 +398,19 @@ impl PRoot {
             let size_str = String::from_utf8_lossy(size_bytes).trim_end().to_string();
             let size: usize = size_str
                 .parse()
-                .map_err(|_| RuntimeError::DownloadError("Invalid ar member size".to_string()))?;
+                .map_err(|_| anyhow::anyhow!("Invalid ar member size"))?;
 
             if name.contains("data.tar") {
                 let data_start = offset + 60;
-                fs::write(output_path, &file_data[data_start..data_start + size]).map_err(|e| {
-                    RuntimeError::IoError(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Failed to write extracted data: {}", e),
-                    ))
-                })?;
+                fs::write(output_path, &file_data[data_start..data_start + size])
+                    .map_err(|e| anyhow::anyhow!("Failed to write extracted data: {}", e))?;
                 return Ok(());
             }
 
             offset += 60 + ((size + 1) & !1);
         }
 
-        Err(RuntimeError::DownloadError(
-            "data.tar.xz not found in ar archive".to_string(),
-        ))
+        Err(anyhow::anyhow!("data.tar.xz not found in ar archive"))
     }
 
     fn extract_tar_xz(&self, tar_xz_path: &Path, package_name: &str) -> RuntimeResult<()> {
@@ -452,12 +418,8 @@ impl PRoot {
         // This avoids complex xz decompression issues
 
         // Attempt to decompress xz using a simple decoder
-        let tar_xz_data = fs::read(tar_xz_path).map_err(|e| {
-            RuntimeError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to read tar.xz file: {}", e),
-            ))
-        })?;
+        let tar_xz_data = fs::read(tar_xz_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read tar.xz file: {}", e))?;
 
         // Use a simple XZ decompression approach
         let tar_data = self.decompress_xz(&tar_xz_data)?;
@@ -467,23 +429,22 @@ impl PRoot {
 
         for entry in archive
             .entries()
-            .map_err(|e| RuntimeError::DownloadError(format!("Failed to read tar: {}", e)))?
+            .map_err(|e| anyhow::anyhow!("Failed to read tar: {}", e))?
         {
-            let mut entry = entry.map_err(|e| {
-                RuntimeError::DownloadError(format!("Failed to read tar entry: {}", e))
-            })?;
-            let path = entry.path().map_err(|e| {
-                RuntimeError::DownloadError(format!("Failed to get entry path: {}", e))
-            })?;
+            let mut entry =
+                entry.map_err(|e| anyhow::anyhow!("Failed to read tar entry: {}", e))?;
+            let path = entry
+                .path()
+                .map_err(|e| anyhow::anyhow!("Failed to get entry path: {}", e))?;
 
             let path_str = path.to_string_lossy();
 
             // Extract proot binary or libtalloc libraries
             if package_name == "proot" && path_str.ends_with("usr/bin/proot") {
                 let file_path = self.install_dir.join("proot");
-                entry.unpack(&file_path).map_err(|e| {
-                    RuntimeError::DownloadError(format!("Failed to unpack proot: {}", e))
-                })?;
+                entry
+                    .unpack(&file_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to unpack proot: {}", e))?;
 
                 #[cfg(unix)]
                 {
@@ -493,9 +454,9 @@ impl PRoot {
                 }
             } else if package_name == "libtalloc" && path_str.contains("usr/lib/libtalloc") {
                 let lib_path = self.install_dir.join(path.file_name().unwrap_or_default());
-                entry.unpack(&lib_path).map_err(|e| {
-                    RuntimeError::DownloadError(format!("Failed to unpack library: {}", e))
-                })?;
+                entry
+                    .unpack(&lib_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to unpack library: {}", e))?;
             }
         }
 
@@ -509,7 +470,7 @@ impl PRoot {
         let mut output = Vec::new();
         decoder
             .read_to_end(&mut output)
-            .map_err(|e| RuntimeError::DownloadError(format!("Failed to decompress xz: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!("Failed to decompress xz: {}", e))?;
         Ok(output)
     }
 
@@ -526,9 +487,8 @@ impl PRoot {
         let image_dir = self.install_dir.join("images").join(&image_hash);
         let rootfs_dir = image_dir.join("rootfs");
 
-        fs::create_dir_all(&rootfs_dir).map_err(|e| {
-            RuntimeError::PrepareError(format!("Failed to create image directory: {}", e))
-        })?;
+        fs::create_dir_all(&rootfs_dir)
+            .map_err(|e| anyhow::anyhow!("Failed to create image directory: {}", e))?;
 
         progress(PrepareProgress::Downloading {
             downloaded_bytes: 0,
@@ -551,9 +511,9 @@ impl PRoot {
 
         let metadata_path = image_dir.join("metadata.json");
         let metadata_json = serde_json::to_string_pretty(&metadata)
-            .map_err(|e| RuntimeError::SerializationError(e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to serialize metadata: {}", e))?;
         fs::write(&metadata_path, metadata_json)
-            .map_err(|e| RuntimeError::PrepareError(format!("Failed to write metadata: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!("Failed to write metadata: {}", e))?;
 
         progress(PrepareProgress::Configuring);
 
@@ -584,9 +544,8 @@ impl PRoot {
         ];
 
         for dir in dirs {
-            fs::create_dir_all(rootfs_dir.join(dir)).map_err(|e| {
-                RuntimeError::PrepareError(format!("Failed to create directory {}: {}", dir, e))
-            })?;
+            fs::create_dir_all(rootfs_dir.join(dir))
+                .map_err(|e| anyhow::anyhow!("Failed to create directory {}: {}", dir, e))?;
         }
 
         Ok(())
@@ -603,9 +562,8 @@ impl PRoot {
             "nameserver 8.8.8.8\nnameserver 8.8.4.4\n".to_string()
         };
 
-        fs::write(&resolv_path, content).map_err(|e| {
-            RuntimeError::PrepareError(format!("Failed to write resolv.conf: {}", e))
-        })?;
+        fs::write(&resolv_path, content)
+            .map_err(|e| anyhow::anyhow!("Failed to write resolv.conf: {}", e))?;
 
         Ok(())
     }
@@ -625,9 +583,8 @@ impl PRoot {
         let image_dir = self.install_dir.join("images").join(&image_hash);
 
         if image_dir.exists() {
-            fs::remove_dir_all(&image_dir).map_err(|e| {
-                RuntimeError::PrepareError(format!("Failed to remove image: {}", e))
-            })?;
+            fs::remove_dir_all(&image_dir)
+                .map_err(|e| anyhow::anyhow!("Failed to remove image: {}", e))?;
         }
 
         Ok(())
@@ -640,19 +597,16 @@ impl PRoot {
         let rootfs_dir = image_dir.join("rootfs");
 
         if !rootfs_dir.exists() {
-            return Err(RuntimeError::ExecutionError(format!(
-                "Image not prepared: {}",
-                image
-            )));
+            return Err(anyhow::anyhow!("Image not prepared: {}", image));
         }
 
         // Load metadata
         let metadata_path = image_dir.join("metadata.json");
         let metadata: ImageMetadata = if metadata_path.exists() {
-            let content = fs::read_to_string(&metadata_path).map_err(|e| {
-                RuntimeError::ExecutionError(format!("Failed to read metadata: {}", e))
-            })?;
-            serde_json::from_str(&content).map_err(|e| RuntimeError::SerializationError(e))?
+            let content = fs::read_to_string(&metadata_path)
+                .map_err(|e| anyhow::anyhow!("Failed to read metadata: {}", e))?;
+            serde_json::from_str(&content)
+                .map_err(|e| anyhow::anyhow!("Failed to deserialize metadata: {}", e))?
         } else {
             ImageMetadata {
                 env: HashMap::new(),
@@ -670,9 +624,7 @@ impl PRoot {
             if custom_proot.exists() {
                 custom_proot.to_string_lossy().to_string()
             } else {
-                return Err(RuntimeError::ExecutionError(
-                    "PRoot binary not found".to_string(),
-                ));
+                return Err(anyhow::anyhow!("PRoot binary not found"));
             }
         };
 
@@ -728,7 +680,7 @@ impl PRoot {
 
         let child = cmd
             .spawn()
-            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to spawn process: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!("Failed to spawn process: {}", e))?;
 
         Ok(ProcessHandle { child })
     }

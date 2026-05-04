@@ -2,21 +2,28 @@ use dioxus::core::anyhow;
 use dioxus::fullstack::response::IntoResponse;
 use dioxus::prelude::*;
 use dioxus_fullstack::payloads::sse::ServerEvents;
+#[cfg(feature = "server")]
 use futures_util::StreamExt;
-use image::GenericImageView;
+#[cfg(feature = "server")]
+use image::{DynamicImage, ImageDecoder, ImageReader};
+#[cfg(feature = "server")]
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "server")]
 use sevenz_rust2::decompress_with_extract_fn;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(feature = "server")]
 use tokio::sync::Mutex;
 
 // Global lock map for image operations (per image path)
+#[cfg(feature = "server")]
 static IMAGE_LOCKS: Lazy<Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 /// Helper to get a lock for a given image path (as string)
+#[cfg(feature = "server")]
 async fn lock_for_image_path<P: AsRef<Path>>(path: P) -> Arc<Mutex<()>> {
     let path_str = path.as_ref().to_string_lossy().to_string();
     let mut map = IMAGE_LOCKS.lock().await;
@@ -62,8 +69,6 @@ pub enum ResizeProgressEvent {
     },
     FileResized {
         name: String,
-        original_size: u64,
-        new_size: u64,
     },
     ResizeProgress {
         completed: usize,
@@ -612,16 +617,11 @@ async fn batch_resize_images_stream(
         // Get per-image lock to prevent concurrent modifications
         let lock = lock_for_image_path(&image_path).await;
         let _guard = lock.lock().await;
-
         match resize_image_file(&image_path, max_dimension).await {
-            Ok((original_size, new_size)) => {
+            Ok(_) => {
                 completed += 1;
                 let _ = tx
-                    .send(ResizeProgressEvent::FileResized {
-                        name: image_name,
-                        original_size,
-                        new_size,
-                    })
+                    .send(ResizeProgressEvent::FileResized { name: image_name })
                     .await;
 
                 let _ = tx
@@ -646,26 +646,21 @@ async fn batch_resize_images_stream(
     Ok(())
 }
 
-async fn resize_image_file(image_path: &Path, max_dimension: u32) -> Result<(u64, u64)> {
-    // Read original file
-    let original_bytes = std::fs::read(image_path).map_err(|e| {
-        anyhow!(
-            "Failed to read image file: {} ({})",
-            image_path.display(),
-            e
-        )
-    })?;
-    let original_size = original_bytes.len() as u64;
-
+#[cfg(feature = "server")]
+async fn resize_image_file(image_path: &Path, max_dimension: u32) -> Result<bool> {
     // Load and decode image
-    let img = image::load_from_memory(&original_bytes)
-        .map_err(|e| anyhow!("Failed to load image: {}", e))?;
+    let img_decoder = ImageReader::open(&image_path)
+        .map_err(|e| anyhow!("Failed to load image: {}", e))?
+        .with_guessed_format()
+        .map_err(|e| anyhow!("Failed to guess image format: {}", e))?
+        .into_decoder()
+        .map_err(|e| anyhow!("Failed to decode image: {}", e))?;
 
-    let (width, height) = img.dimensions();
+    let (width, height) = img_decoder.dimensions();
 
     // Check if resize is needed
     if width <= max_dimension && height <= max_dimension {
-        return Ok((original_size, original_size));
+        return Ok(false); // No resize needed
     }
 
     // Calculate new dimensions maintaining aspect ratio
@@ -679,28 +674,20 @@ async fn resize_image_file(image_path: &Path, max_dimension: u32) -> Result<(u64
         (new_w, new_h)
     };
 
+    // Actually decode the image now that we know we need to resize
+    let img = DynamicImage::from_decoder(img_decoder)
+        .map_err(|e| anyhow!("Failed to decode image for resizing: {}", e))?;
+
     // Resize the image with high-quality filtering
     let resized = img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3);
 
-    // Encode as JPEG for efficient storage
-    let mut output = Vec::new();
+    // Encode as JPEG for efficient storage (using this method means preferring performance over quality anyway), directly to disk
+    let mut output_file = std::fs::File::create(&image_path)
+        .map_err(|e| anyhow!("Failed to create output file for resized image: {}", e))?;
+
     resized
-        .write_to(
-            &mut std::io::Cursor::new(&mut output),
-            image::ImageFormat::Jpeg,
-        )
-        .map_err(|e| anyhow!("Failed to encode JPEG: {}", e))?;
+        .write_to(&mut output_file, image::ImageFormat::Jpeg)
+        .map_err(|e| anyhow!("Failed to write resized image: {}", e))?;
 
-    let new_size = output.len() as u64;
-
-    // Write back to original file
-    std::fs::write(image_path, &output).map_err(|e| {
-        anyhow!(
-            "Failed to write resized image: {} ({})",
-            image_path.display(),
-            e
-        )
-    })?;
-
-    Ok((original_size, new_size))
+    Ok(true)
 }

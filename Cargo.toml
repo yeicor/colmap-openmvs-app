@@ -6,31 +6,72 @@ edition = "2021"
 
 [dependencies]
 dioxus = { version = "0.7.7", features = ["router", "fullstack"] }
-dioxus-free-icons = {version = "0.10.0", features = ["bootstrap"] }
+dioxus-free-icons = { version = "0.10.0", features = ["bootstrap"] }
 dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version = "0.0.1", default-features = false }
 
-serde = { version = "*", features = ["derive"] } # Same version as dioxus
-serde_derive_default = "0.1"
+# Core serialization (used by both server and client for data structures)
+serde = { version = "*", features = ["derive"] }
+serde_json = { version = "1.0", optional = true }
 
-tokio = { version = "*", features = ["sync", "macros", "rt"] }
-futures-util = "0.3"
+# Async runtime - needed for server and dioxus fullstack
+tokio = { version = "*", features = ["sync", "macros", "rt"], optional = true }
 
-sevenz-rust2 = "0.21"
-urlencoding = "2.1"
+# Async utilities - server-only for streaming
+futures-util = { version = "0.3", optional = true }
 
-# Runtime system dependencies
-reqwest = { version = "0.11", features = ["json", "stream"] }
-serde_json = "1.0"
-thiserror = "1.0"
-which = "5.0"
-tar = "0.4"
-xz2 = "0.1"
-once_cell = "1.21.4"
-image = "0.25.10"
+# Error handling
+anyhow = { version = "1.0" }
+
+# URL encoding - optional utility
+urlencoding = { version = "2.1" }
+
+# Image processing - server-only for image resizing
+image = { version = "0.25.10", optional = true }
+
+# 7z archive extraction - server-only for demo images
+sevenz-rust2 = { version = "0.21", optional = true }
+
+# XZ compression - server-only for proot runtime
+xz2 = { version = "0.1", optional = true }
+
+# Runtime management - server-only state management
+once_cell = { version = "1.21.4", optional = true }
+
+# Tar archive handling - server-only for project operations
+tar = { version = "0.4", optional = true }
+
+# HTTP requests - server-only for downloading runtimes and demo data
+reqwest = { version = "0.11", features = ["json", "stream"], optional = true }
+
+# Executable discovery - server-only for proot runtime support
+which = { version = "5.0", optional = true }
+
+# Shared helper (can be removed if serde_derive_default is not critical)
+serde_derive_default = { version = "0.1", optional = true }
 
 [features]
 default = ["desktop"]
+
+# Client target features
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]
-server = ["dioxus/server"]
+
+# Server feature - enables all server-only dependencies
+server = [
+    "dioxus/server",
+    "tokio",
+    "futures-util",
+    "image",
+    "sevenz-rust2",
+    "xz2",
+    "which",
+    "once_cell",
+    "tar",
+    "reqwest",
+    "serde_json",
+    "proot-runtime",
+]
+
+# Convenience feature for proot runtime components
+proot-runtime = ["which", "xz2"]

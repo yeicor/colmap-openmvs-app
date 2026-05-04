@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::common::runtimes::{PRoot, PrepareProgress, Runtime, RuntimeError};
+    use crate::server::runtimes::{PRoot, PrepareProgress, Runtime};
     use std::path::PathBuf;
 
     #[test]
@@ -78,18 +78,6 @@ mod tests {
     }
 
     #[test]
-    fn test_runtime_error_display() {
-        let error = RuntimeError::NotSupported("x86-windows".to_string());
-        assert_eq!(format!("{}", error), "Runtime not supported: x86-windows");
-
-        let error = RuntimeError::NotFound("proot".to_string());
-        assert_eq!(format!("{}", error), "Runtime not found: proot");
-
-        let error = RuntimeError::InvalidVersion("1.2.3".to_string());
-        assert_eq!(format!("{}", error), "Invalid version: 1.2.3");
-    }
-
-    #[test]
     fn test_prepare_progress_serialization() {
         use serde_json;
 
@@ -162,26 +150,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_error_from_io_error() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-        let runtime_err: RuntimeError = io_err.into();
-        match runtime_err {
-            RuntimeError::IoError(_) => (),
-            _ => panic!("Should convert to IoError"),
-        }
-    }
-
-    #[test]
-    fn test_error_from_json_error() {
-        let json_err = serde_json::from_str::<serde_json::Value>("invalid json").unwrap_err();
-        let runtime_err: RuntimeError = json_err.into();
-        match runtime_err {
-            RuntimeError::SerializationError(_) => (),
-            _ => panic!("Should convert to SerializationError"),
-        }
-    }
-
     // Async tests
     #[tokio::test]
     async fn test_runtime_is_supported() {
@@ -239,7 +207,7 @@ mod tests {
 
         let child = Command::new("echo").arg("test").spawn().unwrap();
 
-        let handle = crate::common::runtimes::ProcessHandle { child };
+        let handle = crate::server::runtimes::ProcessHandle { child };
         assert_ne!(handle.child.id(), 0);
     }
 
@@ -303,28 +271,6 @@ mod tests {
                 hash1, other_hash,
                 "Different images should have different hashes"
             );
-        }
-    }
-
-    #[test]
-    fn test_runtime_error_types() {
-        let errors = vec![
-            RuntimeError::NotSupported("test".to_string()),
-            RuntimeError::NotFound("test".to_string()),
-            RuntimeError::VersionError("test".to_string()),
-            RuntimeError::DownloadError("test".to_string()),
-            RuntimeError::PrepareError("test".to_string()),
-            RuntimeError::ExecutionError("test".to_string()),
-            RuntimeError::CommandError("test".to_string()),
-            RuntimeError::PlatformError("test".to_string()),
-            RuntimeError::InvalidVersion("test".to_string()),
-        ];
-
-        for error in errors {
-            let error_str = format!("{}", error);
-            assert!(!error_str.is_empty(), "Error message should not be empty");
-            // Each error should contain its type name
-            assert!(error_str.len() > 0, "Error should have meaningful message");
         }
     }
 

@@ -3,8 +3,6 @@ use dioxus::prelude::*;
 mod views;
 use views::{Project, Projects, ProjectsSidebar, Settings};
 
-mod common;
-
 mod server;
 
 #[allow(warnings, clippy::all)]

@@ -220,17 +220,8 @@ pub fn ImagesTab(project_name: String) -> Element {
                                         total_files, max_dimension
                                     )));
                                 }
-                                ResizeProgressEvent::FileResized {
-                                    name,
-                                    original_size,
-                                    new_size,
-                                } => {
-                                    let orig_mb = original_size as f64 / 1_000_000.0;
-                                    let new_mb = new_size as f64 / 1_000_000.0;
-                                    info_message.set(Some(format!(
-                                        "Resized: {} ({:.1} MB → {:.1} MB)",
-                                        name, orig_mb, new_mb
-                                    )));
+                                ResizeProgressEvent::FileResized { name } => {
+                                    info_message.set(Some(format!("Resized: {}", name)));
                                 }
                                 ResizeProgressEvent::ResizeProgress {
                                     completed,

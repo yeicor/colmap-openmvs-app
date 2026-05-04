@@ -5,46 +5,8 @@ mod tests;
 pub use proot::{PRoot, PrepareProgress};
 
 use std::path::PathBuf;
-use thiserror::Error;
 
-/// Runtime system errors
-#[derive(Debug, Error)]
-pub enum RuntimeError {
-    #[error("Runtime not supported: {0}")]
-    NotSupported(String),
-
-    #[error("Runtime not found: {0}")]
-    NotFound(String),
-
-    #[error("Failed to determine version: {0}")]
-    VersionError(String),
-
-    #[error("Download error: {0}")]
-    DownloadError(String),
-
-    #[error("Image preparation failed: {0}")]
-    PrepareError(String),
-
-    #[error("Execution error: {0}")]
-    ExecutionError(String),
-
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
-
-    #[error("Serialization error: {0}")]
-    SerializationError(#[from] serde_json::error::Error),
-
-    #[error("Command execution failed: {0}")]
-    CommandError(String),
-
-    #[error("Platform error: {0}")]
-    PlatformError(String),
-
-    #[error("Invalid version: {0}")]
-    InvalidVersion(String),
-}
-
-pub type RuntimeResult<T> = Result<T, RuntimeError>;
+pub type RuntimeResult<T> = anyhow::Result<T>;
 
 /// Process handle for lifecycle management
 pub struct ProcessHandle {
@@ -56,7 +18,7 @@ impl ProcessHandle {
     pub fn wait(mut self) -> RuntimeResult<std::process::ExitStatus> {
         self.child
             .wait()
-            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to wait for process: {}", e)))
+            .map_err(|e| anyhow::anyhow!("Failed to wait for process: {}", e))
     }
 
     /// Get mutable references to stdin/stdout/stderr
@@ -76,7 +38,7 @@ impl ProcessHandle {
     pub fn kill(mut self) -> RuntimeResult<()> {
         self.child
             .kill()
-            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to kill process: {}", e)))
+            .map_err(|e| anyhow::anyhow!("Failed to kill process: {}", e))
     }
 }
 
