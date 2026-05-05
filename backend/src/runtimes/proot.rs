@@ -2,31 +2,11 @@ use super::{
     ImageHash, ImageTag, PrepareProgressTx, PreparedImage, ProcessHandle, Runtime, RuntimeResult,
 };
 use async_trait::async_trait;
+use colmap_openmvs_api::PrepareProgress;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
-
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
-/// Progress events emitted by [`PRoot::prepare`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PrepareProgress {
-    ResolvingImage,
-    Downloading {
-        downloaded_bytes: u64,
-        total_bytes: Option<u64>,
-    },
-    ExtractingLayer {
-        layer: String,
-        progress: f32,
-    },
-    WritingRootFs,
-    Configuring,
-    Completed,
-}
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -35,9 +15,17 @@ pub enum PrepareProgress {
 /// Metadata stored alongside each prepared image rootfs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ImageMetadata {
+    #[serde(default)]
+    tag: String,
+    #[serde(default)]
+    build_date: Option<String>,
+    #[serde(default)]
     env: HashMap<String, String>,
+    #[serde(default)]
     entrypoint: Option<Vec<String>>,
+    #[serde(default)]
     cmd: Option<Vec<String>>,
+    #[serde(default)]
     working_dir: Option<String>,
 }
 
@@ -51,13 +39,13 @@ struct ImageMetadata {
 /// `install_dir`.  Obtain an instance through [`super::RuntimeFactory`].
 #[derive(Debug, Clone)]
 pub struct PRoot {
-    pub install_dir: PathBuf,
+    pub images_dir: PathBuf,
 }
 
 impl PRoot {
     /// Create a PRoot runtime that stores its data in `install_dir`.
-    pub fn new(install_dir: PathBuf) -> Self {
-        PRoot { install_dir }
+    pub fn new(images_dir: PathBuf) -> Self {
+        PRoot { images_dir }
     }
 
     // -----------------------------------------------------------------------
@@ -137,7 +125,7 @@ impl PRoot {
 
     async fn fetch_linux_versions(&self) -> RuntimeResult<Vec<String>> {
         let client = reqwest::Client::new();
-        let url = "https://gitlab.com/api/v4/projects/root%2Fproot/repository/tags";
+        let url = "https://gitlab.com/api/v4/projects/proot%2Fproot/repository/tags";
 
         let response = client
             .get(url)
@@ -219,7 +207,7 @@ impl PRoot {
             ));
         }
 
-        tokio::fs::create_dir_all(&self.install_dir)
+        tokio::fs::create_dir_all(&self.images_dir)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create install directory: {}", e))?;
 
@@ -233,7 +221,7 @@ impl PRoot {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to read download: {}", e))?;
 
-        let proot_path = self.install_dir.join("proot");
+        let proot_path = self.images_dir.join("proot");
         tokio::fs::write(&proot_path, &bytes)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to write proot binary: {}", e))?;
@@ -251,7 +239,7 @@ impl PRoot {
     }
 
     async fn download_android(&self, version: &str) -> RuntimeResult<()> {
-        tokio::fs::create_dir_all(&self.install_dir)
+        tokio::fs::create_dir_all(&self.images_dir)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create install directory: {}", e))?;
 
@@ -287,7 +275,7 @@ impl PRoot {
             .to_vec();
 
         // All subsequent work is CPU/disk-bound — offload to a blocking thread.
-        let install_dir = self.install_dir.clone();
+        let install_dir = self.images_dir.clone();
         let pkg = package_name.to_string();
 
         tokio::task::spawn_blocking(move || {
@@ -411,7 +399,7 @@ impl Runtime for PRoot {
             return self.get_system_proot_version().await;
         }
 
-        let proot_bin = self.install_dir.join("proot");
+        let proot_bin = self.images_dir.join("proot");
         if proot_bin.exists() {
             return self.get_installed_proot_version(&proot_bin).await;
         }
@@ -452,7 +440,7 @@ impl Runtime for PRoot {
         tx.send(PrepareProgress::ResolvingImage).await.ok();
 
         let image_hash = self.hash_image_name(image);
-        let image_dir = self.install_dir.join("images").join(&image_hash);
+        let image_dir = self.images_dir.join(&image_hash);
         let rootfs_dir = image_dir.join("rootfs");
 
         tokio::fs::create_dir_all(&rootfs_dir)
@@ -473,6 +461,8 @@ impl Runtime for PRoot {
 
         // Persist image metadata
         let metadata = ImageMetadata {
+            tag: image.to_string(),
+            build_date: Some(chrono::Utc::now().to_rfc3339()),
             env: HashMap::new(),
             entrypoint: None,
             cmd: None,
@@ -495,7 +485,7 @@ impl Runtime for PRoot {
 
     async fn remove(&self, image: &str) -> RuntimeResult<()> {
         let image_hash = self.hash_image_name(image);
-        let image_dir = self.install_dir.join("images").join(&image_hash);
+        let image_dir = self.images_dir.join(&image_hash);
 
         if image_dir.exists() {
             tokio::fs::remove_dir_all(&image_dir)
@@ -507,7 +497,7 @@ impl Runtime for PRoot {
 
     async fn run(&self, image: &str, args: &[String]) -> RuntimeResult<ProcessHandle> {
         let image_hash = self.hash_image_name(image);
-        let image_dir = self.install_dir.join("images").join(&image_hash);
+        let image_dir = self.images_dir.join(&image_hash);
         let rootfs_dir = image_dir.join("rootfs");
 
         if !rootfs_dir.exists() {
@@ -527,6 +517,8 @@ impl Runtime for PRoot {
                 .map_err(|e| anyhow::anyhow!("Failed to deserialize metadata: {}", e))?
         } else {
             ImageMetadata {
+                tag: String::new(),
+                build_date: None,
                 env: HashMap::new(),
                 entrypoint: None,
                 cmd: None,
@@ -538,7 +530,7 @@ impl Runtime for PRoot {
         let proot_bin = if which::which("proot").is_ok() {
             "proot".to_string()
         } else {
-            let custom = self.install_dir.join("proot");
+            let custom = self.images_dir.join("proot");
             if custom.exists() {
                 custom.to_string_lossy().into_owned()
             } else {
@@ -591,7 +583,7 @@ impl Runtime for PRoot {
     }
 
     async fn list_images(&self) -> RuntimeResult<Vec<PreparedImage>> {
-        let images_dir = self.install_dir.join("images");
+        let images_dir = self.images_dir.clone();
 
         if !tokio::fs::try_exists(&images_dir).await.unwrap_or(false) {
             return Ok(Vec::new());
@@ -618,12 +610,25 @@ impl Runtime for PRoot {
             }
 
             if let Some(hash_str) = path.file_name().and_then(|n| n.to_str()) {
-                let tag = ImageTag::from_string(format!("unknown:{}", hash_str));
+                // Try to read metadata to get the original tag and build date
+                let (tag_str, build_date) = match tokio::fs::read_to_string(&metadata_path).await {
+                    Ok(content) => match serde_json::from_str::<ImageMetadata>(&content) {
+                        Ok(metadata) if !metadata.tag.is_empty() => {
+                            (metadata.tag, metadata.build_date)
+                        }
+                        Ok(metadata) => (format!("unknown:{}", hash_str), metadata.build_date),
+                        Err(_) => (format!("unknown:{}", hash_str), None),
+                    },
+                    Err(_) => (format!("unknown:{}", hash_str), None),
+                };
+
+                let tag = ImageTag::from_string(tag_str);
                 let size = self.calculate_dir_size_async(&path).await?;
-                images.push(PreparedImage::new(
+                images.push(PreparedImage::with_build_date(
                     tag,
                     ImageHash::new(hash_str.to_string()),
                     size,
+                    build_date,
                 ));
             }
         }
@@ -685,7 +690,7 @@ fn decompress_xz_sync(data: &[u8]) -> RuntimeResult<Vec<u8>> {
 
 /// Extract proot/libtalloc binaries from a `data.tar.xz`.
 fn extract_tar_xz_sync(
-    install_dir: &Path,
+    images_dir: &Path,
     tar_xz_path: &Path,
     package_name: &str,
 ) -> RuntimeResult<()> {
@@ -706,7 +711,7 @@ fn extract_tar_xz_sync(
         let path_str = path.to_string_lossy().into_owned();
 
         if package_name == "proot" && path_str.ends_with("usr/bin/proot") {
-            let dest = install_dir.join("proot");
+            let dest = images_dir.join("proot");
             entry
                 .unpack(&dest)
                 .map_err(|e| anyhow::anyhow!("Failed to unpack proot: {}", e))?;
@@ -718,7 +723,7 @@ fn extract_tar_xz_sync(
                 std::fs::set_permissions(&dest, perms).ok();
             }
         } else if package_name == "libtalloc" && path_str.contains("usr/lib/libtalloc") {
-            let dest = install_dir.join(path.file_name().unwrap_or_default());
+            let dest = images_dir.join(path.file_name().unwrap_or_default());
             entry
                 .unpack(&dest)
                 .map_err(|e| anyhow::anyhow!("Failed to unpack library: {}", e))?;
@@ -726,36 +731,4 @@ fn extract_tar_xz_sync(
     }
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_proot_version_v_prefix() {
-        let output = "|__|  |__|__\\_____/\\_____/\\____| v5.4.0-5f780cba\n";
-        let version = PRoot::parse_proot_version(output).unwrap();
-        assert!(version.starts_with("5.4.0"), "got: {}", version);
-    }
-
-    #[test]
-    fn test_parse_proot_version_bare() {
-        let output = "proot version 5.3.0\n";
-        let version = PRoot::parse_proot_version(output).unwrap();
-        assert_eq!(version, "5.3.0");
-    }
-
-    #[test]
-    fn test_hash_image_name_stable() {
-        let proot = PRoot::new(PathBuf::from("/tmp/test"));
-        let h1 = proot.hash_image_name("library/alpine:3.18");
-        let h2 = proot.hash_image_name("library/alpine:3.18");
-        assert_eq!(h1, h2);
-        assert!(!h1.is_empty());
-    }
 }

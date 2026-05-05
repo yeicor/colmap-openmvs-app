@@ -24,7 +24,7 @@ pub enum DemoProgressEvent {
         total_bytes: u64,
     },
     ExtractionProgress {
-        last_file: Option<String>, // None on 0% progress, Some(filename) on progress updates
+        last_file: Option<String>,
         total_files: usize,
         total_bytes: u64,
     },
@@ -41,6 +41,54 @@ pub enum ResizeProgressEvent {
         completed: usize,
         total_files: usize,
     },
+    Error {
+        message: String,
+    },
+}
+
+/// Status information about the PRoot container runtime
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeInfo {
+    pub name: String,
+    pub supported: bool,
+    pub unsupported_reason: Option<String>,
+    pub installed: bool,
+    pub version: Option<String>,
+}
+
+/// A prepared container image ready to run
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PreparedImageInfo {
+    pub tag: String,
+    pub hash: String,
+    pub size: u64,
+    pub size_readable: String,
+    #[serde(default)]
+    pub build_date: Option<String>,
+}
+
+/// Available image tag with metadata
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImageTagInfo {
+    pub name: String,
+    pub build_date: Option<String>,
+}
+
+/// Progress events during container image preparation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PrepareProgress {
+    ResolvingImage,
+    Downloading {
+        downloaded_bytes: u64,
+        total_bytes: Option<u64>,
+    },
+    ExtractingLayer {
+        layer: String,
+        progress: f32,
+    },
+    WritingRootFs,
+    Configuring,
+    Completed,
     Error {
         message: String,
     },

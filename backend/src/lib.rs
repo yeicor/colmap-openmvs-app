@@ -13,4 +13,10 @@ pub use projects::{create_project, delete_project, get_projects, rename_project}
 mod settings;
 pub use settings::{get_settings, update_settings};
 
+mod runtimes_api;
+pub use runtimes_api::{
+    download_runtime_version, get_available_runtime_versions, get_runtime_info,
+    list_available_image_tags, list_runtime_images, prepare_runtime_image, remove_runtime_image,
+};
+
 pub mod runtimes;

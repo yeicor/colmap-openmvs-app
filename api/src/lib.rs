@@ -1,2 +1,5 @@
 pub mod types;
-pub use types::{DemoProgressEvent, Project, ResizeProgressEvent, Settings};
+pub use types::{
+    DemoProgressEvent, ImageTagInfo, PrepareProgress, PreparedImageInfo, Project,
+    ResizeProgressEvent, RuntimeInfo, Settings,
+};

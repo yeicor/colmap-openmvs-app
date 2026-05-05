@@ -81,7 +81,7 @@
 /* Banner component styles */
 .error-banner,
 .info-banner {
-    padding: 0.5rem;
+    padding: 0.25rem;
     border-radius: 0.5rem;
     font-size: 1rem;
     box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);

@@ -6,7 +6,10 @@ use dioxus::{
     prelude::*,
 };
 
-use colmap_openmvs_api::{DemoProgressEvent, Project, ResizeProgressEvent, Settings};
+use colmap_openmvs_api::{
+    DemoProgressEvent, ImageTagInfo, PrepareProgress, PreparedImageInfo, Project,
+    ResizeProgressEvent, RuntimeInfo, Settings,
+};
 
 #[cfg(feature = "server")]
 use colmap_openmvs_backend as backend;
@@ -81,4 +84,43 @@ pub async fn batch_resize_images(
 #[post("/projects/:project_name/images/demo")]
 pub async fn download_demo_images(project_name: String) -> Result<ServerEvents<DemoProgressEvent>> {
     backend::download_demo_images(project_name).await
+}
+
+// ---------------------------------------------------------------------------
+// Runtime management
+// ---------------------------------------------------------------------------
+
+#[get("/runtimes/proot/info")]
+pub async fn get_runtime_info() -> Result<RuntimeInfo> {
+    backend::get_runtime_info().await
+}
+
+#[get("/runtimes/proot/versions")]
+pub async fn get_available_runtime_versions() -> Result<Vec<String>> {
+    backend::get_available_runtime_versions().await
+}
+
+#[post("/runtimes/proot/install")]
+pub async fn download_runtime_version(version: String) -> Result<()> {
+    backend::download_runtime_version(version).await
+}
+
+#[get("/runtimes/proot/images")]
+pub async fn list_runtime_images() -> Result<Vec<PreparedImageInfo>> {
+    backend::list_runtime_images().await
+}
+
+#[post("/runtimes/proot/images/prepare")]
+pub async fn prepare_runtime_image(image: String) -> Result<ServerEvents<PrepareProgress>> {
+    backend::prepare_runtime_image(image).await
+}
+
+#[delete("/runtimes/proot/images/remove")]
+pub async fn remove_runtime_image(image_tag: String) -> Result<()> {
+    backend::remove_runtime_image(image_tag).await
+}
+
+#[get("/runtimes/proot/images/available-tags")]
+pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
+    backend::list_available_image_tags().await
 }

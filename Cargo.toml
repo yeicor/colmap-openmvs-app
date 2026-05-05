@@ -1,5 +1,6 @@
 [workspace]
-members = ["app", "backend"]
+members = ["app", "backend", "api"]
+default-members = ["app"]
 resolver = "2"
 
 [workspace.package]

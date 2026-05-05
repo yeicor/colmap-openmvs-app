@@ -1,15 +1,15 @@
+use colmap_openmvs_api::PrepareProgress;
+mod image_manager;
 mod proot;
 mod registry;
 
-pub use proot::{PRoot, PrepareProgress};
+pub use image_manager::{ImageConfig, ImageDigestInfo, ImageManager};
+pub use proot::PRoot;
 pub use registry::{ImageDigest, ImageTag, RegistryClient, RemoteImage, UpdateInfo, Version};
 
 use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
-
-#[cfg(not(target_os = "android"))]
-use crate::settings::default_projects_folder;
 
 pub type RuntimeResult<T> = anyhow::Result<T>;
 
@@ -128,11 +128,33 @@ pub struct PreparedImage {
     pub hash: ImageHash,
     /// On-disk size in bytes.
     pub size: u64,
+    /// Build date in RFC3339 format (optional).
+    #[serde(default)]
+    pub build_date: Option<String>,
 }
 
 impl PreparedImage {
     pub fn new(tag: ImageTag, hash: ImageHash, size: u64) -> Self {
-        PreparedImage { tag, hash, size }
+        PreparedImage {
+            tag,
+            hash,
+            size,
+            build_date: None,
+        }
+    }
+
+    pub fn with_build_date(
+        tag: ImageTag,
+        hash: ImageHash,
+        size: u64,
+        build_date: Option<String>,
+    ) -> Self {
+        PreparedImage {
+            tag,
+            hash,
+            size,
+            build_date,
+        }
     }
 
     pub fn repository(&self) -> &str {
@@ -234,11 +256,9 @@ pub trait Runtime: Send + Sync {
 pub struct RuntimeFactory;
 
 impl RuntimeFactory {
-    /// Create a [`PRoot`] runtime using the platform-default install directory.
+    /// Create a [`PRoot`] runtime using the configured install directory from settings.
     pub fn proot() -> PRoot {
-        let default_dir = default_projects_folder()
-            .replace("projects", "runtimes/proot")
-            .into();
+        let default_dir = crate::settings::default_proot_images_dir().into();
         PRoot::new(default_dir)
     }
 

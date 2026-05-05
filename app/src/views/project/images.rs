@@ -23,8 +23,8 @@ fn generate_cache_busting_num() -> u64 {
 
 #[component]
 pub fn ImagesTab(project_name: String) -> Element {
-    let mut image_paths = use_signal(|| Vec::<String>::new());
-    let mut selected_images = use_signal(|| Vec::<String>::new());
+    let mut image_paths = use_signal(Vec::<String>::new);
+    let mut selected_images = use_signal(Vec::<String>::new);
     let mut demo_loading = use_signal(|| false);
     let mut resize_loading = use_signal(|| false);
     let mut resize_dialog_open = use_signal(|| false);
@@ -247,7 +247,7 @@ pub fn ImagesTab(project_name: String) -> Element {
         }
     };
 
-    let mut selected_images2 = selected_images.clone();
+    let mut selected_images2 = selected_images;
     let mut toggle_select = move |image_name: String| {
         let mut selected = selected_images();
         if selected.contains(&image_name) {
