@@ -13,6 +13,8 @@ dioxus-free-icons = { version = "0.10.0", features = ["bootstrap"] }
 dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version = "0.0.1", default-features = false }
 
 urlencoding = { version = "2.1" }
+base64 = { version = "0.22" }
+chrono = { version = "0.4", features = ["serde", "wasmbind"] }
 
 [features]
 default = []

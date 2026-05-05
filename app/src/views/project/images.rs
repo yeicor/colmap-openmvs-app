@@ -5,6 +5,8 @@ use crate::components::alert_dialog::{
 use crate::mycomponents::{Banner, BannerType};
 use colmap_openmvs_api::DemoProgressEvent;
 use colmap_openmvs_api::ResizeProgressEvent;
+use colmap_openmvs_api::TaskEvent;
+use colmap_openmvs_api::TaskState;
 use dioxus::document::eval;
 use dioxus::fullstack::get_server_url;
 use dioxus::prelude::*;
@@ -34,19 +36,211 @@ pub fn ImagesTab(project_name: String) -> Element {
     let mut fullscreen_image = use_signal::<Option<String>>(|| None);
     let mut uploading = use_signal(|| false);
 
-    // Load image list on mount
+    // ── Load image list on mount + reconnect any running task ────────────
     let project_name_clone = project_name.clone();
     use_effect(move || {
-        info_message.read_unchecked(); // trigger re-run when info_message changes to show updates during loading
-        error_message.read_unchecked(); // trigger re-run when error_message changes to show updates during loading
+        info_message.read_unchecked();
+        error_message.read_unchecked();
         let project_name = project_name_clone.clone();
         spawn(async move {
-            match crate::server::get_project_images(project_name).await {
-                Ok(imgs) => {
-                    image_paths.set(imgs);
+            match crate::server::get_project_images(project_name.clone()).await {
+                Ok(imgs) => image_paths.set(imgs),
+                Err(e) => error_message.set(Some(format!("Failed to load images: {}", e))),
+            }
+
+            // -- Reconnect demo task ------------------------------------------
+            let demo_key = format!("demo_{project_name}");
+            let stored_demo = {
+                let k = demo_key.replace('\'', "_");
+                let js = eval(&format!(
+                    "return(localStorage.getItem('colmap_task_{k}')||'');"
+                ));
+                js.await
+                    .ok()
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .filter(|s| !s.is_empty())
+            };
+            let reconnect_demo = if let Some(id) = stored_demo {
+                Some(id)
+            } else {
+                crate::server::list_tasks(
+                    Some("DownloadDemo".to_string()),
+                    Some(project_name.clone()),
+                )
+                .await
+                .ok()
+                .and_then(|tasks| {
+                    tasks
+                        .into_iter()
+                        .find(|t| t.state == TaskState::Running)
+                        .map(|t| t.id)
+                })
+            };
+            if let Some(task_id) = reconnect_demo {
+                if let Ok(Some(info)) = crate::server::get_task_info(task_id.clone()).await {
+                    if info.state == TaskState::Running {
+                        demo_loading.set(true);
+                        info_message.set(Some("Reconnecting to demo download…".to_string()));
+                        // Reuse the same subscribe + event loop via a nested spawn
+                        let pn = project_name.clone();
+                        spawn(async move {
+                            if let Ok(mut stream) =
+                                crate::server::subscribe_task_events(task_id.clone()).await
+                            {
+                                let mut total_files = 0usize;
+                                let mut total_bytes = 0u64;
+                                while let Some(Ok(event)) = stream.recv().await {
+                                    match event {
+                                        TaskEvent::DemoProgress(
+                                            DemoProgressEvent::DownloadProgress {
+                                                downloaded_bytes,
+                                                total_bytes: tb,
+                                            },
+                                        ) => {
+                                            info_message.set(Some(format!(
+                                                "Downloading… ({:.1}/{:.1} MB)",
+                                                downloaded_bytes as f64 / 1e6,
+                                                tb as f64 / 1e6
+                                            )));
+                                        }
+                                        TaskEvent::DemoProgress(
+                                            DemoProgressEvent::ExtractionProgress {
+                                                total_files: f,
+                                                total_bytes: b,
+                                                ..
+                                            },
+                                        ) => {
+                                            total_files = f;
+                                            total_bytes = b;
+                                            info_message.set(Some(format!(
+                                                "Extracting… ({} files, {:.1} MB)",
+                                                f,
+                                                b as f64 / 1e6
+                                            )));
+                                        }
+                                        TaskEvent::Completed
+                                        | TaskEvent::DemoProgress(DemoProgressEvent::Error {
+                                            ..
+                                        }) => {
+                                            info_message.set(Some(format!(
+                                                "Demo ready ({} images, {:.1} MB).",
+                                                total_files,
+                                                total_bytes as f64 / 1e6
+                                            )));
+                                            demo_loading.set(false);
+                                            if let Ok(paths) =
+                                                crate::server::get_project_images(pn.clone()).await
+                                            {
+                                                image_paths.set(paths);
+                                            }
+                                            let k = format!("demo_{pn}").replace('\'', "_");
+                                            let _ = eval(&format!(
+                                                "try{{localStorage.removeItem('colmap_task_{k}');}}catch(e){{}}"
+                                            ));
+                                            return;
+                                        }
+                                        TaskEvent::Failed(_) => {
+                                            demo_loading.set(false);
+                                            let k = format!("demo_{pn}").replace('\'', "_");
+                                            let _ = eval(&format!(
+                                                "try{{localStorage.removeItem('colmap_task_{k}');}}catch(e){{}}"
+                                            ));
+                                            return;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                demo_loading.set(false);
+                            }
+                        });
+                    }
                 }
-                Err(e) => {
-                    error_message.set(Some(format!("Failed to load images: {}", e)));
+            }
+
+            // -- Reconnect resize task ----------------------------------------
+            let resize_key = format!("resize_{project_name}");
+            let stored_resize = {
+                let k = resize_key.replace('\'', "_");
+                let js = eval(&format!(
+                    "return(localStorage.getItem('colmap_task_{k}')||'');"
+                ));
+                js.await
+                    .ok()
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .filter(|s| !s.is_empty())
+            };
+            let reconnect_resize = if let Some(id) = stored_resize {
+                Some(id)
+            } else {
+                crate::server::list_tasks(
+                    Some("BatchResize".to_string()),
+                    Some(project_name.clone()),
+                )
+                .await
+                .ok()
+                .and_then(|tasks| {
+                    tasks
+                        .into_iter()
+                        .find(|t| t.state == TaskState::Running)
+                        .map(|t| t.id)
+                })
+            };
+            if let Some(task_id) = reconnect_resize {
+                if let Ok(Some(info)) = crate::server::get_task_info(task_id.clone()).await {
+                    if info.state == TaskState::Running {
+                        resize_loading.set(true);
+                        info_message.set(Some("Reconnecting to resize task…".to_string()));
+                        let pn = project_name.clone();
+                        spawn(async move {
+                            if let Ok(mut stream) =
+                                crate::server::subscribe_task_events(task_id.clone()).await
+                            {
+                                while let Some(Ok(event)) = stream.recv().await {
+                                    match event {
+                                        TaskEvent::ResizeProgress(
+                                            ResizeProgressEvent::ResizeProgress {
+                                                name,
+                                                completed,
+                                                total_files,
+                                            },
+                                        ) => {
+                                            info_message.set(Some(format!(
+                                                "Resized: {} ({}/{})",
+                                                name, completed, total_files
+                                            )));
+                                        }
+                                        TaskEvent::Completed => {
+                                            info_message.set(Some("Resize complete.".to_string()));
+                                            resize_loading.set(false);
+                                            if let Ok(paths) =
+                                                crate::server::get_project_images(pn.clone()).await
+                                            {
+                                                image_paths.set(paths);
+                                            }
+                                            let k = format!("resize_{pn}").replace('\'', "_");
+                                            let _ = eval(&format!(
+                                                "try{{localStorage.removeItem('colmap_task_{k}');}}catch(e){{}}"
+                                            ));
+                                            return;
+                                        }
+                                        TaskEvent::Failed(_)
+                                        | TaskEvent::ResizeProgress(ResizeProgressEvent::Error {
+                                            ..
+                                        }) => {
+                                            resize_loading.set(false);
+                                            let k = format!("resize_{pn}").replace('\'', "_");
+                                            let _ = eval(&format!(
+                                                "try{{localStorage.removeItem('colmap_task_{k}');}}catch(e){{}}"
+                                            ));
+                                            return;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                resize_loading.set(false);
+                            }
+                        });
+                    }
                 }
             }
         });
@@ -83,44 +277,104 @@ pub fn ImagesTab(project_name: String) -> Element {
             info_message.set(Some("Starting download...".to_string()));
             let project_name = project_name.clone();
             spawn(async move {
-                match crate::server::download_demo_images(project_name.clone()).await {
+                let task_id = match crate::server::download_demo_images(project_name.clone()).await
+                {
+                    Ok(id) => id,
+                    Err(e) => {
+                        error_message.set(Some(format!("Failed to start demo download: {}", e)));
+                        demo_loading.set(false);
+                        return;
+                    }
+                };
+                // Persist task ID for cross-reload reconnection
+                {
+                    let k = format!("demo_{project_name}").replace('\'', "_");
+                    let v = task_id.replace('\'', "_");
+                    let _ = eval(&format!(
+                        "try{{localStorage.setItem('colmap_task_{k}','{v}');}}catch(e){{}}"
+                    ));
+                }
+                match crate::server::subscribe_task_events(task_id).await {
                     Ok(mut stream) => {
-                        let mut total_files = 0;
-                        let mut total_bytes = 0;
+                        let mut total_files = 0usize;
+                        let mut total_bytes = 0u64;
                         while let Some(Ok(event)) = stream.recv().await {
                             match event {
-                                DemoProgressEvent::DownloadProgress {
+                                TaskEvent::DemoProgress(DemoProgressEvent::DownloadProgress {
                                     downloaded_bytes,
-                                    total_bytes,
-                                } => {
+                                    total_bytes: tb,
+                                }) => {
                                     let downloaded_mb = downloaded_bytes as f64 / 1_000_000.0;
-                                    let total_mb = total_bytes as f64 / 1_000_000.0;
+                                    let total_mb = tb as f64 / 1_000_000.0;
                                     info_message.set(Some(format!(
                                         "Downloading... ({:.1} / {:.1} MB)",
                                         downloaded_mb, total_mb
                                     )));
                                 }
-                                DemoProgressEvent::ExtractionProgress {
-                                    #[allow(unused_variables)]
-                                    last_file,
-                                    total_files: files,
-                                    total_bytes: bytes,
-                                } => {
+                                TaskEvent::DemoProgress(
+                                    DemoProgressEvent::ExtractionProgress {
+                                        last_file: _,
+                                        total_files: files,
+                                        total_bytes: bytes,
+                                    },
+                                ) => {
                                     let size_mb = bytes as f64 / 1_000_000.0;
-                                    total_files = files; // update total files count
-                                    total_bytes = bytes; // update total bytes count
+                                    total_files = files;
+                                    total_bytes = bytes;
                                     info_message.set(Some(format!(
                                         "Extracting... ({} files, {:.1} MB)",
                                         files, size_mb
                                     )));
                                 }
-                                DemoProgressEvent::Error { message } => {
+                                TaskEvent::DemoProgress(DemoProgressEvent::Error { message }) => {
                                     error_message.set(Some(message));
                                     demo_loading.set(false);
                                     return;
                                 }
+                                TaskEvent::Completed => {
+                                    info_message.set(Some(format!(
+                                                        "Demo downloaded ({} images, {:.1} MB). You may want to optimize them using the 'Optimize Images' button.",
+                                                        total_files,
+                                                        total_bytes as f64 / 1_000_000.0
+                                                    )));
+                                    demo_loading.set(false);
+                                    {
+                                        let k = format!("demo_{project_name}").replace('\'', "_");
+                                        let _ = eval(&format!(
+                                                            "try{{localStorage.removeItem('colmap_task_{k}');}}catch(e){{}}"
+                                                        ));
+                                    }
+                                    match crate::server::get_project_images(project_name.clone())
+                                        .await
+                                    {
+                                        Ok(paths) => {
+                                            image_paths.set(paths);
+                                        }
+                                        Err(e) => {
+                                            error_message.set(Some(format!(
+                                                "Failed to reload images: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+                                    return;
+                                }
+                                TaskEvent::Failed(msg) => {
+                                    error_message
+                                        .set(Some(format!("Demo download failed: {}", msg)));
+                                    demo_loading.set(false);
+                                    {
+                                        let k = format!("demo_{project_name}").replace('\'', "_");
+                                        let _ = eval(&format!(
+                                                            "try{{localStorage.removeItem('colmap_task_{k}');}}catch(e){{}}"
+                                                        ));
+                                    }
+                                    return;
+                                }
+                                _ => {}
                             }
                         }
+                        // Stream ended
                         info_message.set(Some(format!(
                             "Demo downloaded ({} images, {:.1} MB). You may want to optimize them using the 'Optimize Images' button.",
                             total_files,
@@ -128,7 +382,8 @@ pub fn ImagesTab(project_name: String) -> Element {
                         )));
                     }
                     Err(e) => {
-                        error_message.set(Some(format!("Failed to download demo images: {}", e)));
+                        error_message
+                            .set(Some(format!("Failed to subscribe to demo events: {}", e)));
                     }
                 }
                 demo_loading.set(false);
@@ -170,31 +425,90 @@ pub fn ImagesTab(project_name: String) -> Element {
             let project_name = project_name.clone();
             let max_dimension = resize_max_dimension();
             spawn(async move {
-                match crate::server::batch_resize_images(project_name.clone(), max_dimension).await
+                let task_id =
+                    match crate::server::batch_resize_images(project_name.clone(), max_dimension)
+                        .await
+                    {
+                        Ok(id) => id,
+                        Err(e) => {
+                            error_message.set(Some(format!("Failed to start batch resize: {}", e)));
+                            resize_loading.set(false);
+                            return;
+                        }
+                    };
+                // Persist task ID for cross-reload reconnection
                 {
+                    let k = format!("resize_{project_name}").replace('\'', "_");
+                    let v = task_id.replace('\'', "_");
+                    let _ = eval(&format!(
+                        "try{{localStorage.setItem('colmap_task_{k}','{v}');}}catch(e){{}}"
+                    ));
+                }
+                match crate::server::subscribe_task_events(task_id).await {
                     Ok(mut stream) => {
                         while let Some(Ok(event)) = stream.recv().await {
                             match event {
-                                ResizeProgressEvent::ResizeProgress {
-                                    name,
-                                    completed,
-                                    total_files,
-                                } => {
+                                TaskEvent::ResizeProgress(
+                                    ResizeProgressEvent::ResizeProgress {
+                                        name,
+                                        completed,
+                                        total_files,
+                                    },
+                                ) => {
                                     info_message.set(Some(format!(
                                         "Resized: {} ({}/{})",
                                         name, completed, total_files
                                     )));
                                 }
-                                ResizeProgressEvent::Error { message } => {
+                                TaskEvent::ResizeProgress(ResizeProgressEvent::Error {
+                                    message,
+                                }) => {
                                     error_message.set(Some(message));
                                     resize_loading.set(false);
                                     return;
                                 }
+                                TaskEvent::Completed => {
+                                    info_message.set(Some("Batch resize complete.".to_string()));
+                                    resize_loading.set(false);
+                                    {
+                                        let k = format!("resize_{project_name}").replace('\'', "_");
+                                        let _ = eval(&format!(
+                                            "try{{localStorage.removeItem('colmap_task_{k}');}}catch(e){{}}"
+                                        ));
+                                    }
+                                    match crate::server::get_project_images(project_name.clone())
+                                        .await
+                                    {
+                                        Ok(paths) => {
+                                            image_paths.set(paths);
+                                        }
+                                        Err(e) => {
+                                            error_message.set(Some(format!(
+                                                "Failed to reload images: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+                                    return;
+                                }
+                                TaskEvent::Failed(msg) => {
+                                    error_message.set(Some(format!("Resize failed: {}", msg)));
+                                    resize_loading.set(false);
+                                    {
+                                        let k = format!("resize_{project_name}").replace('\'', "_");
+                                        let _ = eval(&format!(
+                                            "try{{localStorage.removeItem('colmap_task_{k}');}}catch(e){{}}"
+                                        ));
+                                    }
+                                    return;
+                                }
+                                _ => {}
                             }
                         }
                     }
                     Err(e) => {
-                        error_message.set(Some(format!("Failed to start batch resize: {}", e)));
+                        error_message
+                            .set(Some(format!("Failed to subscribe to resize events: {}", e)));
                     }
                 }
                 resize_loading.set(false);

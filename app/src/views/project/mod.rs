@@ -21,14 +21,56 @@ use logs::LogsTab;
 mod outputs;
 use outputs::OutputsTab;
 
+/// Shared pipeline progress context provided by the Project component and
+/// consumed by both the PageHeader progress bar and the LogsTab.
+///
+/// Value is 0.0..=1.0; `None` means no pipeline is active.
+pub type PipelineProgressCtx = Signal<Option<f32>>;
+
+/// Whether a pipeline (full run or dry-run) is currently running.
+/// Written by LogsTab, read by the PageHeader Run/Cancel button.
+pub type PipelineIsRunningCtx = Signal<bool>;
+
+/// Command channel from the PageHeader button to LogsTab.
+/// `Some(true)` = start a full pipeline run, `Some(false)` = cancel, `None` = idle.
+pub type PipelineCommandCtx = Signal<Option<bool>>;
+
 #[component]
 pub fn Project(name: String) -> Element {
     let mut active_tab = use_signal(|| Some("images".to_string()));
+
+    // Provide a shared pipeline-progress signal accessible to LogsTab (write)
+    // and to the PageHeader progress bar (read).
+    let pipeline_progress: PipelineProgressCtx = use_signal(|| None);
+    use_context_provider(|| pipeline_progress);
+
+    // Whether any pipeline task is currently running (written by LogsTab).
+    let pipeline_is_running: PipelineIsRunningCtx = use_signal(|| false);
+    use_context_provider(|| pipeline_is_running);
+
+    // Command signal: PageHeader writes, LogsTab reads and acts.
+    let mut pipeline_command: PipelineCommandCtx = use_signal(|| None);
+    use_context_provider(|| pipeline_command);
+
+    let progress_value: Option<f64> = pipeline_progress().map(|p| p as f64);
+
+    let on_run_clicked = move |_| {
+        if pipeline_is_running() {
+            // Cancel the running pipeline.
+            pipeline_command.set(Some(false));
+        } else {
+            // Navigate to the Logs tab so the user sees what is happening,
+            // then issue the start command.
+            active_tab.set(Some("logs".to_string()));
+            pipeline_command.set(Some(true));
+        }
+    };
 
     rsx! {
         document::Link { rel: "stylesheet", href: asset!("/assets/views/project.css") }
         document::Link { rel: "stylesheet", href: asset!("/assets/views/project/images.css") }
         document::Link { rel: "stylesheet", href: asset!("/assets/views/project/config.css") }
+        document::Link { rel: "stylesheet", href: asset!("/assets/views/project/logs.css") }
 
         div {
             id: "project",
@@ -36,16 +78,26 @@ pub fn Project(name: String) -> Element {
                 title: name.clone(),
                 icon: Some(rsx! { Icon { icon: BsCamera2 } }),
                 PageHeaderButton {
-                    icon: rsx! { "▶️" },
-                    extra: rsx! { "Run" },
-                    extra_tooltip: Some(rsx! { "Start/stop the reconstruction pipeline for this project" }),
-                    onclick: move |_| { /* TODO */ }
+                    icon: rsx! {
+                        if pipeline_is_running() { "⏹" } else { "▶️" }
+                    },
+                    extra: rsx! {
+                        if pipeline_is_running() { "Cancel" } else { "Run" }
+                    },
+                    extra_tooltip: Some(rsx! {
+                        if pipeline_is_running() {
+                            "Cancel the currently running pipeline"
+                        } else {
+                            "Start the reconstruction pipeline (navigates to Logs tab)"
+                        }
+                    }),
+                    onclick: on_run_clicked,
                 }
                 BackButton {
                     onclick: move |_| { dioxus::prelude::navigator().push(Route::Projects {}); }
                 }
                 Progress {
-                    value: 0.0,
+                    value: progress_value.unwrap_or(0.0),
                     ProgressIndicator {}
                 }
             }

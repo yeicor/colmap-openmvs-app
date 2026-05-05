@@ -139,7 +139,7 @@ async fn get_tool_help(
 ) -> anyhow::Result<String> {
     let args = vec![tool.to_string(), "--help".to_string()];
 
-    let mut handle = rt.run(image_tag, &args).await?;
+    let mut handle = rt.run(image_tag, &args, &[]).await?;
 
     let stdout = handle
         .take_stdout()

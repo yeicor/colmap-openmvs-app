@@ -7,6 +7,13 @@ pub use image_manager::{ImageConfig, ImageManager};
 pub use proot::PRoot;
 pub use registry::{ImageDigest, ImageTag, RegistryClient, RemoteImage, UpdateInfo, Version};
 
+/// A filesystem bind-mount to pass into the container.
+#[derive(Debug, Clone)]
+pub struct Mount {
+    pub host_path: std::path::PathBuf,
+    pub container_path: String,
+}
+
 use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -242,7 +249,12 @@ pub trait Runtime: Send + Sync {
     ///
     /// The returned [`ProcessHandle`] owns the child process; dropping it will
     /// kill the process (via `tokio::process::Child` drop semantics).
-    async fn run(&self, image: &str, args: &[String]) -> RuntimeResult<ProcessHandle>;
+    async fn run(
+        &self,
+        image: &str,
+        args: &[String],
+        mounts: &[Mount],
+    ) -> RuntimeResult<ProcessHandle>;
 
     /// List all images that have been prepared and are ready to run.
     async fn list_images(&self) -> RuntimeResult<Vec<PreparedImage>>;

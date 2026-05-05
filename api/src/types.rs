@@ -182,3 +182,107 @@ pub struct LoadedProjectConfig {
     /// Custom script content found after environment variables
     pub custom_script: String,
 }
+
+/// Output file in a project's work directory
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OutputFile {
+    /// Relative path from project root (e.g. "openmvs/scene_mesh.ply")
+    pub relative_path: String,
+    /// File name only
+    pub name: String,
+    /// File size in bytes
+    pub size: u64,
+    /// Whether this file can be displayed in the 3D viewer
+    pub is_viewable: bool,
+}
+
+/// Unique task identifier (UUID v4 string)
+pub type TaskId = String;
+
+/// The kind of a background task
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum TaskKind {
+    PrepareImage,
+    DownloadDemo,
+    BatchResize,
+    RunPipeline,
+    DryRunPipeline,
+}
+
+/// Status of a pipeline stage as reported by the `::group` marker
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PipelineStageStatus {
+    /// Stage output was already cached from a previous run
+    Cached,
+    /// Stage needs to run (or was skipped in dry-run mode)
+    Run,
+}
+
+/// The state of a task
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum TaskState {
+    Running,
+    Completed,
+    Failed(String),
+}
+
+/// Contextual key for a task (used for deduplication / lookup)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskContext {
+    /// The human-readable task kind
+    pub kind: TaskKind,
+    /// A string key that identifies the context (e.g., image tag, project name)
+    pub context_key: String,
+}
+
+/// Information about a registered background task
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskInfo {
+    pub id: TaskId,
+    pub kind: TaskKind,
+    pub state: TaskState,
+    pub context_key: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Unified event type for all task kinds, used in subscribe_task_events
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum TaskEvent {
+    /// Progress during image preparation
+    PrepareProgress(PrepareProgress),
+    /// Progress during demo image download
+    DemoProgress(DemoProgressEvent),
+    /// Progress during batch image resize
+    ResizeProgress(ResizeProgressEvent),
+    /// A log line from the pipeline
+    PipelineLog {
+        /// Pipeline stage index (0-based)
+        stage_index: u32,
+        /// Stage name
+        stage_name: String,
+        /// The raw log line
+        line: String,
+    },
+    /// The list of all expected stage names, emitted once before any ::group markers
+    PipelineRemainingGroups(Vec<String>),
+    /// A stage started in the pipeline
+    PipelineStageStarted {
+        stage_index: u32,
+        stage_name: String,
+        total_stages: u32,
+        /// Whether the stage was already cached (completed in a previous run)
+        stage_status: PipelineStageStatus,
+    },
+    /// Pipeline sub-progress within the current stage (0.0..=1.0)
+    PipelineStageProgress { stage_index: u32, progress: f32 },
+    /// A stage completed
+    PipelineStageCompleted {
+        stage_index: u32,
+        stage_name: String,
+    },
+    /// The task completed successfully
+    Completed,
+    /// The task failed
+    Failed(String),
+}

@@ -6,17 +6,119 @@ use crate::mycomponents::BackButton;
 use crate::mycomponents::{Banner, BannerType, PageHeader};
 use crate::server::{
     download_runtime_version, get_available_runtime_versions, get_runtime_info, get_settings,
-    list_available_image_tags, list_runtime_images, prepare_runtime_image, remove_runtime_image,
-    update_settings,
+    get_task_info, list_available_image_tags, list_runtime_images, list_tasks,
+    prepare_runtime_image, remove_runtime_image, subscribe_task_events, update_settings,
 };
 use crate::Route;
-use colmap_openmvs_api::{ImageTagInfo, PrepareProgress, PreparedImageInfo, RuntimeInfo, Settings};
+use chrono::{DateTime, Duration, Utc};
+use colmap_openmvs_api::{
+    ImageTagInfo, PrepareProgress, PreparedImageInfo, RuntimeInfo, Settings, TaskEvent, TaskState,
+};
 use dioxus::document::eval;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
     BsBoxSeam, BsDownload, BsFolder, BsGear, BsTerminal, BsTrash3,
 };
 use dioxus_free_icons::Icon;
+
+// ---------------------------------------------------------------------------
+// Date helpers
+// ---------------------------------------------------------------------------
+
+/// Parse an ISO-8601 / RFC-3339 date string and return (relative_text, tooltip_text).
+/// Falls back gracefully if the string cannot be parsed.
+fn format_relative_date(date_str: &str) -> (String, String) {
+    let parsed = DateTime::parse_from_rfc3339(date_str)
+        .or_else(|_| {
+            // Try with explicit format (Docker Hub sometimes omits the T separator)
+            DateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S%.fZ")
+        })
+        .map(|dt| dt.with_timezone(&Utc));
+
+    match parsed {
+        Ok(dt) => {
+            let now = Utc::now();
+            let diff = now.signed_duration_since(dt);
+
+            let relative = if diff < Duration::minutes(1) {
+                "just now".to_string()
+            } else if diff < Duration::hours(1) {
+                let m = diff.num_minutes();
+                format!("{} minute{} ago", m, if m == 1 { "" } else { "s" })
+            } else if diff < Duration::days(1) {
+                let h = diff.num_hours();
+                format!("{} hour{} ago", h, if h == 1 { "" } else { "s" })
+            } else if diff < Duration::days(7) {
+                let d = diff.num_days();
+                format!("{} day{} ago", d, if d == 1 { "" } else { "s" })
+            } else if diff < Duration::days(30) {
+                let w = diff.num_weeks();
+                format!("{} week{} ago", w, if w == 1 { "" } else { "s" })
+            } else if diff < Duration::days(365) {
+                let mo = diff.num_days() / 30;
+                format!("{} month{} ago", mo, if mo == 1 { "" } else { "s" })
+            } else {
+                let y = diff.num_days() / 365;
+                format!("{} year{} ago", y, if y == 1 { "" } else { "s" })
+            };
+
+            // Tooltip: "Jan 15, 2024 at 10:30 UTC"
+            let tooltip = dt.format("%b %-e, %Y at %H:%M UTC").to_string();
+            (relative, tooltip)
+        }
+        Err(_) => ("unknown date".to_string(), date_str.to_string()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Small date badge component
+// ---------------------------------------------------------------------------
+
+/// Renders "📅 3 months ago" with an exact-date tooltip (using the HTML title attribute).
+#[component]
+fn DateBadge(date: String) -> Element {
+    let (rel, tooltip) = format_relative_date(&date);
+    rsx! {
+        span {
+            class: "tag-date-relative",
+            title: "{tooltip}",
+            "📅 {rel}"
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// localStorage helpers (gracefully no-ops on server / SSR)
+// ---------------------------------------------------------------------------
+
+/// Store a task ID in localStorage.  Key is sanitised to avoid JS injection.
+fn ls_set_task_id(context_key: &str, task_id: &str) {
+    let safe_key = context_key.replace('\'', "_").replace('\\', "_");
+    let safe_val = task_id.replace('\'', "_").replace('\\', "_");
+    let _ = eval(&format!(
+        "try {{ localStorage.setItem('colmap_task_{safe_key}', '{safe_val}'); }} catch(e) {{}}"
+    ));
+}
+
+/// Read a task ID from localStorage (async – must be awaited inside spawn).
+async fn ls_get_task_id(context_key: &str) -> Option<String> {
+    let safe_key = context_key.replace('\'', "_").replace('\\', "_");
+    let js = eval(&format!(
+        "return (localStorage.getItem('colmap_task_{safe_key}') || '');"
+    ));
+    js.await
+        .ok()
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .filter(|s| !s.is_empty())
+}
+
+/// Remove a task ID from localStorage.
+fn ls_clear_task_id(context_key: &str) {
+    let safe_key = context_key.replace('\'', "_").replace('\\', "_");
+    let _ = eval(&format!(
+        "try {{ localStorage.removeItem('colmap_task_{safe_key}'); }} catch(e) {{}}"
+    ));
+}
 
 // ---------------------------------------------------------------------------
 // Top-level view
@@ -455,10 +557,91 @@ fn RuntimeImagesTab() -> Element {
     let mut success = use_signal(String::new);
     let mut default_image_tag = use_signal(String::new);
     let mut projects_folder = use_signal(String::new);
+    // Task being prepared – tag name only (for the "already preparing" guard)
+    let mut preparing_tag = use_signal(String::new);
 
     const COLMAP_IMAGE: &str = "mirror.gcr.io/yeicor/colmap-openmvs";
 
-    // Initial image list and available tags
+    // ── Helper: subscribe to a prepare task and drive the UI state ──────────
+    let drive_prepare_stream = move |tag: String, task_id: String| {
+        spawn(async move {
+            match subscribe_task_events(task_id.clone()).await {
+                Ok(mut stream) => {
+                    while let Some(Ok(event)) = stream.recv().await {
+                        match event {
+                            TaskEvent::PrepareProgress(PrepareProgress::Downloading {
+                                downloaded_bytes,
+                                total_bytes,
+                            }) => {
+                                let mb = downloaded_bytes as f64 / 1_048_576.0;
+                                prepare_status.set(if let Some(total) = total_bytes {
+                                    format!("{:.1}/{:.1} MB", mb, total as f64 / 1_048_576.0)
+                                } else {
+                                    format!("{:.1} MB", mb)
+                                });
+                            }
+                            TaskEvent::PrepareProgress(PrepareProgress::ExtractingLayer {
+                                layer,
+                                progress,
+                            }) => {
+                                prepare_status.set(format!(
+                                    "Layer {} {:.0}%",
+                                    layer,
+                                    progress * 100.0
+                                ));
+                            }
+                            TaskEvent::PrepareProgress(PrepareProgress::Error { message }) => {
+                                error.set(format!("Preparation failed: {}", message));
+                                prepare_status.set(String::new());
+                                preparing.set(false);
+                                preparing_tag.set(String::new());
+                                ls_clear_task_id("prepare");
+                                return;
+                            }
+                            TaskEvent::Completed => {
+                                success.set(format!("Tag '{}' prepared successfully!", tag));
+                                prepare_status.set(String::new());
+                                if let Ok(imgs) = list_runtime_images().await {
+                                    ready_tags.set(imgs);
+                                }
+                                preparing.set(false);
+                                preparing_tag.set(String::new());
+                                ls_clear_task_id("prepare");
+                                return;
+                            }
+                            TaskEvent::Failed(msg) => {
+                                error.set(format!("Preparation failed: {}", msg));
+                                prepare_status.set(String::new());
+                                preparing.set(false);
+                                preparing_tag.set(String::new());
+                                ls_clear_task_id("prepare");
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Stream ended without explicit Completed event – treat as success
+                    success.set(format!("Tag '{}' prepared successfully!", tag));
+                    prepare_status.set(String::new());
+                    if let Ok(imgs) = list_runtime_images().await {
+                        ready_tags.set(imgs);
+                    }
+                    preparing.set(false);
+                    preparing_tag.set(String::new());
+                    ls_clear_task_id("prepare");
+                }
+                Err(e) => {
+                    error.set(format!("Failed to subscribe to preparation events: {}", e));
+                    prepare_status.set(String::new());
+                    preparing.set(false);
+                    preparing_tag.set(String::new());
+                    ls_clear_task_id("prepare");
+                }
+            }
+        });
+    };
+
+    // ── On mount: load images + available tags, then reconnect any running task ──
     use_effect(move || {
         spawn(async move {
             loading.set(true);
@@ -466,7 +649,6 @@ fn RuntimeImagesTab() -> Element {
 
             match list_runtime_images().await {
                 Ok(imgs) => {
-                    // Auto-select if only one image and no default set
                     if imgs.len() == 1 && default_image_tag().is_empty() {
                         if let Ok(settings) = get_settings().await {
                             if settings.default_image_tag.is_none() {
@@ -489,11 +671,9 @@ fn RuntimeImagesTab() -> Element {
                                 projects_folder.set(settings.projects_folder);
                             }
                         }
-                    } else {
-                        if let Ok(settings) = get_settings().await {
-                            default_image_tag.set(settings.default_image_tag.unwrap_or_default());
-                            projects_folder.set(settings.projects_folder);
-                        }
+                    } else if let Ok(settings) = get_settings().await {
+                        default_image_tag.set(settings.default_image_tag.unwrap_or_default());
+                        projects_folder.set(settings.projects_folder);
                     }
                     ready_tags.set(imgs);
                 }
@@ -501,22 +681,58 @@ fn RuntimeImagesTab() -> Element {
             }
 
             match list_available_image_tags().await {
-                Ok(tags) => {
-                    available_tags.set(tags);
-                }
+                Ok(tags) => available_tags.set(tags),
                 Err(e) => error.set(format!("Failed to load tags: {}", e)),
             }
 
             loading.set(false);
             tags_loading.set(false);
+
+            // ── Reconnect to any in-progress prepare task ──────────────────
+            // 1. Try localStorage first (survives browser close/reopen)
+            let stored_id = ls_get_task_id("prepare").await;
+            // 2. Fall back to server-side task list (survives tab navigation)
+            let reconnect_id = if let Some(id) = stored_id {
+                Some(id)
+            } else {
+                list_tasks(Some("PrepareImage".to_string()), None)
+                    .await
+                    .ok()
+                    .and_then(|tasks| {
+                        tasks
+                            .into_iter()
+                            .find(|t| t.state == TaskState::Running)
+                            .map(|t| t.id)
+                    })
+            };
+
+            if let Some(task_id) = reconnect_id {
+                if let Ok(Some(info)) = get_task_info(task_id.clone()).await {
+                    if info.state == TaskState::Running {
+                        // Extract the tag name from the context_key (full image ref "repo:tag")
+                        let tag = info
+                            .context_key
+                            .splitn(2, ':')
+                            .nth(1)
+                            .unwrap_or("unknown")
+                            .to_string();
+                        preparing.set(true);
+                        preparing_tag.set(tag.clone());
+                        prepare_status.set("Reconnecting…".to_string());
+                        drive_prepare_stream(tag, task_id.clone());
+                    }
+                }
+            }
         });
     });
 
+    // ── Start a new prepare task ────────────────────────────────────────────
     let mut handle_prepare = move |tag: String| {
         if tag.is_empty() || preparing() {
             return;
         }
         preparing.set(true);
+        preparing_tag.set(tag.clone());
         prepare_status.set("Starting…".to_string());
         error.set(String::new());
         success.set(String::new());
@@ -524,46 +740,15 @@ fn RuntimeImagesTab() -> Element {
         let full_image = format!("{}:{}", COLMAP_IMAGE, tag);
         spawn(async move {
             match prepare_runtime_image(full_image.clone()).await {
-                Ok(mut stream) => {
-                    while let Some(Ok(event)) = stream.recv().await {
-                        match event {
-                            PrepareProgress::Downloading {
-                                downloaded_bytes,
-                                total_bytes,
-                            } => {
-                                let mb = downloaded_bytes as f64 / 1_048_576.0;
-                                prepare_status.set(if let Some(total) = total_bytes {
-                                    format!("{:.1}/{:.1} MB", mb, total as f64 / 1_048_576.0)
-                                } else {
-                                    format!("{:.1} MB", mb)
-                                });
-                            }
-                            PrepareProgress::ExtractingLayer { layer, progress } => {
-                                prepare_status.set(format!(
-                                    "Layer {} {:.0}%",
-                                    layer,
-                                    progress * 100.0
-                                ));
-                            }
-                            PrepareProgress::Error { message } => {
-                                error.set(format!("Preparation failed: {}", message));
-                                prepare_status.set(String::new());
-                                preparing.set(false);
-                                return;
-                            }
-                        }
-                    }
-                    success.set(format!("Tag '{}' prepared successfully!", tag));
-                    prepare_status.set(String::new());
-                    if let Ok(imgs) = list_runtime_images().await {
-                        ready_tags.set(imgs);
-                    }
-                    preparing.set(false);
+                Ok(task_id) => {
+                    ls_set_task_id("prepare", &task_id);
+                    drive_prepare_stream(tag, task_id);
                 }
                 Err(e) => {
                     error.set(format!("Failed to start preparation: {}", e));
                     prepare_status.set(String::new());
                     preparing.set(false);
+                    preparing_tag.set(String::new());
                 }
             }
         });
@@ -635,19 +820,18 @@ fn RuntimeImagesTab() -> Element {
             on_close: move |_| success.set(String::new()),
         }
 
-        // ── Header with runtime info ────────────────────────────────────────
+        // ── Header with runtime info + in-progress indicator ───────────────
         div {
             class: "images-header",
             p { class: "images-info", "For: PRoot runtime" }
             if !prepare_status().is_empty() {
-                p { class: "prepare-progress", "⟳ {prepare_status}" }
+                p { class: "prepare-progress", "⟳ Preparing '{preparing_tag}': {prepare_status}" }
             }
         }
 
         // ── Ready Tags list ─────────────────────────────────────────────────
         div {
             class: "tags-container",
-
             h2 { class: "section-title", "Ready Tags" }
 
             if loading() {
@@ -657,44 +841,68 @@ fn RuntimeImagesTab() -> Element {
             } else {
                 ul {
                     class: "tags-list",
-                    for image in ready_tags() {
-                        li {
-                            key: "{image.hash}",
-                            class: "tags-item",
-                            div {
-                                class: "tag-info",
-                                span { class: "tag-name", "{image.tag}" }
-                                if let Some(date) = &image.build_date {
-                                    span { class: "tag-date", "{date}" }
-                                }
-                            }
-                            div {
-                                class: "tag-actions",
-                                span { class: "tag-size", "{image.size_readable}" }
-                                if image.tag == default_image_tag() {
-                                    Button {
-                                        variant: ButtonVariant::Primary,
-                                        title: "Unset as default tag",
-                                        onclick: handle_unset_default,
-                                        "✓ Default"
+                    {ready_tags().into_iter().map(|image| {
+                        let tag = image.tag.clone();
+                        let tag2 = image.tag.clone();
+                        let hash = image.hash.clone();
+                        let build_date = image.build_date.clone();
+                        let size_readable = image.size_readable.clone();
+                        let size = image.size;
+                        let is_default = tag == default_image_tag();
+                        rsx! {
+                            li {
+                                key: "{hash}",
+                                class: "tags-item",
+
+                                // ── Line 1: name + action buttons ──────────────
+                                div {
+                                    class: "tags-item-top",
+                                    span {
+                                        class: "tag-name",
+                                        title: "{tag}",
+                                        "{tag}"
                                     }
-                                } else {
-                                    Button {
-                                        variant: ButtonVariant::Secondary,
-                                        title: "Set as default tag",
-                                        onclick: move |_| handle_set_default(image.tag.clone()),
-                                        "Set as Default"
+                                    div {
+                                        class: "tag-actions",
+                                        if is_default {
+                                            Button {
+                                                variant: ButtonVariant::Primary,
+                                                title: "Unset as default tag",
+                                                onclick: handle_unset_default,
+                                                "✓ Default"
+                                            }
+                                        } else {
+                                            Button {
+                                                variant: ButtonVariant::Secondary,
+                                                title: "Set as default tag",
+                                                onclick: move |_| handle_set_default(tag2.clone()),
+                                                "Set Default"
+                                            }
+                                        }
+                                        Button {
+                                            variant: ButtonVariant::Destructive,
+                                            title: "Remove this prepared tag",
+                                            onclick: move |_| handle_remove(hash.clone()),
+                                            Icon { icon: BsTrash3 }
+                                        }
                                     }
                                 }
-                                Button {
-                                    variant: ButtonVariant::Destructive,
-                                    title: "Remove this tag",
-                                    onclick: move |_| handle_remove(image.hash.clone()),
-                                    Icon { icon: BsTrash3 }
+
+                                // ── Line 2: metadata (date + size) ─────────────
+                                div {
+                                    class: "tags-item-meta",
+                                    if let Some(date) = build_date {
+                                        DateBadge { date }
+                                    }
+                                    span {
+                                        class: "tag-meta-size",
+                                        title: "{size} bytes",
+                                        "💾 {size_readable}"
+                                    }
                                 }
                             }
                         }
-                    }
+                    })}
                 }
             }
         }
@@ -702,7 +910,6 @@ fn RuntimeImagesTab() -> Element {
         // ── Available Tags list ──────────────────────────────────────────────
         div {
             class: "tags-container",
-
             h2 { class: "section-title", "Available Tags" }
 
             if tags_loading() {
@@ -712,29 +919,45 @@ fn RuntimeImagesTab() -> Element {
             } else {
                 ul {
                     class: "tags-list",
-                    for tag_info in available_tags() {
-                        li {
-                            key: "{tag_info.name}",
-                            class: "tags-item",
-                            div {
-                                class: "tag-info",
-                                span { class: "tag-name", "{tag_info.name}" }
-                                if let Some(date) = tag_info.build_date {
-                                    span { class: "tag-date", "{date}" }
+                    {available_tags().into_iter().map(|tag_info| {
+                        let name = tag_info.name.clone();
+                        let name2 = tag_info.name.clone();
+                        let build_date = tag_info.build_date.clone();
+                        rsx! {
+                            li {
+                                key: "{name}",
+                                class: "tags-item",
+
+                                // ── Line 1: name + download button ─────────────
+                                div {
+                                    class: "tags-item-top",
+                                    span {
+                                        class: "tag-name",
+                                        title: "{name}",
+                                        "{name}"
+                                    }
+                                    div {
+                                        class: "tag-actions",
+                                        Button {
+                                            variant: ButtonVariant::Secondary,
+                                            title: "Download and prepare this tag",
+                                            onclick: move |_| handle_prepare(name2.clone()),
+                                            disabled: preparing(),
+                                            Icon { icon: BsDownload }
+                                        }
+                                    }
                                 }
-                            }
-                            div {
-                                class: "tag-actions",
-                                Button {
-                                    variant: ButtonVariant::Secondary,
-                                    title: "Download and prepare this tag",
-                                    onclick: move |_| handle_prepare(tag_info.name.clone()),
-                                    disabled: preparing(),
-                                    Icon { icon: BsDownload }
+
+                                // ── Line 2: build date ─────────────────────────
+                                if let Some(date) = build_date {
+                                    div {
+                                        class: "tags-item-meta",
+                                        DateBadge { date }
+                                    }
                                 }
                             }
                         }
-                    }
+                    })}
                 }
             }
         }

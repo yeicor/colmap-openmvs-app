@@ -1,5 +1,6 @@
 use super::{
-    ImageHash, ImageTag, PrepareProgressTx, PreparedImage, ProcessHandle, Runtime, RuntimeResult,
+    ImageHash, ImageTag, Mount, PrepareProgressTx, PreparedImage, ProcessHandle, Runtime,
+    RuntimeResult,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -472,7 +473,12 @@ impl Runtime for PRoot {
         Ok(())
     }
 
-    async fn run(&self, image: &str, args: &[String]) -> RuntimeResult<ProcessHandle> {
+    async fn run(
+        &self,
+        image: &str,
+        args: &[String],
+        mounts: &[Mount],
+    ) -> RuntimeResult<ProcessHandle> {
         let tag_dir_name = image.replace(':', "_").replace('/', "_");
         let image_dir = self.images_dir.join(&tag_dir_name);
         let rootfs_dir = image_dir.join("rootfs");
@@ -521,6 +527,13 @@ impl Runtime for PRoot {
         );
         cmd.env("HOME", "/root");
 
+        for mount in mounts {
+            cmd.arg("-b").arg(format!(
+                "{}:{}",
+                mount.host_path.display(),
+                mount.container_path
+            ));
+        }
         cmd.arg("-R").arg(&rootfs_dir);
 
         if let Some(workdir) = &metadata.working_dir {

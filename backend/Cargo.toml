@@ -62,3 +62,6 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Ordered HashMap
 indexmap = { version = "2.0" }
+
+# UUID generation for task IDs
+uuid = { version = "1", features = ["v4"] }

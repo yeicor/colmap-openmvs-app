@@ -18,8 +18,127 @@ pub use settings::{get_settings, update_settings};
 
 mod runtimes_api;
 pub use runtimes_api::{
-    download_runtime_version, get_available_runtime_versions, get_runtime_info,
-    list_available_image_tags, list_runtime_images, prepare_runtime_image, remove_runtime_image,
+    cancel_task, download_runtime_version, get_available_runtime_versions, get_runtime_info,
+    get_task_info, list_available_image_tags, list_runtime_images, list_tasks,
+    prepare_runtime_image, remove_runtime_image, subscribe_task_events,
 };
 
 pub mod runtimes;
+
+pub mod task_registry;
+pub use task_registry::{create_event_stream, publish_event, task_registry, TaskRegistry};
+
+mod pipeline;
+pub use pipeline::run_pipeline;
+
+pub use output_viewer::get_project_output_for_viewer;
+mod output_viewer;
+
+use colmap_openmvs_api::OutputFile;
+use dioxus::Result as DioxusResult;
+
+/// List output files in a project's work directory.
+/// Scans for *.ply files and known COLMAP output files (points3D.bin, database.db).
+pub async fn list_project_outputs(project_name: String) -> DioxusResult<Vec<OutputFile>> {
+    let project_path = {
+        let projects = get_projects().await?;
+        projects
+            .into_iter()
+            .find(|p| p.name == project_name)
+            .map(|p| p.path)
+            .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
+    };
+
+    let root = std::path::PathBuf::from(&project_path);
+    let mut outputs: Vec<OutputFile> = Vec::new();
+
+    walk_for_outputs(&root, &root, &mut outputs)
+        .map_err(|e| anyhow::anyhow!("Failed to scan project outputs: {}", e))?;
+
+    outputs.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    Ok(outputs)
+}
+
+/// Recursively walk `dir`, collecting output files into `out`.
+fn walk_for_outputs(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    out: &mut Vec<OutputFile>,
+) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_for_outputs(root, &path, out)?;
+        } else if path.is_file() {
+            let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+
+            let is_ply = file_name.ends_with(".ply");
+            let is_points3d = file_name == "points3D.bin";
+            let is_database = file_name == "database.db";
+
+            if !is_ply && !is_points3d && !is_database {
+                continue;
+            }
+
+            let metadata = match std::fs::metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            let is_viewable = is_ply || is_points3d;
+
+            out.push(OutputFile {
+                relative_path: relative,
+                name: file_name,
+                size: metadata.len(),
+                is_viewable,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Read a project output file as bytes (for download or viewing).
+pub async fn get_project_output(
+    project_name: String,
+    relative_path: String,
+) -> DioxusResult<Vec<u8>> {
+    let project_path = {
+        let projects = get_projects().await?;
+        projects
+            .into_iter()
+            .find(|p| p.name == project_name)
+            .map(|p| p.path)
+            .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
+    };
+
+    // Sanitize: strip leading slashes and reject path traversal components.
+    let sanitized = relative_path.trim_start_matches('/');
+    for component in std::path::Path::new(sanitized).components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(anyhow::anyhow!("Path traversal is not allowed").into());
+        }
+    }
+
+    let full_path = std::path::Path::new(&project_path).join(sanitized);
+    let bytes = tokio::fs::read(&full_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e))?;
+
+    Ok(bytes)
+}

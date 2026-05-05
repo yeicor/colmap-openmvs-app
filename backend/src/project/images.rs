@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context};
-use dioxus::fullstack::{FileStream, ServerEvents};
-use futures_util::StreamExt;
+use dioxus::fullstack::FileStream;
+use futures::StreamExt;
 use image::{DynamicImage, ImageDecoder, ImageReader};
 use once_cell::sync::Lazy;
 
@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use colmap_openmvs_api::TaskKind;
 use colmap_openmvs_api::{DemoProgressEvent, ResizeProgressEvent};
 
 // Type alias for complex image locks structure
@@ -174,34 +175,87 @@ pub async fn clear_project_images(project_name: String) -> dioxus::Result<()> {
 pub async fn batch_resize_images(
     project_name: String,
     max_dimension: u32,
-) -> dioxus::Result<ServerEvents<ResizeProgressEvent>> {
+) -> dioxus::Result<String> {
     validate_project_name(&project_name)?;
 
     if max_dimension < 64 || max_dimension > 8192 {
         Err(anyhow!("Max dimension must be between 64 and 8192 pixels"))?;
     }
 
-    let (tx, rx) = futures::channel::mpsc::unbounded();
+    let task_id = {
+        let mut registry = crate::task_registry::TASK_REGISTRY.lock().unwrap();
+        registry.create_task(TaskKind::BatchResize, project_name.clone())
+    };
+
+    let task_id_clone = task_id.clone();
     let project_name_clone = project_name.clone();
     tokio::spawn(async move {
-        let _ = batch_resize_images_stream(project_name_clone, max_dimension, tx).await;
+        let (tx, mut rx) = futures::channel::mpsc::unbounded::<ResizeProgressEvent>();
+        let proj = project_name_clone.clone();
+        tokio::spawn(async move {
+            let _ = batch_resize_images_stream(proj, max_dimension, tx).await;
+        });
+        while let Some(event) = rx.next().await {
+            let is_error = matches!(event, ResizeProgressEvent::Error { .. });
+            crate::task_registry::publish_event(
+                &task_id_clone,
+                colmap_openmvs_api::TaskEvent::ResizeProgress(event),
+            );
+            if is_error {
+                crate::task_registry::publish_event(
+                    &task_id_clone,
+                    colmap_openmvs_api::TaskEvent::Failed("Resize failed.".to_string()),
+                );
+                return;
+            }
+        }
+        crate::task_registry::publish_event(
+            &task_id_clone,
+            colmap_openmvs_api::TaskEvent::Completed,
+        );
     });
-    Ok(ServerEvents::from_stream(rx.map(Ok)))
+
+    Ok(task_id)
 }
 
 /// Download demo images with streaming progress events
-pub async fn download_demo_images(
-    project_name: String,
-) -> dioxus::Result<ServerEvents<DemoProgressEvent>> {
+pub async fn download_demo_images(project_name: String) -> dioxus::Result<String> {
     validate_project_name(&project_name)?;
 
-    let (tx, rx) = futures::channel::mpsc::unbounded();
+    let task_id = {
+        let mut registry = crate::task_registry::TASK_REGISTRY.lock().unwrap();
+        registry.create_task(TaskKind::DownloadDemo, project_name.clone())
+    };
+
+    let task_id_clone = task_id.clone();
     let project_name_clone = project_name.clone();
     tokio::spawn(async move {
-        let _ = download_demo_images_stream(project_name_clone, tx).await;
+        let (tx, mut rx) = futures::channel::mpsc::unbounded::<DemoProgressEvent>();
+        let proj = project_name_clone.clone();
+        tokio::spawn(async move {
+            let _ = download_demo_images_stream(proj, tx).await;
+        });
+        while let Some(event) = rx.next().await {
+            let is_error = matches!(event, DemoProgressEvent::Error { .. });
+            crate::task_registry::publish_event(
+                &task_id_clone,
+                colmap_openmvs_api::TaskEvent::DemoProgress(event),
+            );
+            if is_error {
+                crate::task_registry::publish_event(
+                    &task_id_clone,
+                    colmap_openmvs_api::TaskEvent::Failed("Demo download failed.".to_string()),
+                );
+                return;
+            }
+        }
+        crate::task_registry::publish_event(
+            &task_id_clone,
+            colmap_openmvs_api::TaskEvent::Completed,
+        );
     });
-    // Map DemoProgressEvent into Result<DemoProgressEvent, anyhow::Error>
-    Ok(ServerEvents::from_stream(rx.map(Ok)))
+
+    Ok(task_id)
 }
 
 /// Helper function to resize a single image file

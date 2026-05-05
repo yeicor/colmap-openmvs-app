@@ -729,6 +729,8 @@ dependencies = [
 name = "colmap-openmvs-app"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "chrono",
  "colmap-openmvs-api",
  "colmap-openmvs-backend",
  "dioxus",
@@ -761,6 +763,7 @@ dependencies = [
  "sevenz-rust2",
  "tar",
  "tokio",
+ "uuid",
  "which",
  "xz2",
 ]
@@ -6931,6 +6934,7 @@ version = "1.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddd74a9687298c6858e9b88ec8935ec45d22e8fd5e6394fa1bd4e99a87789c76"
 dependencies = [
+ "getrandom 0.4.2",
  "js-sys",
  "wasm-bindgen",
 ]

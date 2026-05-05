@@ -7,8 +7,8 @@ use dioxus::{
 };
 
 use colmap_openmvs_api::{
-    ConfigSchema, DemoProgressEvent, ImageTagInfo, LoadedProjectConfig, PrepareProgress,
-    PreparedImageInfo, Project, ResizeProgressEvent, RuntimeInfo, SavedProjectConfig, Settings,
+    ConfigSchema, ImageTagInfo, LoadedProjectConfig, OutputFile, PreparedImageInfo, Project,
+    RuntimeInfo, SavedProjectConfig, Settings, TaskEvent, TaskInfo,
 };
 
 #[cfg(feature = "server")]
@@ -74,15 +74,12 @@ pub async fn clear_project_images(project_name: String) -> Result<()> {
 }
 
 #[post("/projects/:project_name/images/resize/:max_dimension")]
-pub async fn batch_resize_images(
-    project_name: String,
-    max_dimension: u32,
-) -> Result<ServerEvents<ResizeProgressEvent>> {
+pub async fn batch_resize_images(project_name: String, max_dimension: u32) -> Result<String> {
     backend::batch_resize_images(project_name, max_dimension).await
 }
 
 #[post("/projects/:project_name/images/demo")]
-pub async fn download_demo_images(project_name: String) -> Result<ServerEvents<DemoProgressEvent>> {
+pub async fn download_demo_images(project_name: String) -> Result<String> {
     backend::download_demo_images(project_name).await
 }
 
@@ -111,7 +108,7 @@ pub async fn list_runtime_images() -> Result<Vec<PreparedImageInfo>> {
 }
 
 #[post("/runtimes/proot/images/prepare")]
-pub async fn prepare_runtime_image(image: String) -> Result<ServerEvents<PrepareProgress>> {
+pub async fn prepare_runtime_image(image: String) -> Result<String> {
     backend::prepare_runtime_image(image).await
 }
 
@@ -125,9 +122,6 @@ pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
     backend::list_available_image_tags().await
 }
 
-// ---------------------------------------------------------------------------
-// Configuration schema
-// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // Configuration schema
 // ---------------------------------------------------------------------------
@@ -163,6 +157,82 @@ pub async fn save_project_config(project_name: String, config: SavedProjectConfi
         .ok_or_else(|| dioxus::prelude::ServerFnError::new("Project not found"))?;
 
     backend::save_project_config(project.path, config)
+        .await
+        .map_err(Into::into)
+}
+
+// ---------------------------------------------------------------------------
+// Task management
+// ---------------------------------------------------------------------------
+
+#[get("/tasks")]
+pub async fn list_tasks(
+    kind_filter: Option<String>,
+    context_key_filter: Option<String>,
+) -> Result<Vec<TaskInfo>> {
+    let kind = kind_filter.and_then(|s| match s.as_str() {
+        "PrepareImage" => Some(colmap_openmvs_api::TaskKind::PrepareImage),
+        "DownloadDemo" => Some(colmap_openmvs_api::TaskKind::DownloadDemo),
+        "BatchResize" => Some(colmap_openmvs_api::TaskKind::BatchResize),
+        "RunPipeline" => Some(colmap_openmvs_api::TaskKind::RunPipeline),
+        "DryRunPipeline" => Some(colmap_openmvs_api::TaskKind::DryRunPipeline),
+        _ => None,
+    });
+    backend::list_tasks(kind, context_key_filter).await
+}
+
+#[get("/tasks/:task_id")]
+pub async fn get_task_info(task_id: String) -> Result<Option<TaskInfo>> {
+    backend::get_task_info(task_id).await
+}
+
+#[get("/tasks/:task_id/events")]
+pub async fn subscribe_task_events(task_id: String) -> Result<ServerEvents<TaskEvent>> {
+    backend::subscribe_task_events(task_id).await
+}
+
+#[delete("/tasks/:task_id")]
+pub async fn cancel_task(task_id: String) -> Result<()> {
+    backend::cancel_task(task_id).await
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline execution
+// ---------------------------------------------------------------------------
+
+#[post("/projects/:project_name/pipeline")]
+pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String> {
+    backend::run_pipeline(project_name, dry_run)
+        .await
+        .map_err(Into::into)
+}
+
+// ---------------------------------------------------------------------------
+// Project outputs
+// ---------------------------------------------------------------------------
+
+#[get("/projects/:project_name/outputs")]
+pub async fn list_project_outputs(project_name: String) -> Result<Vec<OutputFile>> {
+    backend::list_project_outputs(project_name).await
+}
+
+/// Return the raw bytes of an output file (used for download links).
+/// The `relative_path` is URL-encoded and decoded here.
+#[get("/projects/:project_name/outputs/file")]
+pub async fn get_project_output(project_name: String, relative_path: String) -> Result<Vec<u8>> {
+    backend::get_project_output(project_name, relative_path)
+        .await
+        .map_err(Into::into)
+}
+
+/// Return an output file in a viewer-friendly PLY format.
+/// For PLY files this is a pass-through; for points3D.bin it converts to ASCII PLY.
+#[get("/projects/:project_name/outputs/view")]
+pub async fn get_project_output_for_viewer(
+    project_name: String,
+    relative_path: String,
+) -> Result<Vec<u8>> {
+    backend::get_project_output_for_viewer(project_name, relative_path)
         .await
         .map_err(Into::into)
 }
