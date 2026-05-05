@@ -7,8 +7,8 @@ use dioxus::{
 };
 
 use colmap_openmvs_api::{
-    DemoProgressEvent, ImageTagInfo, PrepareProgress, PreparedImageInfo, Project,
-    ResizeProgressEvent, RuntimeInfo, Settings,
+    ConfigSchema, DemoProgressEvent, ImageTagInfo, LoadedProjectConfig, PrepareProgress,
+    PreparedImageInfo, Project, ResizeProgressEvent, RuntimeInfo, SavedProjectConfig, Settings,
 };
 
 #[cfg(feature = "server")]
@@ -123,4 +123,46 @@ pub async fn remove_runtime_image(image_tag: String) -> Result<()> {
 #[get("/runtimes/proot/images/available-tags")]
 pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
     backend::list_available_image_tags().await
+}
+
+// ---------------------------------------------------------------------------
+// Configuration schema
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Configuration schema
+// ---------------------------------------------------------------------------
+
+#[post("/config")]
+pub async fn get_image_config(image_tag: String) -> Result<ConfigSchema> {
+    backend::get_image_config(image_tag)
+        .await
+        .map_err(Into::into)
+}
+
+#[get("/projects/:project_name/config")]
+pub async fn load_project_config(project_name: String) -> Result<LoadedProjectConfig> {
+    // Get the project to retrieve its path
+    let project = backend::get_projects()
+        .await?
+        .into_iter()
+        .find(|p| p.name == project_name)
+        .ok_or_else(|| dioxus::prelude::ServerFnError::new("Project not found"))?;
+
+    backend::load_project_config(project.path)
+        .await
+        .map_err(Into::into)
+}
+
+#[post("/projects/:project_name/config")]
+pub async fn save_project_config(project_name: String, config: SavedProjectConfig) -> Result<()> {
+    // Get the project to retrieve its path
+    let project = backend::get_projects()
+        .await?
+        .into_iter()
+        .find(|p| p.name == project_name)
+        .ok_or_else(|| dioxus::prelude::ServerFnError::new("Project not found"))?;
+
+    backend::save_project_config(project.path, config)
+        .await
+        .map_err(Into::into)
 }

@@ -1,5 +1,6 @@
 pub mod types;
 pub use types::{
-    DemoProgressEvent, ImageTagInfo, PrepareProgress, PreparedImageInfo, Project,
-    ResizeProgressEvent, RuntimeInfo, Settings,
+    ConfigParameter, ConfigSchema, DemoProgressEvent, EnvVarConfig, EnvVarWithHelp,
+    ImageConfigSchema, ImageTagInfo, LoadedProjectConfig, PrepareProgress, PreparedImageInfo,
+    Project, ResizeProgressEvent, RuntimeInfo, SavedProjectConfig, Settings, ToolConfig,
 };

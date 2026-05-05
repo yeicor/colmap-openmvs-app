@@ -2,7 +2,7 @@ use crate::components::{
     button::{Button, ButtonVariant},
     tabs::{TabContent, TabList, TabTrigger, Tabs},
 };
-use crate::mycomponents::page_header::BackButton;
+use crate::mycomponents::BackButton;
 use crate::mycomponents::{Banner, BannerType, PageHeader};
 use crate::server::{
     download_runtime_version, get_available_runtime_versions, get_runtime_info, get_settings,
@@ -129,6 +129,7 @@ fn GeneralTab() -> Element {
             }
             match update_settings(Settings {
                 projects_folder: folder,
+                default_image_tag: None,
             })
             .await
             {
@@ -213,6 +214,8 @@ fn GeneralTab() -> Element {
                         }
                     }
                 }
+
+
 
                 if has_changed() {
                     div {
@@ -450,6 +453,8 @@ fn RuntimeImagesTab() -> Element {
     let mut tags_loading = use_signal(|| true);
     let mut error = use_signal(String::new);
     let mut success = use_signal(String::new);
+    let mut default_image_tag = use_signal(String::new);
+    let mut projects_folder = use_signal(String::new);
 
     const COLMAP_IMAGE: &str = "mirror.gcr.io/yeicor/colmap-openmvs";
 
@@ -460,7 +465,38 @@ fn RuntimeImagesTab() -> Element {
             tags_loading.set(true);
 
             match list_runtime_images().await {
-                Ok(imgs) => ready_tags.set(imgs),
+                Ok(imgs) => {
+                    // Auto-select if only one image and no default set
+                    if imgs.len() == 1 && default_image_tag().is_empty() {
+                        if let Ok(settings) = get_settings().await {
+                            if settings.default_image_tag.is_none() {
+                                let tag = imgs[0].tag.clone();
+                                let folder = settings.projects_folder.clone();
+                                projects_folder.set(folder.clone());
+                                if let Err(e) = update_settings(Settings {
+                                    projects_folder: folder,
+                                    default_image_tag: Some(tag.clone()),
+                                })
+                                .await
+                                {
+                                    error.set(format!("Failed to auto-select default tag: {}", e));
+                                } else {
+                                    default_image_tag.set(tag);
+                                }
+                            } else {
+                                default_image_tag
+                                    .set(settings.default_image_tag.unwrap_or_default());
+                                projects_folder.set(settings.projects_folder);
+                            }
+                        }
+                    } else {
+                        if let Ok(settings) = get_settings().await {
+                            default_image_tag.set(settings.default_image_tag.unwrap_or_default());
+                            projects_folder.set(settings.projects_folder);
+                        }
+                    }
+                    ready_tags.set(imgs);
+                }
                 Err(e) => error.set(format!("Failed to load images: {}", e)),
             }
 
@@ -547,6 +583,46 @@ fn RuntimeImagesTab() -> Element {
         });
     };
 
+    let handle_set_default = move |tag: String| {
+        let folder = projects_folder().clone();
+        spawn(async move {
+            error.set(String::new());
+            success.set(String::new());
+            match update_settings(Settings {
+                projects_folder: folder,
+                default_image_tag: Some(tag.clone()),
+            })
+            .await
+            {
+                Ok(_) => {
+                    default_image_tag.set(tag.clone());
+                    success.set(format!("Default tag set to '{}'", tag));
+                }
+                Err(e) => error.set(format!("Failed to set default tag: {}", e)),
+            }
+        });
+    };
+
+    let handle_unset_default = move |_| {
+        let folder = projects_folder().clone();
+        spawn(async move {
+            error.set(String::new());
+            success.set(String::new());
+            match update_settings(Settings {
+                projects_folder: folder,
+                default_image_tag: None,
+            })
+            .await
+            {
+                Ok(_) => {
+                    default_image_tag.set(String::new());
+                    success.set("Default tag cleared".to_string());
+                }
+                Err(e) => error.set(format!("Failed to clear default tag: {}", e)),
+            }
+        });
+    };
+
     rsx! {
         Banner {
             message: error(),
@@ -595,6 +671,21 @@ fn RuntimeImagesTab() -> Element {
                             div {
                                 class: "tag-actions",
                                 span { class: "tag-size", "{image.size_readable}" }
+                                if image.tag == default_image_tag() {
+                                    Button {
+                                        variant: ButtonVariant::Primary,
+                                        title: "Unset as default tag",
+                                        onclick: handle_unset_default,
+                                        "✓ Default"
+                                    }
+                                } else {
+                                    Button {
+                                        variant: ButtonVariant::Secondary,
+                                        title: "Set as default tag",
+                                        onclick: move |_| handle_set_default(image.tag.clone()),
+                                        "Set as Default"
+                                    }
+                                }
                                 Button {
                                     variant: ButtonVariant::Destructive,
                                     title: "Remove this tag",

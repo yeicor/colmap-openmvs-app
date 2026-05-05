@@ -7,6 +7,51 @@ use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
 // ---------------------------------------------------------------------------
+// PRoot binary detection
+// ---------------------------------------------------------------------------
+
+/// Locate the proot binary with multiple fallback strategies.
+///
+/// This function tries to find proot in the following order:
+/// 1. Custom location in runtime directory (highest priority - checked first after downloads)
+/// 2. Direct execution attempt - for system proot in PATH
+/// 3. Via `which::which("proot")` - checks system PATH (lowest priority)
+///
+/// Returns the path to the proot binary if found, or an error with diagnostic info.
+async fn find_proot_binary(runtime_dir: &Path) -> RuntimeResult<String> {
+    // Strategy 1: Check custom location in runtime directory FIRST (highest priority)
+    // This ensures newly downloaded proot is detected immediately
+    let custom = runtime_dir.join("proot");
+    if custom.exists() {
+        return Ok(custom.to_string_lossy().into_owned());
+    }
+
+    // Strategy 2: Try direct execution (proot might be in system PATH)
+    match Command::new("proot").arg("--version").output().await {
+        Ok(_) => {
+            return Ok("proot".to_string());
+        }
+        Err(_) => {}
+    }
+
+    // Strategy 3: Fall back to which (may be cached, least reliable)
+    if which::which("proot").is_ok() {
+        return Ok("proot".to_string());
+    }
+
+    // All strategies failed
+    let path_info = std::env::var("PATH").unwrap_or_else(|_| "(not set)".to_string());
+    Err(anyhow::anyhow!(
+        "PRoot binary not found. Checked: custom runtime directory ({}), direct execution, and system PATH. \
+         Current PATH: {}. \
+         Ensure PRoot is installed and accessible. \
+         Visit https://github.com/proot-me/proot for installation instructions.",
+        custom.display(),
+        path_info
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // Internal types
 // ---------------------------------------------------------------------------
 
@@ -55,36 +100,6 @@ impl PRoot {
     // -----------------------------------------------------------------------
     // Version helpers
     // -----------------------------------------------------------------------
-
-    async fn get_system_proot_version(&self) -> RuntimeResult<String> {
-        let output = Command::new("proot")
-            .arg("--version")
-            .output()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to execute proot: {}", e))?;
-
-        let combined = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        Self::parse_proot_version(&combined)
-    }
-
-    async fn get_installed_proot_version(&self, proot_bin: &Path) -> RuntimeResult<String> {
-        let output = Command::new(proot_bin)
-            .arg("--version")
-            .output()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to execute proot: {}", e))?;
-
-        let combined = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        Self::parse_proot_version(&combined)
-    }
 
     /// Parse a version string from raw proot `--version` output.
     pub fn parse_proot_version(output: &str) -> RuntimeResult<String> {
@@ -350,24 +365,42 @@ impl Runtime for PRoot {
     }
 
     async fn version(&self) -> RuntimeResult<String> {
-        if which::which("proot").is_ok() {
-            return self.get_system_proot_version().await;
-        }
+        let proot_bin = find_proot_binary(&self.runtime_dir).await?;
+        let output = Command::new(&proot_bin)
+            .arg("--version")
+            .output()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to execute proot: {}", e))?;
 
-        let proot_bin = self.runtime_dir.join("proot");
-        if proot_bin.exists() {
-            return self.get_installed_proot_version(&proot_bin).await;
-        }
-
-        Err(anyhow::anyhow!(
-            "PRoot not found in PATH or in install directory"
-        ))
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Self::parse_proot_version(&combined)
     }
 
     async fn available_versions(&self) -> RuntimeResult<Vec<String>> {
-        if which::which("proot").is_ok() {
-            let v = self.get_system_proot_version().await?;
-            return Ok(vec![v]);
+        // Try to use the installed proot version if available
+        match find_proot_binary(&self.runtime_dir).await {
+            Ok(proot_bin) => {
+                let output = Command::new(&proot_bin)
+                    .arg("--version")
+                    .output()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to execute proot: {}", e))?;
+
+                let combined = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let v = Self::parse_proot_version(&combined)?;
+                return Ok(vec![v]);
+            }
+            Err(_) => {
+                // PRoot not found, try to fetch available versions from repositories
+            }
         }
 
         match (std::env::consts::ARCH, std::env::consts::OS) {
@@ -380,8 +413,9 @@ impl Runtime for PRoot {
     }
 
     async fn download(&self, version: &str) -> RuntimeResult<()> {
-        if which::which("proot").is_ok() {
-            return Ok(()); // System proot is already available
+        // Check if proot is already available
+        if find_proot_binary(&self.runtime_dir).await.is_ok() {
+            return Ok(()); // Proot is already available
         }
 
         match (std::env::consts::ARCH, std::env::consts::OS) {
@@ -469,17 +503,8 @@ impl Runtime for PRoot {
             }
         };
 
-        // Locate the proot binary
-        let proot_bin = if which::which("proot").is_ok() {
-            "proot".to_string()
-        } else {
-            let custom = self.images_dir.join("proot");
-            if custom.exists() {
-                custom.to_string_lossy().into_owned()
-            } else {
-                return Err(anyhow::anyhow!("PRoot binary not found"));
-            }
-        };
+        // Locate the proot binary using centralized detection
+        let proot_bin = find_proot_binary(&self.runtime_dir).await?;
 
         // Build the tokio async Command
         let mut cmd = Command::new(&proot_bin);

@@ -113,3 +113,45 @@
 .info-banner .dx-button:hover {
     background-color: rgba(0, 0, 0, 0.1);
 }
+
+/** Help component */
+
+.help-modal-code {
+    font-family: "Courier New", Courier, monospace;
+    background-color: var(--primary-color-3);
+    color: var(--secondary-color-4);
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 1px solid var(--primary-color-6);
+    display: inline-block;
+    overflow: scroll;
+    max-height: calc(100vh - 90px);
+    max-width: calc(100vw - 90px);
+    text-wrap: nowrap;
+    text-align: left;
+}
+
+.help-modal-close-x {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    width: 2rem;
+    height: 2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--primary-color);
+    color: var(--secondary-color-4);
+    font-size: 1.5rem;
+    font-weight: bold;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    transition: all 0.2s ease;
+}
+.dx-alert-dialog:has(.help-modal-description-wrapper) {
+    width: unset;
+    max-width: unset;
+    padding: 0px;
+    display: inline-block;
+}

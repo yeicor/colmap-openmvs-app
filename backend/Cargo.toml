@@ -10,6 +10,7 @@ colmap-openmvs-api = { path = "../api" }
 # Core serialization
 serde = { version = "*", features = ["derive"] }
 serde_json = { version = "1.0" }
+serde-saphyr = { version = "0.0.26" }
 
 # Async runtime
 tokio = { version = "*", features = ["full"] }
@@ -58,3 +59,6 @@ flate2 = { version = "1.0" }
 
 # Date and time handling
 chrono = { version = "0.4", features = ["serde"] }
+
+# Ordered HashMap
+indexmap = { version = "2.0" }

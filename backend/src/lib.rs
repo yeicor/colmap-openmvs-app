@@ -1,6 +1,9 @@
 //! Backend library for colmap-openmvs-app
 //! Contains all implementations for server functions with access to heavy native dependencies
 
+mod config;
+pub use config::{get_image_config, load_project_config, save_project_config};
+
 mod project;
 pub use project::{
     add_project_image, batch_resize_images, clear_project_images, delete_project_image,
