@@ -1,19 +1,10 @@
-#[cfg(feature = "server")]
-use dioxus::core::anyhow;
-use dioxus::prelude::*;
-use serde::{Deserialize, Serialize};
-#[cfg(feature = "server")]
+use anyhow::anyhow;
+use colmap_openmvs_api::types::Project;
+use dioxus::Result as DioxusResult;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Project {
-    pub name: String,
-    pub path: String,
-}
-
-#[get("/projects")]
-pub async fn get_projects() -> Result<Vec<Project>> {
-    let settings = crate::server::get_settings().await?;
+pub async fn get_projects() -> DioxusResult<Vec<Project>> {
+    let settings = crate::get_settings().await?;
     let projects_path = Path::new(&settings.projects_folder);
 
     if !projects_path.exists() {
@@ -46,13 +37,12 @@ pub async fn get_projects() -> Result<Vec<Project>> {
     Ok(projects)
 }
 
-#[post("/projects/:name")]
-pub async fn create_project(name: String) -> Result<Project> {
+pub async fn create_project(name: String) -> DioxusResult<Project> {
     if name.is_empty() || name.contains('/') || name.contains('\\') {
         return Err(anyhow!("Invalid project name").into());
     }
 
-    let settings = crate::server::get_settings().await?;
+    let settings = crate::get_settings().await?;
     let project_path = Path::new(&settings.projects_folder).join(&name);
 
     if project_path.exists() {
@@ -68,13 +58,12 @@ pub async fn create_project(name: String) -> Result<Project> {
     })
 }
 
-#[delete("/projects/:name")]
-pub async fn delete_project(name: String) -> Result<()> {
+pub async fn delete_project(name: String) -> DioxusResult<()> {
     if name.is_empty() || name.contains('/') || name.contains('\\') {
         return Err(anyhow!("Invalid project name").into());
     }
 
-    let settings = crate::server::get_settings().await?;
+    let settings = crate::get_settings().await?;
     let project_path = Path::new(&settings.projects_folder).join(&name);
 
     if !project_path.exists() {
@@ -87,8 +76,7 @@ pub async fn delete_project(name: String) -> Result<()> {
     Ok(())
 }
 
-#[patch("/projects/:name")]
-pub async fn rename_project(name: String, new_name: String) -> Result<Project> {
+pub async fn rename_project(name: String, new_name: String) -> DioxusResult<Project> {
     if name.is_empty() || new_name.is_empty() {
         return Err(anyhow!("Names cannot be empty").into());
     }
@@ -97,7 +85,7 @@ pub async fn rename_project(name: String, new_name: String) -> Result<Project> {
         return Err(anyhow!("Invalid project name").into());
     }
 
-    let settings = crate::server::get_settings().await?;
+    let settings = crate::get_settings().await?;
     let old_path = Path::new(&settings.projects_folder).join(&name);
     let new_path = Path::new(&settings.projects_folder).join(&new_name);
 

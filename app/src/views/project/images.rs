@@ -3,8 +3,8 @@ use crate::components::alert_dialog::{
     AlertDialogTitle,
 };
 use crate::mycomponents::{Banner, BannerType};
-use crate::server::DownloadProgressEvent;
-use crate::server::ResizeProgressEvent;
+use colmap_openmvs_api::DemoProgressEvent;
+use colmap_openmvs_api::ResizeProgressEvent;
 use dioxus::document::eval;
 use dioxus::fullstack::get_server_url;
 use dioxus::prelude::*;
@@ -13,6 +13,13 @@ use dioxus_free_icons::icons::bs_icons::{
     BsXCircle,
 };
 use dioxus_free_icons::Icon;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
+
+static CACHE_BUSTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
+fn generate_cache_busting_num() -> u64 {
+    CACHE_BUSTER.fetch_add(1, Ordering::Relaxed)
+}
 
 #[component]
 pub fn ImagesTab(project_name: String) -> Element {
@@ -30,7 +37,8 @@ pub fn ImagesTab(project_name: String) -> Element {
     // Load image list on mount
     let project_name_clone = project_name.clone();
     use_effect(move || {
-        info_message.read_unchecked();
+        info_message.read_unchecked(); // trigger re-run when info_message changes to show updates during loading
+        error_message.read_unchecked(); // trigger re-run when error_message changes to show updates during loading
         let project_name = project_name_clone.clone();
         spawn(async move {
             match crate::server::get_project_images(project_name).await {
@@ -81,14 +89,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                         let mut total_bytes = 0;
                         while let Some(Ok(event)) = stream.recv().await {
                             match event {
-                                DownloadProgressEvent::DownloadStarted { total_bytes } => {
-                                    let size_mb = total_bytes as f64 / 1_000_000.0;
-                                    info_message.set(Some(format!(
-                                        "Downloading... (0 / {:.1} MB)",
-                                        size_mb
-                                    )));
-                                }
-                                DownloadProgressEvent::DownloadProgress {
+                                DemoProgressEvent::DownloadProgress {
                                     downloaded_bytes,
                                     total_bytes,
                                 } => {
@@ -99,70 +100,32 @@ pub fn ImagesTab(project_name: String) -> Element {
                                         downloaded_mb, total_mb
                                     )));
                                 }
-                                DownloadProgressEvent::DownloadComplete { total_bytes } => {
-                                    let size_mb = total_bytes as f64 / 1_000_000.0;
-                                    info_message.set(Some(format!(
-                                        "Downloaded {:.1} MB, extracting...",
-                                        size_mb
-                                    )));
-                                }
-                                DownloadProgressEvent::ExtractionStarted => {
-                                    info_message
-                                        .set(Some("Extracting images... (0/?)".to_string()));
-                                }
-                                DownloadProgressEvent::FileExtracted { name, size } => {
-                                    let size_kb = size as f64 / 1024.0;
-                                    info_message.set(Some(format!(
-                                        "Extracted: {} ({:.1} KB)",
-                                        name, size_kb
-                                    )));
-                                }
-                                DownloadProgressEvent::ExtractionProgress {
-                                    count,
-                                    total_bytes,
-                                } => {
-                                    let size_mb = total_bytes as f64 / 1_000_000.0;
-                                    info_message.set(Some(format!(
-                                        "Extracting... ({} files, {:.1} MB)",
-                                        count, size_mb
-                                    )));
-                                }
-                                DownloadProgressEvent::ExtractionComplete {
+                                DemoProgressEvent::ExtractionProgress {
+                                    #[allow(unused_variables)]
+                                    last_file,
                                     total_files: files,
                                     total_bytes: bytes,
                                 } => {
-                                    total_files = files;
-                                    total_bytes = bytes;
                                     let size_mb = bytes as f64 / 1_000_000.0;
+                                    total_files = files; // update total files count
+                                    total_bytes = bytes; // update total bytes count
                                     info_message.set(Some(format!(
-                                        "Extraction complete: {} files ({:.1} MB)",
+                                        "Extracting... ({} files, {:.1} MB)",
                                         files, size_mb
                                     )));
                                 }
-                                DownloadProgressEvent::Error { message } => {
+                                DemoProgressEvent::Error { message } => {
                                     error_message.set(Some(message));
                                     demo_loading.set(false);
                                     return;
                                 }
                             }
                         }
-
-                        if total_files > 0 {
-                            match crate::server::get_project_images(project_name.clone()).await {
-                                Ok(imgs) => {
-                                    image_paths.set(imgs);
-                                    info_message.set(Some(format!(
-                                        "Demo downloaded ({} images, {:.1} MB). You may want to optimize them using the 'Optimize Images' button.",
-                                        total_files,
-                                        total_bytes as f64 / 1_000_000.0
-                                    )));
-                                }
-                                Err(e) => {
-                                    error_message
-                                        .set(Some(format!("Failed to reload images: {}", e)));
-                                }
-                            }
-                        }
+                        info_message.set(Some(format!(
+                            "Demo downloaded ({} images, {:.1} MB). You may want to optimize them using the 'Optimize Images' button.",
+                            total_files,
+                            total_bytes as f64 / 1_000_000.0
+                        )));
                     }
                     Err(e) => {
                         error_message.set(Some(format!("Failed to download demo images: {}", e)));
@@ -180,8 +143,6 @@ pub fn ImagesTab(project_name: String) -> Element {
             spawn(async move {
                 match crate::server::clear_project_images(project_name).await {
                     Ok(_) => {
-                        image_paths.set(Vec::new());
-                        selected_images.set(Vec::new());
                         info_message.set(Some("All images cleared successfully".to_string()));
                     }
                     Err(e) => {
@@ -214,28 +175,14 @@ pub fn ImagesTab(project_name: String) -> Element {
                     Ok(mut stream) => {
                         while let Some(Ok(event)) = stream.recv().await {
                             match event {
-                                ResizeProgressEvent::ResizeStarted { total_files } => {
-                                    info_message.set(Some(format!(
-                                        "Resizing {} image(s) (max {}px)...",
-                                        total_files, max_dimension
-                                    )));
-                                }
-                                ResizeProgressEvent::FileResized { name } => {
-                                    info_message.set(Some(format!("Resized: {}", name)));
-                                }
                                 ResizeProgressEvent::ResizeProgress {
+                                    name,
                                     completed,
                                     total_files,
                                 } => {
                                     info_message.set(Some(format!(
-                                        "Resizing... ({}/{})",
-                                        completed, total_files
-                                    )));
-                                }
-                                ResizeProgressEvent::ResizeComplete { total_files } => {
-                                    info_message.set(Some(format!(
-                                        "Batch resize complete: {} image(s) optimized",
-                                        total_files
+                                        "Resized: {} ({}/{})",
+                                        name, completed, total_files
                                     )));
                                 }
                                 ResizeProgressEvent::Error { message } => {
@@ -519,11 +466,8 @@ pub fn ImagesTab(project_name: String) -> Element {
 
                 if has_images {
                     div {
-                        class: "images-info",
-                        span { "{num_images} image(s)" }
-                        if has_selection {
-                            span { class: "highlight", "{num_selected} selected" }
-                        }
+                        class: "btn images-info",
+                        "{num_images} " Icon { icon: BsImage }  // TODO: better icon and pluralization
                     }
                 }
             }
@@ -540,10 +484,11 @@ pub fn ImagesTab(project_name: String) -> Element {
                             let safe_project_name = urlencoding::encode(&project_name);
                             let is_selected = selected.contains(&image_name);
                             let image_url = format!(
-                                "{}/projects/{}/images/{}",
+                                "{}/projects/{}/images/{}?_drop_cache={}",
                                 get_server_url(),
                                 safe_project_name,
-                                safe_image_name
+                                safe_image_name,
+                                generate_cache_busting_num(),
                             );
                             let img_id = format!("thumbnail-{}", safe_image_name);
                             let metadata_id = format!("metadata-{}", safe_image_name);

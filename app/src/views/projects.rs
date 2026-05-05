@@ -50,10 +50,10 @@ pub fn Projects(
     #[props(default)] selected: Option<String>,
 ) -> Element {
     let mut dialog_type = use_signal(|| None::<DialogType>);
-    let mut input_value = use_signal(|| String::new());
-    let mut error_message = use_signal(|| String::new());
-    let mut info_message = use_signal(|| String::new());
-    let mut projects = use_signal(|| Vec::new());
+    let mut input_value = use_signal(String::new);
+    let mut error_message = use_signal(String::new);
+    let mut info_message = use_signal(String::new);
+    let mut projects = use_signal(Vec::new);
     let mut loading = use_signal(|| true);
 
     let refresh_projects = move || {
@@ -82,7 +82,7 @@ pub fn Projects(
                     }
 
                     let result = match dialog {
-                        DialogType::Create => create_project(name).await.and_then(|_| Ok(())),
+                        DialogType::Create => create_project(name).await.map(|_| ()),
                         DialogType::Rename(idx) => rename_project(
                             projects()
                                 .get(idx)
@@ -92,7 +92,7 @@ pub fn Projects(
                             name,
                         )
                         .await
-                        .and_then(|_| Ok(())),
+                        .map(|_| ()),
                         DialogType::Delete(idx) => {
                             delete_project(
                                 projects()
@@ -168,7 +168,7 @@ pub fn Projects(
                     extra: rsx! { "Settings" },
                     extra_tooltip: rsx! { "Configure application settings" },
                     onclick: move |_| {
-                        dioxus::prelude::navigator().push(Route::Settings {});
+                        dioxus::prelude::navigator().push(Route::SettingsView {});
                         eval("if (window.innerWidth <= 768) { document.querySelector('.dx-sidebar-trigger').click(); }");
                     },
                 }

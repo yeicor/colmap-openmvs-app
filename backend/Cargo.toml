@@ -1,0 +1,45 @@
+[package]
+name = "colmap-openmvs-backend"
+version = "0.1.0"
+authors = ["Yeicor <yeicor+no-reply@github.com>"]
+edition = "2021"
+
+[dependencies]
+colmap-openmvs-api = { path = "../api" }
+
+# Core serialization
+serde = { version = "*", features = ["derive"] }
+serde_json = { version = "1.0" }
+
+# Async runtime
+tokio = { version = "*", features = ["sync", "macros", "rt", "rt-multi-thread"] }
+
+# Async utilities for streaming
+futures-util = { version = "0.3" }
+dioxus = { version = "0.7.7", features = ["fullstack", "server"] }
+
+# Error handling
+anyhow = { version = "1.0" }
+
+# Image processing for image resizing
+image = { version = "0.25.10" }
+
+# 7z archive extraction for demo images
+sevenz-rust2 = { version = "0.21" }
+
+# XZ compression for proot
+xz2 = { version = "0.1" }
+
+# Tar archive handling
+tar = { version = "0.4" }
+
+# Runtime management state
+once_cell = { version = "1.21.4" }
+
+# HTTP requests for downloading runtimes and demo data
+reqwest = { version = "0.11", features = ["json", "stream"] }
+
+# Executable discovery
+which = { version = "5.0" }
+
+futures = "0.3.32"

@@ -117,7 +117,7 @@ impl PRoot {
         // Look for patterns like: v5.4.0, 5.4.0, v5.4.0-5f780cba, 5.4.0-5f780cba
 
         // First, try to find 'v' followed by a digit (common pattern)
-        if let Some(pos) = output.find(|c: char| c == 'v' || c == 'V') {
+        if let Some(pos) = output.find(['v', 'V']) {
             if let Some(next_char) = output[pos + 1..].chars().next() {
                 if next_char.is_ascii_digit() {
                     let version_part = &output[pos + 1..];
@@ -129,7 +129,7 @@ impl PRoot {
                         .to_string();
 
                     if !version.is_empty()
-                        && version.chars().next().map_or(false, |c| c.is_ascii_digit())
+                        && version.chars().next().is_some_and(|c| c.is_ascii_digit())
                     {
                         return Ok(version);
                     }

@@ -651,24 +651,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "colmap-openmvs-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "colmap-openmvs-app"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "colmap-openmvs-api",
+ "colmap-openmvs-backend",
  "dioxus",
  "dioxus-free-icons",
  "dioxus-primitives",
+ "urlencoding",
+]
+
+[[package]]
+name = "colmap-openmvs-backend"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "colmap-openmvs-api",
+ "dioxus",
+ "futures",
  "futures-util",
  "image",
  "once_cell",
  "reqwest 0.11.27",
  "serde",
- "serde_derive_default",
  "serde_json",
  "sevenz-rust2",
  "tar",
  "tokio",
- "urlencoding",
  "which",
  "xz2",
 ]
@@ -3494,7 +3511,7 @@ dependencies = [
  "bitflags 2.11.1",
  "libc",
  "plain",
- "redox_syscall 0.7.4",
+ "redox_syscall 0.7.5",
 ]
 
 [[package]]
@@ -4942,9 +4959,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.7.4"
+version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f450ad9c3b1da563fb6948a8e0fb0fb9269711c9c73d9ea1de5058c79c8d643a"
+checksum = "4666a1a60d8412eab19d94f6d13dcc9cea0a5ef4fdf6a5db306537413c661b1b"
 dependencies = [
  "bitflags 2.11.1",
 ]
@@ -4958,18 +4975,6 @@ dependencies = [
  "getrandom 0.2.17",
  "libredox",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "regex"
-version = "1.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e10754a14b9137dd7b1e3e5b0493cc9171fdd105e0ab477f51b72e7f3ac0e276"
-dependencies = [
- "aho-corasick",
- "memchr",
- "regex-automata",
- "regex-syntax",
 ]
 
 [[package]]
@@ -5341,18 +5346,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "serde_derive_default"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afb2522c2a87137bf6c2b3493127fed12877ef1b9476f074d6664edc98acd8a7"
-dependencies = [
- "quote",
- "regex",
- "syn 2.0.117",
- "thiserror 1.0.69",
 ]
 
 [[package]]

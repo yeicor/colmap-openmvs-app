@@ -1,4 +1,7 @@
+[application]
+sub_package = "colmap-openmvs-app"
+
 [bundle]
 identifier = "com.github.yeicor.colmap_openmvs_app"
 publisher = "Yeicor"
-icon = ["assets/icon.png"]
+icon = ["app/assets/icon.png"]

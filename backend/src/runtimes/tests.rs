@@ -1,6 +1,6 @@
 #[cfg(test)]
-mod tests {
-    use crate::server::runtimes::{PRoot, PrepareProgress, Runtime};
+mod runtimes_tests {
+    use crate::runtimes::{PRoot, PrepareProgress, Runtime};
     use std::path::PathBuf;
 
     #[test]
@@ -207,7 +207,7 @@ mod tests {
 
         let child = Command::new("echo").arg("test").spawn().unwrap();
 
-        let handle = crate::server::runtimes::ProcessHandle { child };
+        let handle = crate::runtimes::ProcessHandle { child };
         assert_ne!(handle.child.id(), 0);
     }
 
@@ -329,7 +329,7 @@ mod tests {
         let rootfs_path = image_path.join("rootfs");
         let metadata_path = image_path.join("metadata.json");
 
-        assert!(image_hash.len() > 0);
+        assert!(!image_hash.is_empty());
         assert!(image_path.to_string_lossy().contains("images"));
         assert!(rootfs_path.to_string_lossy().contains("rootfs"));
         assert!(metadata_path.to_string_lossy().contains("metadata.json"));

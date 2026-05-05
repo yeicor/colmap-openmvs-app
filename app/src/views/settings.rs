@@ -3,17 +3,18 @@ use crate::mycomponents::page_header::BackButton;
 use crate::mycomponents::{Banner, BannerType, PageHeader};
 use crate::server::{get_settings, update_settings};
 use crate::Route;
+use colmap_openmvs_api::Settings;
 use dioxus::document::eval;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{BsFolder, BsGear};
 use dioxus_free_icons::Icon;
 
 #[component]
-pub fn Settings() -> Element {
-    let mut projects_folder = use_signal(|| String::new());
+pub fn SettingsView() -> Element {
+    let mut projects_folder = use_signal(String::new);
     let mut loading = use_signal(|| true);
-    let mut error = use_signal(|| String::new());
-    let mut success = use_signal(|| String::new());
+    let mut error = use_signal(String::new);
+    let mut success = use_signal(String::new);
     let mut has_changed = use_signal(|| false);
 
     use_effect(move || {
@@ -42,7 +43,7 @@ pub fn Settings() -> Element {
                     return;
                 }
 
-                let new_settings = crate::server::Settings {
+                let new_settings = Settings {
                     projects_folder: folder,
                 };
 
@@ -124,12 +125,11 @@ pub fn Settings() -> Element {
                                 directory: true,
                                 style: "display: none;",
                                 onchange: move |evt| {
-                                    for file in evt.files() {
+                                    if let Some(file) = evt.files().into_iter().next() {
                                         projects_folder.set(file.path().to_str().expect("Invalid path").to_string());
                                         has_changed.set(true);
                                         error.set(String::new());
                                         success.set(String::new());
-                                        break;
                                     }
                                 }
                             }

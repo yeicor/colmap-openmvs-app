@@ -1,0 +1,25 @@
+[package]
+name = "colmap-openmvs-app"
+version = "0.1.0"
+authors = ["Yeicor <yeicor+no-reply@github.com>"]
+edition = "2021"
+
+[dependencies]
+colmap-openmvs-api = { path = "../api" }
+colmap-openmvs-backend = { path = "../backend", optional = true }
+
+dioxus = { version = "0.7.7", features = ["fullstack", "router"] }
+dioxus-free-icons = { version = "0.10.0", features = ["bootstrap"] }
+dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version = "0.0.1", default-features = false }
+
+urlencoding = { version = "2.1" }
+
+[features]
+default = []
+
+# Client target features
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]
+mobile = ["dioxus/mobile"]
+
+server = ["dioxus/server", "colmap-openmvs-backend"]

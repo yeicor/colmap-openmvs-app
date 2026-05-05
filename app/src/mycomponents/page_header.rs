@@ -48,7 +48,7 @@ pub fn PageHeaderButton(
                     }
                 }
             }
-            TooltipContent { side: ContentSide::Bottom, { extra_tooltip.unwrap_or_else(|| extra) } }
+            TooltipContent { side: ContentSide::Bottom, { extra_tooltip.unwrap_or(extra) } }
         }
     }
 }
