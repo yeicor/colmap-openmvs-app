@@ -38,33 +38,33 @@ pub(crate) fn default_projects_folder() -> String {
     }
 }
 
-pub(crate) fn default_proot_images_dir() -> String {
+pub(crate) fn default_proot_dir() -> String {
     if cfg!(target_os = "android") {
         // Android: use app-specific files dir
-        "/data/data/com.github.yeicor.colmap_openmvs_app/files/runtimes/proot/images".to_string()
+        "/data/data/com.github.yeicor.colmap_openmvs_app/files/runtimes/proot".to_string()
     } else if cfg!(target_os = "ios") {
         // iOS: use Documents directory
-        "~/Documents/runtimes/proot/images".to_string()
+        "~/Documents/runtimes/proot".to_string()
     } else if cfg!(target_os = "windows") {
-        // Windows: use %APPDATA%/colmap_openmvs/runtimes/proot/images
+        // Windows: use %APPDATA%/colmap_openmvs/runtimes/proot
         match std::env::var("APPDATA") {
-            Ok(appdata) => format!("{}/colmap_openmvs/runtimes/proot/images", appdata),
-            Err(_) => "./runtimes/proot/images".to_string(),
+            Ok(appdata) => format!("{}/colmap_openmvs/runtimes/proot", appdata),
+            Err(_) => "./runtimes/proot".to_string(),
         }
     } else if cfg!(target_os = "macos") {
-        // macOS: use ~/Library/Application Support/colmap_openmvs/runtimes/proot/images
+        // macOS: use ~/Library/Application Support/colmap_openmvs/runtimes/proot
         match std::env::var("HOME") {
             Ok(home) => format!(
-                "{}/Library/Application Support/colmap_openmvs/runtimes/proot/images",
+                "{}/Library/Application Support/colmap_openmvs/runtimes/proot",
                 home
             ),
-            Err(_) => "./runtimes/proot/images".to_string(),
+            Err(_) => "./runtimes/proot".to_string(),
         }
     } else {
-        // Linux and other Unix: use ~/.local/share/colmap_openmvs/runtimes/proot/images
+        // Linux and other Unix: use ~/.local/share/colmap_openmvs/runtimes/proot
         match std::env::var("HOME") {
-            Ok(home) => format!("{}/.local/share/colmap_openmvs/runtimes/proot/images", home),
-            Err(_) => "./runtimes/proot/images".to_string(),
+            Ok(home) => format!("{}/.local/share/colmap_openmvs/runtimes/proot", home),
+            Err(_) => "./runtimes/proot".to_string(),
         }
     }
 }

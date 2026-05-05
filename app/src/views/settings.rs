@@ -491,9 +491,6 @@ fn RuntimeImagesTab() -> Element {
                 Ok(mut stream) => {
                     while let Some(Ok(event)) = stream.recv().await {
                         match event {
-                            PrepareProgress::ResolvingImage => {
-                                prepare_status.set("Resolving…".to_string());
-                            }
                             PrepareProgress::Downloading {
                                 downloaded_bytes,
                                 total_bytes,
@@ -512,21 +509,6 @@ fn RuntimeImagesTab() -> Element {
                                     progress * 100.0
                                 ));
                             }
-                            PrepareProgress::WritingRootFs => {
-                                prepare_status.set("Writing rootfs…".to_string());
-                            }
-                            PrepareProgress::Configuring => {
-                                prepare_status.set("Configuring…".to_string());
-                            }
-                            PrepareProgress::Completed => {
-                                success.set(format!("Tag '{}' prepared successfully!", tag));
-                                prepare_status.set(String::new());
-                                preparing.set(false);
-                                if let Ok(imgs) = list_runtime_images().await {
-                                    ready_tags.set(imgs);
-                                }
-                                return;
-                            }
                             PrepareProgress::Error { message } => {
                                 error.set(format!("Preparation failed: {}", message));
                                 prepare_status.set(String::new());
@@ -534,6 +516,11 @@ fn RuntimeImagesTab() -> Element {
                                 return;
                             }
                         }
+                    }
+                    success.set(format!("Tag '{}' prepared successfully!", tag));
+                    prepare_status.set(String::new());
+                    if let Ok(imgs) = list_runtime_images().await {
+                        ready_tags.set(imgs);
                     }
                     preparing.set(false);
                 }

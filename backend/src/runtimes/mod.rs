@@ -3,7 +3,7 @@ mod image_manager;
 mod proot;
 mod registry;
 
-pub use image_manager::{ImageConfig, ImageDigestInfo, ImageManager};
+pub use image_manager::{ImageConfig, ImageManager};
 pub use proot::PRoot;
 pub use registry::{ImageDigest, ImageTag, RegistryClient, RemoteImage, UpdateInfo, Version};
 
@@ -258,12 +258,12 @@ pub struct RuntimeFactory;
 impl RuntimeFactory {
     /// Create a [`PRoot`] runtime using the configured install directory from settings.
     pub fn proot() -> PRoot {
-        let default_dir = crate::settings::default_proot_images_dir().into();
+        let default_dir = crate::settings::default_proot_dir().into();
         PRoot::new(default_dir)
     }
 
     /// Create a [`PRoot`] runtime with a custom install directory.
-    pub fn proot_with_dir(install_dir: PathBuf) -> PRoot {
-        PRoot::new(install_dir)
+    pub fn proot_with_dir(runtime_dir: PathBuf) -> PRoot {
+        PRoot::new(runtime_dir)
     }
 }

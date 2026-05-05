@@ -1,23 +1,19 @@
-//! Docker image management using OCI Distribution specification.
+//! OCI image pulling and extraction using oras-project/oci-client.
 //!
 //! This module handles:
 //! - Pulling container images from OCI registries (Docker Hub, etc.)
-//! - Storing images by their content digest (immutable identifier)
-//! - Extracting rootfs from image layers
-//! - Managing image metadata and configuration
-//!
-//! Images are identified by their digest (SHA256 of manifest), not by tag.
-//! Tags are mutable references that can be updated; digests are immutable.
+//! - Extracting image layers to a rootfs directory
+//! - Parsing and returning complete image configuration (entrypoint, env, cmd, etc.)
+//! - Progress reporting during download and extraction
 
-use colmap_openmvs_api::PrepareProgress;
 use anyhow::{anyhow, Result};
-use oci_distribution::client::Client;
-use oci_distribution::secrets::RegistryAuth;
-use oci_distribution::Reference;
+use colmap_openmvs_api::PrepareProgress;
+use oci_client::config::ConfigFile;
+use oci_client::manifest::OciManifest;
+use oci_client::secrets::RegistryAuth;
+use oci_client::{Client, Reference};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::str::FromStr;
-use tokio::fs;
 use tokio::sync::mpsc;
 
 /// Docker image configuration extracted from image config blob
@@ -40,19 +36,9 @@ impl Default for ImageConfig {
     }
 }
 
-/// Image digest info - stores both tag and computed digest
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageDigestInfo {
-    /// The image reference (tag) that was pulled
-    pub reference: String,
-    /// The digest of the pulled manifest (immutable content hash)
-    pub digest: String,
-}
-
 /// Docker image manager using OCI Distribution client
 pub struct ImageManager {
     client: Client,
-    registry_auth: RegistryAuth,
 }
 
 impl ImageManager {
@@ -60,64 +46,55 @@ impl ImageManager {
     pub fn new() -> Self {
         Self {
             client: Client::default(),
-            registry_auth: RegistryAuth::Anonymous,
         }
     }
 
     /// Pull a Docker image and extract to a rootfs directory
     ///
     /// # Arguments
-    /// * `image_ref` - Image reference (e.g., "ubuntu:22.04", "library/alpine:latest")
+    /// * `image_ref` - Image reference (e.g., "docker.io/library/alpine:latest")
     /// * `target_dir` - Directory where rootfs will be extracted
     /// * `progress_tx` - Channel to send progress events
     ///
     /// # Returns
-    /// Tuple of (ImageDigestInfo, ImageConfig) - digest info and image configuration
+    /// ImageConfig - image configuration with entrypoint, env, cmd, working_dir
     pub async fn pull_and_extract(
         &self,
         image_ref: &str,
         target_dir: &Path,
         progress_tx: &mpsc::Sender<PrepareProgress>,
-    ) -> Result<(ImageDigestInfo, ImageConfig)> {
-        // Send resolving event
-        let _ = progress_tx.send(PrepareProgress::ResolvingImage).await;
-
+    ) -> Result<ImageConfig> {
         // Parse image reference
-        let reference = Reference::from_str(image_ref)
+        let reference: Reference = image_ref
+            .parse()
             .map_err(|e| anyhow!("Invalid image reference '{}': {}", image_ref, e))?;
 
-        // Pull manifest and get digest
-        let (manifest, digest) = self
+        // Pull manifest to get image config and layers
+        let (manifest, _digest) = self
             .client
-            .pull_manifest(&reference, &self.registry_auth)
+            .pull_manifest(&reference, &RegistryAuth::Anonymous)
             .await
             .map_err(|e| anyhow!("Failed to pull manifest for {}: {}", image_ref, e))?;
 
-        // Get config descriptor and download config blob
-        let config_descriptor = match &manifest {
-            oci_distribution::manifest::OciManifest::Image(img) => &img.config,
-            oci_distribution::manifest::OciManifest::ImageIndex(_) => {
-                return Err(anyhow!(
-                    "Multi-platform image index not supported, pull specific platform"
-                ));
+        // Handle both single-platform and multi-platform images
+        let (config_descriptor, layers) = match manifest {
+            OciManifest::Image(img) => (img.config.clone(), img.layers.clone()),
+            OciManifest::ImageIndex(index) => {
+                // Auto-select platform matching the host
+                let (host_os, host_arch) = get_host_platform();
+                let selected_manifest = self
+                    .select_platform_manifest(&reference, &index, &host_os, &host_arch)
+                    .await?;
+                (
+                    selected_manifest.config.clone(),
+                    selected_manifest.layers.clone(),
+                )
             }
         };
 
-        let mut config_data = Vec::new();
-        self.client
-            .pull_blob(&reference, config_descriptor, &mut config_data)
-            .await
-            .map_err(|e| anyhow!("Failed to download image config: {}", e))?;
-
-        let image_config = self.parse_image_config(&config_data)?;
-
-        // Get layers for progress calculation
-        let layers = match &manifest {
-            oci_distribution::manifest::OciManifest::Image(img) => &img.layers,
-            _ => return Err(anyhow!("Unexpected manifest type")),
-        };
-
-        let total_size: u64 = layers.iter().map(|l| l.size as u64).sum();
+        // Calculate total download size
+        let total_size: u64 =
+            layers.iter().map(|l| l.size as u64).sum::<u64>() + config_descriptor.size as u64;
 
         // Send downloading event
         let _ = progress_tx
@@ -128,10 +105,11 @@ impl ImageManager {
             .await;
 
         // Create target directory
-        fs::create_dir_all(target_dir).await?;
+        tokio::fs::create_dir_all(target_dir).await?;
 
         // Download and extract layers
         let mut downloaded_bytes: u64 = 0;
+
         for (index, layer_descriptor) in layers.iter().enumerate() {
             let _ = progress_tx
                 .send(PrepareProgress::ExtractingLayer {
@@ -140,12 +118,18 @@ impl ImageManager {
                 })
                 .await;
 
+            // Download layer blob
             let mut layer_data = Vec::new();
             self.client
-                .pull_blob(&reference, layer_descriptor, &mut layer_data)
+                .pull_blob(
+                    &reference,
+                    layer_descriptor.digest.as_str(),
+                    &mut layer_data,
+                )
                 .await
                 .map_err(|e| anyhow!("Failed to download layer {}: {}", index, e))?;
 
+            // Extract layer (gzip tar archive)
             self.extract_layer(target_dir, &layer_data).await?;
 
             downloaded_bytes += layer_descriptor.size as u64;
@@ -157,45 +141,26 @@ impl ImageManager {
                 .await;
         }
 
-        // Send writing rootfs event
-        let _ = progress_tx.send(PrepareProgress::WritingRootFs).await;
-
-        // Ensure standard directories exist
-        self.ensure_rootfs_structure(target_dir).await?;
-
-        // Send configuring event
-        let _ = progress_tx.send(PrepareProgress::Configuring).await;
-
-        let digest_info = ImageDigestInfo {
-            reference: image_ref.to_string(),
-            digest,
-        };
-
-        Ok((digest_info, image_config))
-    }
-
-    /// Parse image configuration from config blob
-    fn parse_image_config(&self, data: &[u8]) -> Result<ImageConfig> {
-        #[derive(Deserialize)]
-        struct OciImageConfig {
-            #[serde(default)]
-            env: Vec<String>,
-            #[serde(default)]
-            entrypoint: Option<Vec<String>>,
-            #[serde(default)]
-            cmd: Option<Vec<String>>,
-            #[serde(rename = "WorkingDir", default)]
-            working_dir: Option<String>,
-        }
-
-        let oci_config: OciImageConfig = serde_json::from_slice(data)
-            .map_err(|e| anyhow!("Failed to parse image config: {}", e))?;
-
+        let mut config_bytes: Vec<u8> = Vec::new();
+        self.client
+            .pull_blob(
+                &reference,
+                config_descriptor.digest.as_str(),
+                &mut config_bytes,
+            )
+            .await
+            .map_err(|e| anyhow!("Failed to download image config blob: {}", e))?;
+        let config: ConfigFile = serde_json::from_slice(config_bytes.as_slice())
+            .map_err(|e| anyhow!("Failed to parse image config JSON: {}", e))?;
+        let config_ref = config.config.as_ref();
         Ok(ImageConfig {
-            env: oci_config.env,
-            entrypoint: oci_config.entrypoint,
-            cmd: oci_config.cmd,
-            working_dir: oci_config.working_dir,
+            env: config_ref
+                .and_then(|c| c.env.as_ref())
+                .cloned()
+                .unwrap_or_default(),
+            entrypoint: config_ref.and_then(|c| c.entrypoint.as_ref()).cloned(),
+            cmd: config_ref.and_then(|c| c.cmd.as_ref()).cloned(),
+            working_dir: config_ref.and_then(|c| c.working_dir.as_ref()).cloned(),
         })
     }
 
@@ -227,28 +192,46 @@ impl ImageManager {
 
         Ok(())
     }
+}
 
-    /// Ensure standard rootfs directory structure exists
-    async fn ensure_rootfs_structure(&self, rootfs_dir: &Path) -> Result<()> {
-        let dirs = vec![
-            "bin", "boot", "dev", "etc", "home", "lib", "lib64", "media", "mnt", "opt", "proc",
-            "root", "run", "sbin", "srv", "sys", "tmp", "usr", "var",
-        ];
+impl ImageManager {
+    /// Select the appropriate manifest from an image index based on host platform
+    async fn select_platform_manifest(
+        &self,
+        reference: &Reference,
+        index: &oci_client::manifest::OciImageIndex,
+        host_os: &str,
+        host_arch: &str,
+    ) -> Result<oci_client::manifest::OciImageManifest> {
+        // Find a matching platform in the index
+        let _matching_entry = index
+            .manifests
+            .iter()
+            .find(|entry| {
+                if let Some(platform) = &entry.platform {
+                    let os_str = platform.os.to_string().to_lowercase();
+                    let arch_str = platform.architecture.to_string().to_lowercase();
+                    os_str == host_os && arch_str == host_arch
+                } else {
+                    false
+                }
+            })
+            .ok_or_else(|| {
+                anyhow!(
+                    "No image available for platform {}/{} in multi-arch image",
+                    host_os,
+                    host_arch
+                )
+            })?;
 
-        for dir in dirs {
-            let path = rootfs_dir.join(dir);
-            if !path.exists() {
-                fs::create_dir_all(&path).await?;
-            }
-        }
+        // Pull the specific manifest for this platform
+        let (manifest, _, _) = self
+            .client
+            .pull_manifest_and_config(&reference, &RegistryAuth::Anonymous)
+            .await
+            .map_err(|e| anyhow!("Failed to pull platform-specific manifest: {}", e))?;
 
-        // Create essential files
-        let etc_dir = rootfs_dir.join("etc");
-        if !etc_dir.join("hostname").exists() {
-            fs::write(etc_dir.join("hostname"), "container\n").await?;
-        }
-
-        Ok(())
+        Ok(manifest)
     }
 }
 
@@ -256,4 +239,28 @@ impl Default for ImageManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Get the current host's OS and architecture
+fn get_host_platform() -> (&'static str, &'static str) {
+    let os = match std::env::consts::OS {
+        "linux" => "linux",
+        "macos" => "darwin",
+        "windows" => "windows",
+        "android" => "android",
+        "ios" => "ios",
+        other => other,
+    };
+
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        "arm" => "arm",
+        "i686" => "386",
+        "powerpc64" => "ppc64le",
+        "s390x" => "s390x",
+        other => other,
+    };
+
+    (os, arch)
 }

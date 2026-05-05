@@ -73,33 +73,27 @@ pub async fn list_runtime_images() -> Result<Vec<PreparedImageInfo>> {
 /// Prepare a container image for execution, streaming progress events to the caller.
 pub async fn prepare_runtime_image(image: String) -> Result<ServerEvents<PrepareProgress>> {
     let rt = RuntimeFactory::proot();
-    let (progress_tx, mut progress_rx) = prepare_progress_channel();
     let (stream_tx, stream_rx) = futures::channel::mpsc::unbounded::<PrepareProgress>();
 
-    let stream_tx_err = stream_tx.clone();
-    let image_for_task = image.clone();
-    let rt_for_task = rt.clone();
-
-    // Task A: run the prepare operation; on error, send an Error event.
     tokio::spawn(async move {
-        if let Err(e) = rt_for_task.prepare(&image_for_task, progress_tx).await {
-            let _ = stream_tx_err.unbounded_send(PrepareProgress::Error {
-                message: e.to_string(),
-            });
-        }
-    });
+        let (progress_tx, mut progress_rx) = prepare_progress_channel();
 
-    // Task B: forward events directly.
-    tokio::spawn(async move {
+        // Spawn the prepare operation in the background.
+        let rt_clone = rt.clone();
+        let image_clone = image.clone();
+        let prepare_handle =
+            tokio::spawn(async move { rt_clone.prepare(&image_clone, progress_tx).await });
+
+        // Forward progress events until completion or error.
         while let Some(event) = progress_rx.recv().await {
-            let is_terminal = matches!(
-                event,
-                PrepareProgress::Completed | PrepareProgress::Error { .. }
-            );
             let _ = stream_tx.unbounded_send(event);
-            if is_terminal {
-                break;
-            }
+        }
+
+        // Check if prepare task failed (e.g., panicked).
+        if let Err(e) = prepare_handle.await {
+            let _ = stream_tx.unbounded_send(PrepareProgress::Error {
+                message: format!("Prepare task failed: {}", e),
+            });
         }
     });
 

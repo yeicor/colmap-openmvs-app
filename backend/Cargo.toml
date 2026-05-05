@@ -50,8 +50,8 @@ which = { version = "5.0" }
 
 futures = "0.3.32"
 
-# OCI Distribution client for pulling container images
-oci-distribution = { version = "0.11" }
+# OCI Distribution client for pulling container images (renamed to oras-project/rust-oci-client)
+oci-client = { version = "0.16" }
 
 # Gzip decompression for Docker layers
 flate2 = { version = "1.0" }

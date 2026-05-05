@@ -77,7 +77,6 @@ pub struct ImageTagInfo {
 /// Progress events during container image preparation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum PrepareProgress {
-    ResolvingImage,
     Downloading {
         downloaded_bytes: u64,
         total_bytes: Option<u64>,
@@ -86,9 +85,6 @@ pub enum PrepareProgress {
         layer: String,
         progress: f32,
     },
-    WritingRootFs,
-    Configuring,
-    Completed,
     Error {
         message: String,
     },

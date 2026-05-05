@@ -2,9 +2,7 @@ use super::{
     ImageHash, ImageTag, PrepareProgressTx, PreparedImage, ProcessHandle, Runtime, RuntimeResult,
 };
 use async_trait::async_trait;
-use colmap_openmvs_api::PrepareProgress;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -20,7 +18,7 @@ struct ImageMetadata {
     #[serde(default)]
     build_date: Option<String>,
     #[serde(default)]
-    env: HashMap<String, String>,
+    env: Vec<String>,
     #[serde(default)]
     entrypoint: Option<Vec<String>>,
     #[serde(default)]
@@ -36,16 +34,22 @@ struct ImageMetadata {
 /// PRoot-based container runtime.
 ///
 /// Uses the system `proot` binary when available, or downloads one into
-/// `install_dir`.  Obtain an instance through [`super::RuntimeFactory`].
+/// the runtime directory.  Images are stored in a separate images subdirectory.
+/// Obtain an instance through [`super::RuntimeFactory`].
 #[derive(Debug, Clone)]
 pub struct PRoot {
+    pub runtime_dir: PathBuf,
     pub images_dir: PathBuf,
 }
 
 impl PRoot {
-    /// Create a PRoot runtime that stores its data in `install_dir`.
-    pub fn new(images_dir: PathBuf) -> Self {
-        PRoot { images_dir }
+    /// Create a PRoot runtime with separate runtime and images directories.
+    pub fn new(runtime_dir: PathBuf) -> Self {
+        let images_dir = runtime_dir.join("images");
+        PRoot {
+            runtime_dir,
+            images_dir,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -207,9 +211,9 @@ impl PRoot {
             ));
         }
 
-        tokio::fs::create_dir_all(&self.images_dir)
+        tokio::fs::create_dir_all(&self.runtime_dir)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to create install directory: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create runtime directory: {}", e))?;
 
         let url = "https://proot.gitlab.io/proot/bin/proot";
         let bytes = reqwest::Client::new()
@@ -221,7 +225,7 @@ impl PRoot {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to read download: {}", e))?;
 
-        let proot_path = self.images_dir.join("proot");
+        let proot_path = self.runtime_dir.join("proot");
         tokio::fs::write(&proot_path, &bytes)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to write proot binary: {}", e))?;
@@ -239,9 +243,9 @@ impl PRoot {
     }
 
     async fn download_android(&self, version: &str) -> RuntimeResult<()> {
-        tokio::fs::create_dir_all(&self.images_dir)
+        tokio::fs::create_dir_all(&self.runtime_dir)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to create install directory: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create runtime directory: {}", e))?;
 
         let client = reqwest::Client::new();
         let base_url = "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/";
@@ -275,7 +279,7 @@ impl PRoot {
             .to_vec();
 
         // All subsequent work is CPU/disk-bound — offload to a blocking thread.
-        let install_dir = self.images_dir.clone();
+        let install_dir = self.runtime_dir.clone();
         let pkg = package_name.to_string();
 
         tokio::task::spawn_blocking(move || {
@@ -300,57 +304,8 @@ impl PRoot {
     }
 
     // -----------------------------------------------------------------------
-    // Rootfs helpers
-    // -----------------------------------------------------------------------
-
-    async fn create_minimal_rootfs(&self, rootfs_dir: &Path) -> RuntimeResult<()> {
-        let dirs = [
-            "bin",
-            "sbin",
-            "usr/bin",
-            "usr/sbin",
-            "usr/local/bin",
-            "lib",
-            "lib64",
-            "usr/lib",
-            "etc",
-            "var",
-            "var/log",
-            "tmp",
-            "home",
-            "root",
-        ];
-        for dir in dirs {
-            tokio::fs::create_dir_all(rootfs_dir.join(dir))
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to create directory {}: {}", dir, e))?;
-        }
-        Ok(())
-    }
-
-    async fn configure_resolv_conf(&self, rootfs_dir: &Path) -> RuntimeResult<()> {
-        let content = tokio::fs::read_to_string("/etc/resolv.conf")
-            .await
-            .unwrap_or_else(|_| "nameserver 8.8.8.8\nnameserver 8.8.4.4\n".to_string());
-
-        tokio::fs::write(rootfs_dir.join("etc/resolv.conf"), content)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to write resolv.conf: {}", e))?;
-        Ok(())
-    }
-
-    // -----------------------------------------------------------------------
     // Misc
     // -----------------------------------------------------------------------
-
-    /// Deterministic hash of an image name used as its on-disk directory name.
-    pub fn hash_image_name(&self, image: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        image.hash(&mut hasher);
-        format!("{:x}", hasher.finish())
-    }
 
     async fn calculate_dir_size_async(&self, path: &Path) -> RuntimeResult<u64> {
         let mut size = 0u64;
@@ -399,7 +354,7 @@ impl Runtime for PRoot {
             return self.get_system_proot_version().await;
         }
 
-        let proot_bin = self.images_dir.join("proot");
+        let proot_bin = self.runtime_dir.join("proot");
         if proot_bin.exists() {
             return self.get_installed_proot_version(&proot_bin).await;
         }
@@ -437,36 +392,29 @@ impl Runtime for PRoot {
     }
 
     async fn prepare(&self, image: &str, tx: PrepareProgressTx) -> RuntimeResult<()> {
-        tx.send(PrepareProgress::ResolvingImage).await.ok();
+        use super::image_manager::ImageManager;
 
-        let image_hash = self.hash_image_name(image);
-        let image_dir = self.images_dir.join(&image_hash);
+        // Use tag as directory name (normalized)
+        let tag_dir_name = image.replace(':', "_").replace('/', "_");
+        let image_dir = self.images_dir.join(&tag_dir_name);
         let rootfs_dir = image_dir.join("rootfs");
 
-        tokio::fs::create_dir_all(&rootfs_dir)
+        tokio::fs::create_dir_all(&image_dir)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create image directory: {}", e))?;
 
-        tx.send(PrepareProgress::Downloading {
-            downloaded_bytes: 0,
-            total_bytes: None,
-        })
-        .await
-        .ok();
+        // Pull and extract image using OCI-compliant client
+        let manager = ImageManager::new();
+        let image_config = manager.pull_and_extract(image, &rootfs_dir, &tx).await?;
 
-        // Build minimal rootfs structure
-        self.create_minimal_rootfs(&rootfs_dir).await?;
-
-        tx.send(PrepareProgress::WritingRootFs).await.ok();
-
-        // Persist image metadata
+        // Persist complete image metadata
         let metadata = ImageMetadata {
             tag: image.to_string(),
             build_date: Some(chrono::Utc::now().to_rfc3339()),
-            env: HashMap::new(),
-            entrypoint: None,
-            cmd: None,
-            working_dir: Some("/".to_string()),
+            env: image_config.env,
+            entrypoint: image_config.entrypoint,
+            cmd: image_config.cmd,
+            working_dir: image_config.working_dir.or(Some("/".to_string())),
         };
         let metadata_json = serde_json::to_string_pretty(&metadata)
             .map_err(|e| anyhow::anyhow!("Failed to serialize metadata: {}", e))?;
@@ -474,18 +422,13 @@ impl Runtime for PRoot {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to write metadata: {}", e))?;
 
-        tx.send(PrepareProgress::Configuring).await.ok();
-
-        self.configure_resolv_conf(&rootfs_dir).await?;
-
-        tx.send(PrepareProgress::Completed).await.ok();
-
         Ok(())
     }
 
-    async fn remove(&self, image: &str) -> RuntimeResult<()> {
-        let image_hash = self.hash_image_name(image);
-        let image_dir = self.images_dir.join(&image_hash);
+    async fn remove(&self, image_tag: &str) -> RuntimeResult<()> {
+        // Use tag as directory name (normalized)
+        let tag_dir_name = image_tag.replace(':', "_").replace('/', "_");
+        let image_dir = self.images_dir.join(&tag_dir_name);
 
         if image_dir.exists() {
             tokio::fs::remove_dir_all(&image_dir)
@@ -496,8 +439,8 @@ impl Runtime for PRoot {
     }
 
     async fn run(&self, image: &str, args: &[String]) -> RuntimeResult<ProcessHandle> {
-        let image_hash = self.hash_image_name(image);
-        let image_dir = self.images_dir.join(&image_hash);
+        let tag_dir_name = image.replace(':', "_").replace('/', "_");
+        let image_dir = self.images_dir.join(&tag_dir_name);
         let rootfs_dir = image_dir.join("rootfs");
 
         if !rootfs_dir.exists() {
@@ -519,7 +462,7 @@ impl Runtime for PRoot {
             ImageMetadata {
                 tag: String::new(),
                 build_date: None,
-                env: HashMap::new(),
+                env: Vec::new(),
                 entrypoint: None,
                 cmd: None,
                 working_dir: Some("/".to_string()),
@@ -542,8 +485,10 @@ impl Runtime for PRoot {
         let mut cmd = Command::new(&proot_bin);
         cmd.env_clear();
 
-        for (key, value) in &metadata.env {
-            cmd.env(key, value);
+        for env_var in &metadata.env {
+            if let Some((key, value)) = env_var.split_once('=') {
+                cmd.env(key, value);
+            }
         }
         cmd.env(
             "PATH",
@@ -609,24 +554,25 @@ impl Runtime for PRoot {
                 continue;
             }
 
-            if let Some(hash_str) = path.file_name().and_then(|n| n.to_str()) {
+            if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
                 // Try to read metadata to get the original tag and build date
                 let (tag_str, build_date) = match tokio::fs::read_to_string(&metadata_path).await {
                     Ok(content) => match serde_json::from_str::<ImageMetadata>(&content) {
                         Ok(metadata) if !metadata.tag.is_empty() => {
                             (metadata.tag, metadata.build_date)
                         }
-                        Ok(metadata) => (format!("unknown:{}", hash_str), metadata.build_date),
-                        Err(_) => (format!("unknown:{}", hash_str), None),
+                        Ok(metadata) => (format!("unknown:{}", dir_name), metadata.build_date),
+                        Err(_) => (format!("unknown:{}", dir_name), None),
                     },
-                    Err(_) => (format!("unknown:{}", hash_str), None),
+                    Err(_) => (format!("unknown:{}", dir_name), None),
                 };
 
-                let tag = ImageTag::from_string(tag_str);
+                let tag = ImageTag::from_string(tag_str.clone());
                 let size = self.calculate_dir_size_async(&path).await?;
+                // Use tag as hash for identification
                 images.push(PreparedImage::with_build_date(
                     tag,
-                    ImageHash::new(hash_str.to_string()),
+                    ImageHash::new(tag_str),
                     size,
                     build_date,
                 ));
