@@ -12,14 +12,20 @@ serde = { version = "*", features = ["derive"] }
 serde_json = { version = "1.0" }
 
 # Async runtime
-tokio = { version = "*", features = ["sync", "macros", "rt", "rt-multi-thread"] }
+tokio = { version = "*", features = ["full"] }
 
 # Async utilities for streaming
-futures-util = { version = "0.3" }
+futures-util = { version = "0.3", features = ["sink", "io"] }
 dioxus = { version = "0.7.7", features = ["fullstack", "server"] }
+
+# Async trait support
+async-trait = { version = "0.1" }
 
 # Error handling
 anyhow = { version = "1.0" }
+
+# Regex for version parsing
+regex = { version = "1.10" }
 
 # Image processing for image resizing
 image = { version = "0.25.10" }

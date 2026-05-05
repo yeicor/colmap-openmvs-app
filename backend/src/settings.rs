@@ -7,8 +7,8 @@ pub static SETTINGS: dioxus::fullstack::Lazy<RwLock<Settings>> = dioxus::fullsta
     || async move { Ok::<_, Infallible>(RwLock::new(default_settings())) },
 );
 
-fn default_settings() -> Settings {
-    let projects_folder = if cfg!(target_os = "android") {
+pub(crate) fn default_projects_folder() -> String {
+    if cfg!(target_os = "android") {
         // Android: use app-specific files dir
         "/data/data/com.github.yeicor.colmap_openmvs_app/files/projects".to_string()
     } else if cfg!(target_os = "ios") {
@@ -35,8 +35,13 @@ fn default_settings() -> Settings {
             Ok(home) => format!("{}/.local/share/colmap_openmvs/projects", home),
             Err(_) => "./projects".to_string(),
         }
-    };
-    Settings { projects_folder }
+    }
+}
+
+fn default_settings() -> Settings {
+    Settings {
+        projects_folder: default_projects_folder(),
+    }
 }
 
 pub async fn get_settings() -> Result<Settings> {

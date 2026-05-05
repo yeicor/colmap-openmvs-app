@@ -1,11 +1,17 @@
-use super::{ProcessHandle, RuntimeResult};
+use super::{
+    ImageHash, ImageTag, PrepareProgressTx, PreparedImage, ProcessHandle, Runtime, RuntimeResult,
+};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use tokio::process::Command;
 
-/// Progress events during image preparation
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+/// Progress events emitted by [`PRoot::prepare`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PrepareProgress {
     ResolvingImage,
@@ -22,7 +28,11 @@ pub enum PrepareProgress {
     Completed,
 }
 
-/// Docker image metadata stored after preparation
+// ---------------------------------------------------------------------------
+// Internal types
+// ---------------------------------------------------------------------------
+
+/// Metadata stored alongside each prepared image rootfs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ImageMetadata {
     env: HashMap<String, String>,
@@ -31,71 +41,41 @@ struct ImageMetadata {
     working_dir: Option<String>,
 }
 
-/// PRoot runtime configuration
+// ---------------------------------------------------------------------------
+// PRoot struct
+// ---------------------------------------------------------------------------
+
+/// PRoot-based container runtime.
+///
+/// Uses the system `proot` binary when available, or downloads one into
+/// `install_dir`.  Obtain an instance through [`super::RuntimeFactory`].
 #[derive(Debug, Clone)]
 pub struct PRoot {
     pub install_dir: PathBuf,
 }
 
 impl PRoot {
-    /// Create a new PRoot runtime with specified install directory
+    /// Create a PRoot runtime that stores its data in `install_dir`.
     pub fn new(install_dir: PathBuf) -> Self {
         PRoot { install_dir }
     }
 
-    /// Check if PRoot is supported on this platform
-    pub fn is_supported(&self) -> RuntimeResult<()> {
-        let target_os = std::env::consts::OS;
-        let target_arch = std::env::consts::ARCH;
-
-        // Check if system proot is available in PATH
-        if which::which("proot").is_ok() {
-            return Ok(());
-        }
-
-        // Check platform support
-        match (target_arch, target_os) {
-            ("x86_64", "linux") => Ok(()),
-            ("aarch64", "android") | ("x86_64", "android") => Ok(()),
-            (arch, os) => Err(anyhow::anyhow!(
-                "PRoot cannot be automatically installed on this platform (arch: {}, os: {}).
-                 Supported platforms: x86_64-linux, *-android. \
-                 You can install proot manually and add it to $PATH to use it on unsupported platforms.",
-                arch, os
-            )),
-        }
-    }
-
-    /// Get the version of proot
-    pub async fn version(&self) -> RuntimeResult<String> {
-        // Try system proot first
-        if which::which("proot").is_ok() {
-            return self.get_system_proot_version().await;
-        }
-
-        // Try installed version
-        let proot_bin = self.install_dir.join("proot");
-        if proot_bin.exists() {
-            return self.get_installed_proot_version(&proot_bin).await;
-        }
-
-        Err(anyhow::anyhow!(
-            "PRoot not found in PATH or install directory"
-        ))
-    }
+    // -----------------------------------------------------------------------
+    // Version helpers
+    // -----------------------------------------------------------------------
 
     async fn get_system_proot_version(&self) -> RuntimeResult<String> {
         let output = Command::new("proot")
             .arg("--version")
             .output()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to execute proot: {}", e))?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let combined = format!("{}{}", stdout, stderr);
-
-        // Parse version from output like:
-        // |__|  |__|__\_____/\_____/\____| v5.4.0-5f780cba
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         Self::parse_proot_version(&combined)
     }
 
@@ -103,20 +83,19 @@ impl PRoot {
         let output = Command::new(proot_bin)
             .arg("--version")
             .output()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to execute proot: {}", e))?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let combined = format!("{}{}", stdout, stderr);
-
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         Self::parse_proot_version(&combined)
     }
 
+    /// Parse a version string from raw proot `--version` output.
     pub fn parse_proot_version(output: &str) -> RuntimeResult<String> {
-        // Try to find a version number in the format: X.Y.Z or X.Y.Z-hash
-        // Look for patterns like: v5.4.0, 5.4.0, v5.4.0-5f780cba, 5.4.0-5f780cba
-
-        // First, try to find 'v' followed by a digit (common pattern)
         if let Some(pos) = output.find(['v', 'V']) {
             if let Some(next_char) = output[pos + 1..].chars().next() {
                 if next_char.is_ascii_digit() {
@@ -127,7 +106,6 @@ impl PRoot {
                         .unwrap_or("")
                         .trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '.')
                         .to_string();
-
                     if !version.is_empty()
                         && version.chars().next().is_some_and(|c| c.is_ascii_digit())
                     {
@@ -137,15 +115,12 @@ impl PRoot {
             }
         }
 
-        // If 'v' prefix not found, look for a bare version number (X.Y.Z pattern)
         for word in output.split_whitespace() {
             if let Some(first_char) = word.chars().next() {
                 if first_char.is_ascii_digit() {
                     let version = word
                         .trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '.')
                         .to_string();
-
-                    // Check if it looks like a version (has at least one dot or dash)
                     if version.contains('.') || version.contains('-') {
                         return Ok(version);
                     }
@@ -156,28 +131,11 @@ impl PRoot {
         Err(anyhow::anyhow!("Could not parse PRoot version from output"))
     }
 
-    /// Get available versions for download
-    pub async fn available_versions(&self) -> RuntimeResult<Vec<String>> {
-        // Check if system proot is available - if so, return current version
-        if which::which("proot").is_ok() {
-            let version = self.get_system_proot_version().await?;
-            return Ok(vec![version]);
-        }
-
-        let target_os = std::env::consts::OS;
-        let target_arch = std::env::consts::ARCH;
-
-        match (target_arch, target_os) {
-            ("x86_64", "linux") => self.fetch_linux_versions().await,
-            ("aarch64", "android") | ("x86_64", "android") => {
-                self.fetch_android_latest_version().await
-            }
-            _ => Err(anyhow::anyhow!("Unsupported platform for version fetching")),
-        }
-    }
+    // -----------------------------------------------------------------------
+    // Version fetching
+    // -----------------------------------------------------------------------
 
     async fn fetch_linux_versions(&self) -> RuntimeResult<Vec<String>> {
-        // Fetch tags from GitLab
         let client = reqwest::Client::new();
         let url = "https://gitlab.com/api/v4/projects/root%2Fproot/repository/tags";
 
@@ -198,15 +156,13 @@ impl PRoot {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to parse versions: {}", e))?;
 
-        let mut versions: Vec<String> = tags.iter().map(|t| t.name.clone()).collect();
+        let mut versions: Vec<String> = tags.into_iter().map(|t| t.name).collect();
         versions.sort();
-        versions.reverse(); // Most recent first
-
+        versions.reverse();
         Ok(versions)
     }
 
     async fn fetch_android_latest_version(&self) -> RuntimeResult<Vec<String>> {
-        // Fetch from Termux package repository
         let client = reqwest::Client::new();
         let url = "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/";
 
@@ -220,7 +176,6 @@ impl PRoot {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to read response: {}", e))?;
 
-        // Parse .deb filenames to extract versions
         let mut versions = Vec::new();
         for line in html.lines() {
             if let Some(start) = line.find("proot_") {
@@ -239,98 +194,76 @@ impl PRoot {
         versions.reverse();
         versions.dedup();
 
-        // Return only latest
-        if let Some(latest) = versions.first() {
-            Ok(vec![latest.clone()])
-        } else {
-            Err(anyhow::anyhow!(
-                "No PRoot versions found in Termux repository"
-            ))
-        }
+        versions
+            .into_iter()
+            .next()
+            .map(|v| vec![v])
+            .ok_or_else(|| anyhow::anyhow!("No PRoot versions found in Termux repository"))
     }
 
-    /// Download and install a specific version of PRoot
-    pub async fn download(&self, version: &str) -> RuntimeResult<()> {
-        // Check if system proot is available - if so, no-op
-        if which::which("proot").is_ok() {
-            return Ok(());
-        }
-
-        let target_os = std::env::consts::OS;
-        let target_arch = std::env::consts::ARCH;
-
-        match (target_arch, target_os) {
-            ("x86_64", "linux") => self.download_linux(version).await,
-            ("aarch64", "android") | ("x86_64", "android") => self.download_android(version).await,
-            _ => Err(anyhow::anyhow!("Unsupported platform for download")),
-        }
-    }
+    // -----------------------------------------------------------------------
+    // Download helpers
+    // -----------------------------------------------------------------------
 
     async fn download_linux(&self, version: &str) -> RuntimeResult<()> {
-        // Get latest version
         let latest_versions = self.fetch_linux_versions().await?;
         let latest = latest_versions
             .first()
-            .ok_or(anyhow::anyhow!("No versions available"))?;
+            .ok_or_else(|| anyhow::anyhow!("No versions available"))?;
 
         if version != latest {
             return Err(anyhow::anyhow!(
-                "Only latest version ({}) is supported for download, requested: {}",
+                "Only the latest version ({}) is available for download, requested: {}",
                 latest,
                 version
             ));
         }
 
-        // Create install directory
-        fs::create_dir_all(&self.install_dir)
+        tokio::fs::create_dir_all(&self.install_dir)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to create install directory: {}", e))?;
 
-        // Download proot binary
         let url = "https://proot.gitlab.io/proot/bin/proot";
-        let client = reqwest::Client::new();
-        let response = client
+        let bytes = reqwest::Client::new()
             .get(url)
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to download: {}", e))?;
-
-        let bytes = response
+            .map_err(|e| anyhow::anyhow!("Failed to download proot: {}", e))?
             .bytes()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to read download: {}", e))?;
 
         let proot_path = self.install_dir.join("proot");
-        fs::write(&proot_path, bytes)
+        tokio::fs::write(&proot_path, &bytes)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to write proot binary: {}", e))?;
 
-        // Make executable
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let perms = fs::Permissions::from_mode(0o755);
-            fs::set_permissions(&proot_path, perms)
-                .map_err(|e| anyhow::anyhow!("Failed to set executable: {}", e))?;
+            let perms = std::fs::Permissions::from_mode(0o755);
+            tokio::fs::set_permissions(&proot_path, perms)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to set executable bit: {}", e))?;
         }
 
         Ok(())
     }
 
     async fn download_android(&self, version: &str) -> RuntimeResult<()> {
-        // Create install directory
-        fs::create_dir_all(&self.install_dir)
+        tokio::fs::create_dir_all(&self.install_dir)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to create install directory: {}", e))?;
 
         let client = reqwest::Client::new();
         let base_url = "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/";
 
-        // Download proot .deb
-        let proot_deb_url = format!("{}proot_{}_aarch64.deb", base_url, version);
-        self.download_and_extract_deb(&client, &proot_deb_url, "proot")
+        let proot_url = format!("{}proot_{}_aarch64.deb", base_url, version);
+        self.download_and_extract_deb(&client, &proot_url, "proot")
             .await?;
 
-        // Download libtalloc .deb
-        let libtalloc_deb_url = format!("{}libtalloc_{}_aarch64.deb", base_url, version);
-        self.download_and_extract_deb(&client, &libtalloc_deb_url, "libtalloc")
+        let talloc_url = format!("{}libtalloc_{}_aarch64.deb", base_url, version);
+        self.download_and_extract_deb(&client, &talloc_url, "libtalloc")
             .await?;
 
         Ok(())
@@ -342,191 +275,48 @@ impl PRoot {
         url: &str,
         package_name: &str,
     ) -> RuntimeResult<()> {
-        let response = client
+        // Fetch bytes asynchronously
+        let bytes = client
             .get(url)
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to download {}: {}", package_name, e))?;
-
-        let bytes = response
+            .map_err(|e| anyhow::anyhow!("Failed to download {}: {}", package_name, e))?
             .bytes()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", package_name, e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", package_name, e))?
+            .to_vec();
 
-        // Save .deb to temporary file
-        let temp_deb = self.install_dir.join(format!("{}.deb", package_name));
-        fs::write(&temp_deb, bytes)
-            .map_err(|e| anyhow::anyhow!("Failed to write {}.deb: {}", package_name, e))?;
+        // All subsequent work is CPU/disk-bound — offload to a blocking thread.
+        let install_dir = self.install_dir.clone();
+        let pkg = package_name.to_string();
 
-        // Extract data.tar.xz from .deb
-        let temp_data = self.install_dir.join("data.tar.xz");
-        self.extract_from_ar(&temp_deb, &temp_data)?;
+        tokio::task::spawn_blocking(move || {
+            let temp_deb = install_dir.join(format!("{}.deb", pkg));
+            let temp_data = install_dir.join("data.tar.xz");
 
-        // Extract files from data.tar.xz
-        self.extract_tar_xz(&temp_data, package_name)?;
+            std::fs::write(&temp_deb, &bytes)
+                .map_err(|e| anyhow::anyhow!("Failed to write {}.deb: {}", pkg, e))?;
 
-        // Cleanup
-        fs::remove_file(&temp_deb).ok();
-        fs::remove_file(&temp_data).ok();
+            extract_from_ar_sync(&temp_deb, &temp_data)?;
+            extract_tar_xz_sync(&install_dir, &temp_data, &pkg)?;
 
-        Ok(())
-    }
+            std::fs::remove_file(&temp_deb).ok();
+            std::fs::remove_file(&temp_data).ok();
 
-    fn extract_from_ar(&self, ar_path: &Path, output_path: &Path) -> RuntimeResult<()> {
-        // Simple ar extraction - data.tar.xz is typically at a fixed offset
-        // For a proper implementation, consider using the `ar` crate
-        let file_data =
-            fs::read(ar_path).map_err(|e| anyhow::anyhow!("Failed to read ar file: {}", e))?;
-
-        // ar format: magic (8 bytes) followed by members
-        // Member header: name (16), mtime (12), uid (6), gid (6), mode (8), size (10), magic (2)
-        // We need to find and extract data.tar.xz
-
-        if file_data.len() < 8 || &file_data[0..8] != b"!<arch>\n" {
-            return Err(anyhow::anyhow!("Invalid ar archive format"));
-        }
-
-        let mut offset = 8;
-        while offset + 60 <= file_data.len() {
-            let name_bytes = &file_data[offset..offset + 16];
-            let name = String::from_utf8_lossy(name_bytes)
-                .trim_end()
-                .trim_end_matches('/')
-                .to_string();
-
-            let size_bytes = &file_data[offset + 48..offset + 58];
-            let size_str = String::from_utf8_lossy(size_bytes).trim_end().to_string();
-            let size: usize = size_str
-                .parse()
-                .map_err(|_| anyhow::anyhow!("Invalid ar member size"))?;
-
-            if name.contains("data.tar") {
-                let data_start = offset + 60;
-                fs::write(output_path, &file_data[data_start..data_start + size])
-                    .map_err(|e| anyhow::anyhow!("Failed to write extracted data: {}", e))?;
-                return Ok(());
-            }
-
-            offset += 60 + ((size + 1) & !1);
-        }
-
-        Err(anyhow::anyhow!("data.tar.xz not found in ar archive"))
-    }
-
-    fn extract_tar_xz(&self, tar_xz_path: &Path, package_name: &str) -> RuntimeResult<()> {
-        // For Android, we use a simpler approach: tar.xz extraction via tar command
-        // This avoids complex xz decompression issues
-
-        // Attempt to decompress xz using a simple decoder
-        let tar_xz_data = fs::read(tar_xz_path)
-            .map_err(|e| anyhow::anyhow!("Failed to read tar.xz file: {}", e))?;
-
-        // Use a simple XZ decompression approach
-        let tar_data = self.decompress_xz(&tar_xz_data)?;
-
-        // Extract specific files from tar
-        let mut archive = tar::Archive::new(&tar_data[..]);
-
-        for entry in archive
-            .entries()
-            .map_err(|e| anyhow::anyhow!("Failed to read tar: {}", e))?
-        {
-            let mut entry =
-                entry.map_err(|e| anyhow::anyhow!("Failed to read tar entry: {}", e))?;
-            let path = entry
-                .path()
-                .map_err(|e| anyhow::anyhow!("Failed to get entry path: {}", e))?;
-
-            let path_str = path.to_string_lossy();
-
-            // Extract proot binary or libtalloc libraries
-            if package_name == "proot" && path_str.ends_with("usr/bin/proot") {
-                let file_path = self.install_dir.join("proot");
-                entry
-                    .unpack(&file_path)
-                    .map_err(|e| anyhow::anyhow!("Failed to unpack proot: {}", e))?;
-
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let perms = fs::Permissions::from_mode(0o755);
-                    fs::set_permissions(&file_path, perms).ok();
-                }
-            } else if package_name == "libtalloc" && path_str.contains("usr/lib/libtalloc") {
-                let lib_path = self.install_dir.join(path.file_name().unwrap_or_default());
-                entry
-                    .unpack(&lib_path)
-                    .map_err(|e| anyhow::anyhow!("Failed to unpack library: {}", e))?;
-            }
-        }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Blocking task panicked: {}", e))??;
 
         Ok(())
     }
 
-    fn decompress_xz(&self, data: &[u8]) -> RuntimeResult<Vec<u8>> {
-        // Decompress XZ data using xz2
-        use std::io::Read;
-        let mut decoder = xz2::read::XzDecoder::new(data);
-        let mut output = Vec::new();
-        decoder
-            .read_to_end(&mut output)
-            .map_err(|e| anyhow::anyhow!("Failed to decompress xz: {}", e))?;
-        Ok(output)
-    }
+    // -----------------------------------------------------------------------
+    // Rootfs helpers
+    // -----------------------------------------------------------------------
 
-    /// Prepare a Docker image for execution
-    pub async fn prepare(
-        &self,
-        image: &str,
-        progress: impl Fn(PrepareProgress) + Send + Sync,
-    ) -> RuntimeResult<()> {
-        progress(PrepareProgress::ResolvingImage);
-
-        // Create image directory structure
-        let image_hash = self.hash_image_name(image);
-        let image_dir = self.install_dir.join("images").join(&image_hash);
-        let rootfs_dir = image_dir.join("rootfs");
-
-        fs::create_dir_all(&rootfs_dir)
-            .map_err(|e| anyhow::anyhow!("Failed to create image directory: {}", e))?;
-
-        progress(PrepareProgress::Downloading {
-            downloaded_bytes: 0,
-            total_bytes: None,
-        });
-
-        // For now, we'll create a minimal rootfs structure
-        // In a real implementation, this would download and extract Docker layers
-        self.create_minimal_rootfs(&rootfs_dir)?;
-
-        progress(PrepareProgress::WritingRootFs);
-
-        // Create metadata file
-        let metadata = ImageMetadata {
-            env: HashMap::new(),
-            entrypoint: None,
-            cmd: None,
-            working_dir: Some("/".to_string()),
-        };
-
-        let metadata_path = image_dir.join("metadata.json");
-        let metadata_json = serde_json::to_string_pretty(&metadata)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize metadata: {}", e))?;
-        fs::write(&metadata_path, metadata_json)
-            .map_err(|e| anyhow::anyhow!("Failed to write metadata: {}", e))?;
-
-        progress(PrepareProgress::Configuring);
-
-        // Configure /etc/resolv.conf
-        self.configure_resolv_conf(&rootfs_dir)?;
-
-        progress(PrepareProgress::Completed);
-
-        Ok(())
-    }
-
-    fn create_minimal_rootfs(&self, rootfs_dir: &Path) -> RuntimeResult<()> {
-        let dirs = vec![
+    async fn create_minimal_rootfs(&self, rootfs_dir: &Path) -> RuntimeResult<()> {
+        let dirs = [
             "bin",
             "sbin",
             "usr/bin",
@@ -542,68 +332,196 @@ impl PRoot {
             "home",
             "root",
         ];
-
         for dir in dirs {
-            fs::create_dir_all(rootfs_dir.join(dir))
+            tokio::fs::create_dir_all(rootfs_dir.join(dir))
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to create directory {}: {}", dir, e))?;
         }
-
         Ok(())
     }
 
-    fn configure_resolv_conf(&self, rootfs_dir: &Path) -> RuntimeResult<()> {
-        let resolv_path = rootfs_dir.join("etc/resolv.conf");
+    async fn configure_resolv_conf(&self, rootfs_dir: &Path) -> RuntimeResult<()> {
+        let content = tokio::fs::read_to_string("/etc/resolv.conf")
+            .await
+            .unwrap_or_else(|_| "nameserver 8.8.8.8\nnameserver 8.8.4.4\n".to_string());
 
-        // Try to read host resolv.conf
-        let content = if let Ok(host_content) = fs::read_to_string("/etc/resolv.conf") {
-            host_content
-        } else {
-            // Fallback to safe defaults
-            "nameserver 8.8.8.8\nnameserver 8.8.4.4\n".to_string()
-        };
-
-        fs::write(&resolv_path, content)
+        tokio::fs::write(rootfs_dir.join("etc/resolv.conf"), content)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to write resolv.conf: {}", e))?;
-
         Ok(())
     }
 
+    // -----------------------------------------------------------------------
+    // Misc
+    // -----------------------------------------------------------------------
+
+    /// Deterministic hash of an image name used as its on-disk directory name.
     pub fn hash_image_name(&self, image: &str) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-
         let mut hasher = DefaultHasher::new();
         image.hash(&mut hasher);
         format!("{:x}", hasher.finish())
     }
 
-    /// Remove a prepared image
-    pub async fn remove(&self, image: &str) -> RuntimeResult<()> {
+    async fn calculate_dir_size_async(&self, path: &Path) -> RuntimeResult<u64> {
+        let mut size = 0u64;
+        if let Ok(mut entries) = tokio::fs::read_dir(path).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                if let Ok(meta) = entry.metadata().await {
+                    if meta.is_dir() {
+                        size += Box::pin(self.calculate_dir_size_async(&entry.path())).await?;
+                    } else {
+                        size += meta.len();
+                    }
+                }
+            }
+        }
+        Ok(size)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime trait implementation
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl Runtime for PRoot {
+    fn is_supported(&self) -> RuntimeResult<()> {
+        let target_os = std::env::consts::OS;
+        let target_arch = std::env::consts::ARCH;
+
+        if which::which("proot").is_ok() {
+            return Ok(());
+        }
+
+        match (target_arch, target_os) {
+            ("x86_64", "linux") => Ok(()),
+            ("aarch64", "android") | ("x86_64", "android") => Ok(()),
+            (arch, os) => Err(anyhow::anyhow!(
+                "PRoot cannot be automatically installed on this platform \
+                 (arch: {arch}, os: {os}). Supported: x86_64-linux, *-android. \
+                 Install proot manually and add it to $PATH to use it on other platforms."
+            )),
+        }
+    }
+
+    async fn version(&self) -> RuntimeResult<String> {
+        if which::which("proot").is_ok() {
+            return self.get_system_proot_version().await;
+        }
+
+        let proot_bin = self.install_dir.join("proot");
+        if proot_bin.exists() {
+            return self.get_installed_proot_version(&proot_bin).await;
+        }
+
+        Err(anyhow::anyhow!(
+            "PRoot not found in PATH or in install directory"
+        ))
+    }
+
+    async fn available_versions(&self) -> RuntimeResult<Vec<String>> {
+        if which::which("proot").is_ok() {
+            let v = self.get_system_proot_version().await?;
+            return Ok(vec![v]);
+        }
+
+        match (std::env::consts::ARCH, std::env::consts::OS) {
+            ("x86_64", "linux") => self.fetch_linux_versions().await,
+            ("aarch64", "android") | ("x86_64", "android") => {
+                self.fetch_android_latest_version().await
+            }
+            _ => Err(anyhow::anyhow!("Unsupported platform for version fetching")),
+        }
+    }
+
+    async fn download(&self, version: &str) -> RuntimeResult<()> {
+        if which::which("proot").is_ok() {
+            return Ok(()); // System proot is already available
+        }
+
+        match (std::env::consts::ARCH, std::env::consts::OS) {
+            ("x86_64", "linux") => self.download_linux(version).await,
+            ("aarch64", "android") | ("x86_64", "android") => self.download_android(version).await,
+            _ => Err(anyhow::anyhow!("Unsupported platform for download")),
+        }
+    }
+
+    async fn prepare(&self, image: &str, tx: PrepareProgressTx) -> RuntimeResult<()> {
+        tx.send(PrepareProgress::ResolvingImage).await.ok();
+
         let image_hash = self.hash_image_name(image);
         let image_dir = self.install_dir.join("images").join(&image_hash);
+        let rootfs_dir = image_dir.join("rootfs");
 
-        if image_dir.exists() {
-            fs::remove_dir_all(&image_dir)
-                .map_err(|e| anyhow::anyhow!("Failed to remove image: {}", e))?;
-        }
+        tokio::fs::create_dir_all(&rootfs_dir)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create image directory: {}", e))?;
+
+        tx.send(PrepareProgress::Downloading {
+            downloaded_bytes: 0,
+            total_bytes: None,
+        })
+        .await
+        .ok();
+
+        // Build minimal rootfs structure
+        self.create_minimal_rootfs(&rootfs_dir).await?;
+
+        tx.send(PrepareProgress::WritingRootFs).await.ok();
+
+        // Persist image metadata
+        let metadata = ImageMetadata {
+            env: HashMap::new(),
+            entrypoint: None,
+            cmd: None,
+            working_dir: Some("/".to_string()),
+        };
+        let metadata_json = serde_json::to_string_pretty(&metadata)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize metadata: {}", e))?;
+        tokio::fs::write(image_dir.join("metadata.json"), metadata_json)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to write metadata: {}", e))?;
+
+        tx.send(PrepareProgress::Configuring).await.ok();
+
+        self.configure_resolv_conf(&rootfs_dir).await?;
+
+        tx.send(PrepareProgress::Completed).await.ok();
 
         Ok(())
     }
 
-    /// Execute a prepared image with given arguments
-    pub async fn run(&self, image: &str, args: &[String]) -> RuntimeResult<ProcessHandle> {
+    async fn remove(&self, image: &str) -> RuntimeResult<()> {
+        let image_hash = self.hash_image_name(image);
+        let image_dir = self.install_dir.join("images").join(&image_hash);
+
+        if image_dir.exists() {
+            tokio::fs::remove_dir_all(&image_dir)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to remove image: {}", e))?;
+        }
+        Ok(())
+    }
+
+    async fn run(&self, image: &str, args: &[String]) -> RuntimeResult<ProcessHandle> {
         let image_hash = self.hash_image_name(image);
         let image_dir = self.install_dir.join("images").join(&image_hash);
         let rootfs_dir = image_dir.join("rootfs");
 
         if !rootfs_dir.exists() {
-            return Err(anyhow::anyhow!("Image not prepared: {}", image));
+            return Err(anyhow::anyhow!(
+                "Image not prepared: {}. Call prepare() first.",
+                image
+            ));
         }
 
         // Load metadata
         let metadata_path = image_dir.join("metadata.json");
         let metadata: ImageMetadata = if metadata_path.exists() {
-            let content = fs::read_to_string(&metadata_path)
+            let content = tokio::fs::read_to_string(&metadata_path)
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to read metadata: {}", e))?;
             serde_json::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("Failed to deserialize metadata: {}", e))?
@@ -616,72 +534,228 @@ impl PRoot {
             }
         };
 
-        // Find proot binary
+        // Locate the proot binary
         let proot_bin = if which::which("proot").is_ok() {
             "proot".to_string()
         } else {
-            let custom_proot = self.install_dir.join("proot");
-            if custom_proot.exists() {
-                custom_proot.to_string_lossy().to_string()
+            let custom = self.install_dir.join("proot");
+            if custom.exists() {
+                custom.to_string_lossy().into_owned()
             } else {
                 return Err(anyhow::anyhow!("PRoot binary not found"));
             }
         };
 
-        // Build command
+        // Build the tokio async Command
         let mut cmd = Command::new(&proot_bin);
-
-        // Set environment variables (without inheriting host environment)
         cmd.env_clear();
+
         for (key, value) in &metadata.env {
             cmd.env(key, value);
         }
-
-        // Add default environment
         cmd.env(
             "PATH",
             "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         );
         cmd.env("HOME", "/root");
 
-        // Set root filesystem
         cmd.arg("-R").arg(&rootfs_dir);
 
-        // Set working directory if specified
         if let Some(workdir) = &metadata.working_dir {
             cmd.arg("-w").arg(workdir);
         }
 
-        // Add entrypoint and cmd
-        let mut full_cmd = Vec::new();
-
-        if let Some(entrypoint) = &metadata.entrypoint {
-            full_cmd.extend(entrypoint.clone());
+        // Compose entrypoint + cmd + user args
+        let mut full_cmd: Vec<String> = Vec::new();
+        if let Some(ep) = &metadata.entrypoint {
+            full_cmd.extend(ep.clone());
         }
-
-        if let Some(cmd_args) = &metadata.cmd {
-            full_cmd.extend(cmd_args.clone());
+        if let Some(c) = &metadata.cmd {
+            full_cmd.extend(c.clone());
         }
-
-        // Add user-provided arguments
         full_cmd.extend(args.iter().cloned());
 
-        // If we have a command to execute
-        if !full_cmd.is_empty() {
-            for arg in full_cmd {
-                cmd.arg(arg);
-            }
+        for arg in &full_cmd {
+            cmd.arg(arg);
         }
 
-        // Setup piped IO for async operations
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
 
         let child = cmd
             .spawn()
             .map_err(|e| anyhow::anyhow!("Failed to spawn process: {}", e))?;
 
         Ok(ProcessHandle { child })
+    }
+
+    async fn list_images(&self) -> RuntimeResult<Vec<PreparedImage>> {
+        let images_dir = self.install_dir.join("images");
+
+        if !tokio::fs::try_exists(&images_dir).await.unwrap_or(false) {
+            return Ok(Vec::new());
+        }
+
+        let mut images = Vec::new();
+        let mut entries = tokio::fs::read_dir(&images_dir)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read images directory: {}", e))?;
+
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read directory entry: {}", e))?
+        {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let metadata_path = path.join("metadata.json");
+            if !tokio::fs::try_exists(&metadata_path).await.unwrap_or(false) {
+                continue;
+            }
+
+            if let Some(hash_str) = path.file_name().and_then(|n| n.to_str()) {
+                let tag = ImageTag::from_string(format!("unknown:{}", hash_str));
+                let size = self.calculate_dir_size_async(&path).await?;
+                images.push(PreparedImage::new(
+                    tag,
+                    ImageHash::new(hash_str.to_string()),
+                    size,
+                ));
+            }
+        }
+
+        Ok(images)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Blocking helpers (run inside tokio::task::spawn_blocking)
+// ---------------------------------------------------------------------------
+
+/// Extract `data.tar.xz` from a Debian `.ar` archive.
+fn extract_from_ar_sync(ar_path: &Path, output_path: &Path) -> RuntimeResult<()> {
+    let file_data =
+        std::fs::read(ar_path).map_err(|e| anyhow::anyhow!("Failed to read ar file: {}", e))?;
+
+    if file_data.len() < 8 || &file_data[0..8] != b"!<arch>\n" {
+        return Err(anyhow::anyhow!("Invalid ar archive format"));
+    }
+
+    let mut offset = 8usize;
+    while offset + 60 <= file_data.len() {
+        let name = String::from_utf8_lossy(&file_data[offset..offset + 16])
+            .trim_end()
+            .trim_end_matches('/')
+            .to_string();
+
+        let size_str = String::from_utf8_lossy(&file_data[offset + 48..offset + 58])
+            .trim_end()
+            .to_string();
+        let size: usize = size_str
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid ar member size"))?;
+
+        if name.contains("data.tar") {
+            let data_start = offset + 60;
+            std::fs::write(output_path, &file_data[data_start..data_start + size])
+                .map_err(|e| anyhow::anyhow!("Failed to write extracted data: {}", e))?;
+            return Ok(());
+        }
+
+        offset += 60 + ((size + 1) & !1);
+    }
+
+    Err(anyhow::anyhow!("data.tar not found in ar archive"))
+}
+
+/// Decompress an XZ-compressed byte slice.
+fn decompress_xz_sync(data: &[u8]) -> RuntimeResult<Vec<u8>> {
+    use std::io::Read;
+    let mut decoder = xz2::read::XzDecoder::new(data);
+    let mut output = Vec::new();
+    decoder
+        .read_to_end(&mut output)
+        .map_err(|e| anyhow::anyhow!("Failed to decompress xz: {}", e))?;
+    Ok(output)
+}
+
+/// Extract proot/libtalloc binaries from a `data.tar.xz`.
+fn extract_tar_xz_sync(
+    install_dir: &Path,
+    tar_xz_path: &Path,
+    package_name: &str,
+) -> RuntimeResult<()> {
+    let tar_xz_data =
+        std::fs::read(tar_xz_path).map_err(|e| anyhow::anyhow!("Failed to read tar.xz: {}", e))?;
+
+    let tar_data = decompress_xz_sync(&tar_xz_data)?;
+    let mut archive = tar::Archive::new(&tar_data[..]);
+
+    for entry in archive
+        .entries()
+        .map_err(|e| anyhow::anyhow!("Failed to read tar: {}", e))?
+    {
+        let mut entry = entry.map_err(|e| anyhow::anyhow!("Failed to read tar entry: {}", e))?;
+        let path = entry
+            .path()
+            .map_err(|e| anyhow::anyhow!("Failed to get entry path: {}", e))?;
+        let path_str = path.to_string_lossy().into_owned();
+
+        if package_name == "proot" && path_str.ends_with("usr/bin/proot") {
+            let dest = install_dir.join("proot");
+            entry
+                .unpack(&dest)
+                .map_err(|e| anyhow::anyhow!("Failed to unpack proot: {}", e))?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let perms = std::fs::Permissions::from_mode(0o755);
+                std::fs::set_permissions(&dest, perms).ok();
+            }
+        } else if package_name == "libtalloc" && path_str.contains("usr/lib/libtalloc") {
+            let dest = install_dir.join(path.file_name().unwrap_or_default());
+            entry
+                .unpack(&dest)
+                .map_err(|e| anyhow::anyhow!("Failed to unpack library: {}", e))?;
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_proot_version_v_prefix() {
+        let output = "|__|  |__|__\\_____/\\_____/\\____| v5.4.0-5f780cba\n";
+        let version = PRoot::parse_proot_version(output).unwrap();
+        assert!(version.starts_with("5.4.0"), "got: {}", version);
+    }
+
+    #[test]
+    fn test_parse_proot_version_bare() {
+        let output = "proot version 5.3.0\n";
+        let version = PRoot::parse_proot_version(output).unwrap();
+        assert_eq!(version, "5.3.0");
+    }
+
+    #[test]
+    fn test_hash_image_name_stable() {
+        let proot = PRoot::new(PathBuf::from("/tmp/test"));
+        let h1 = proot.hash_image_name("library/alpine:3.18");
+        let h2 = proot.hash_image_name("library/alpine:3.18");
+        assert_eq!(h1, h2);
+        assert!(!h1.is_empty());
     }
 }

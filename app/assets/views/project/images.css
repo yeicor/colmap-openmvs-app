@@ -305,6 +305,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    pointer-events: none;
 }
 
 @media (max-width: 640px) {
