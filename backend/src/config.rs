@@ -18,7 +18,7 @@ use tokio::io::AsyncReadExt;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HelpSchema {
     tools: ToolsSchema,
-    environment_variables: BTreeMap<String, EnvironmentVariable>,
+    environment_variables: Vec<String>,
 }
 
 /// Tools container
@@ -33,13 +33,6 @@ struct ToolsSchema {
 struct CommandHelp {
     help: String,
     environment_variables: Vec<String>,
-}
-
-/// Environment variable definition
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EnvironmentVariable {
-    #[serde(rename = "type")]
-    var_type: String,
 }
 
 /// Parse configuration from a prepared container image by running help commands.
@@ -107,19 +100,16 @@ pub async fn get_image_config(image_tag: String) -> anyhow::Result<ConfigSchema>
 
     // Build environment_variables list from top-level, preserving order
     // Merge both colmap and openmvs top-level env vars
-    let mut env_vars_set: IndexMap<String, ()> = IndexMap::new();
-    for (name, _) in &colmap_schema.environment_variables {
-        env_vars_set.insert(name.clone(), ());
-    }
-    for (name, _) in &openmvs_schema.environment_variables {
-        env_vars_set.insert(name.clone(), ());
-    }
-
-    let environment_variables: Vec<EnvVarWithHelp> = env_vars_set
-        .into_iter()
-        .map(|(name, _)| {
-            let help = help_map.get(&name).cloned();
-            EnvVarWithHelp { name, help }
+    let environment_variables: Vec<EnvVarWithHelp> = colmap_schema
+        .environment_variables
+        .iter()
+        .chain(openmvs_schema.environment_variables.iter())
+        .map(|name| {
+            let help = help_map.get(name).cloned();
+            EnvVarWithHelp {
+                name: name.clone(),
+                help,
+            }
         })
         .collect();
 

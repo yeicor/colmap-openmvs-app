@@ -124,34 +124,21 @@ pub fn ConfigTab(project_name: String) -> Element {
                             }
 
                             // Custom script section
-                            div {
-                                class: "config-custom-script-section",
-                                div {
-                                    class: "config-section-header",
-                                    div {
-                                        class: "config-section-title",
-                                        "Custom Script"
-                                    }
-                                    div {
-                                        class: "config-section-help-icon",
-                                        onclick: move |_| {
-                                            help_modal_text.set(
-                                                "Custom Script Section\n\nYou can write any bash commands here to override or extend the pipeline behavior.\n\nExamples:\n- Call tools directly: colmap feature_extractor --database_path db.db --image_path images\n- Set environment variables: export COLMAP_NUM_THREADS=8\n- Exit early: exit 0 (or non-zero for error)\n- Add debugging: set -x\n\nThis script is appended to the configuration file and runs after environment variables are sourced. Use exit codes to control pipeline flow.".to_string()
-                                            );
-                                            help_modal_open.set(true);
-                                        },
-                                        "ℹ"
-                                    }
-                                }
-                                textarea {
-                                    class: "config-custom-script-textarea",
-                                    placeholder: "# Enter custom bash script here (optional)\n# Example: colmap feature_extractor --database_path db.db --image_path images\n# Example: exit 0 to finish early\n# Use this to override pipeline behavior",
-                                    value: "{custom_script()}",
-                                    oninput: move |e| {
-                                        custom_script.set(e.value());
-                                        has_changes.set(true);
-                                    },
-                                }
+                            EnvVarRow {
+                                var: EnvVarWithHelp {
+                                    name: "Custom Script".to_string(),
+                                    help: Some("Write any bash commands here to override or extend the pipeline behavior.\n\nExamples:\n- Call tools directly: colmap feature_extractor --database_path db.db --image_path images\n- Set environment variables: export COLMAP_NUM_THREADS=8\n- Exit early: exit 0 (or non-zero for error)\n- Add debugging: set -x\n\nThis script is appended to the configuration file and runs after environment variables are sourced. Use exit codes to control pipeline flow.".to_string()),
+                                },
+                                env_var_values: use_signal(|| HashMap::new()),
+                                has_changes,
+                                on_help: EventHandler::new(move |help_text: String| {
+                                    help_modal_text.set(help_text.lines()
+                                            .map(|line| line.trim_start())
+                                            .collect::<Vec<_>>()
+                                            .join("\n"));
+                                    help_modal_open.set(true);
+                                }),
+                                text_area: Some(true),
                             }
 
                             // Status message (only show when not editing)
@@ -203,6 +190,7 @@ fn EnvVarRow(
     mut env_var_values: EnvVarValuesSignal,
     mut has_changes: Signal<bool>,
     on_help: EventHandler<String>,
+    #[props(default)] text_area: Option<bool>,
 ) -> Element {
     let name_clone = var.name.clone();
     let current_value = env_var_values().get(&var.name).cloned().unwrap_or_default();
@@ -231,17 +219,31 @@ fn EnvVarRow(
                     }
                 }
             }
-            input {
-                class: "config-var-input",
-                r#type: "text",
-                placeholder: "Enter value...",
-                value: "{current_value}",
-                oninput: move |e| {
-                    let mut values = env_var_values();
-                    values.insert(name_clone.clone(), e.value());
-                    env_var_values.set(values);
-                    has_changes.set(true);
-                },
+            if text_area.unwrap_or(false) {
+                textarea {
+                    class: "config-custom-script-textarea",
+                    placeholder: "# Enter custom bash script here (optional)\n# Example: colmap feature_extractor --database_path db.db --image_path images\n# Example: exit 0 to finish early\n# Use this to override pipeline behavior",
+                    value: "{current_value}",
+                    oninput: move |e| {
+                        let mut values = env_var_values();
+                        values.insert(name_clone.clone(), e.value());
+                        env_var_values.set(values);
+                        has_changes.set(true);
+                    },
+                }
+            } else {
+                input {
+                    class: "config-var-input",
+                    r#type: "text",
+                    placeholder: "Enter value...",
+                    value: "{current_value}",
+                    oninput: move |e| {
+                        let mut values = env_var_values();
+                        values.insert(name_clone.clone(), e.value());
+                        env_var_values.set(values);
+                        has_changes.set(true);
+                    },
+                }
             }
         }
     }
