@@ -98,6 +98,7 @@ pub fn Project(name: String) -> Element {
                 }
                 Progress {
                     value: progress_value.unwrap_or(0.0),
+                    max: 1.0,
                     ProgressIndicator {}
                 }
             }

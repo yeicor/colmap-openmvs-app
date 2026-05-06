@@ -6,6 +6,7 @@ use dioxus_free_icons::Icon;
 use std::collections::HashMap;
 
 type EnvVarValuesSignal = Signal<HashMap<String, String>>;
+static CUSTOM_SCRIPT_KEY: &str = "Custom Script";
 
 #[component]
 pub fn ConfigTab(project_name: String) -> Element {
@@ -17,11 +18,10 @@ pub fn ConfigTab(project_name: String) -> Element {
     let loading = use_signal(|| false);
     let mut error = use_signal(|| Option::<String>::None);
     let env_var_values = use_signal(|| HashMap::<String, String>::new());
-    let mut custom_script = use_signal(|| String::new());
     let mut refresh_counter = use_signal(|| 0u32);
     let saving = use_signal(|| false);
     let save_status = use_signal(|| Option::<SaveStatus>::None);
-    let mut has_changes = use_signal(|| false);
+    let has_changes = use_signal(|| false);
     let mut help_modal_open = use_signal(|| false);
     let mut help_modal_text = use_signal(|| String::new());
 
@@ -33,7 +33,6 @@ pub fn ConfigTab(project_name: String) -> Element {
             loading,
             error,
             env_var_values,
-            custom_script,
             project_name_effect.clone(),
         );
     });
@@ -47,9 +46,8 @@ pub fn ConfigTab(project_name: String) -> Element {
         move |_| {
             save_config(
                 project_name_save.clone(),
-                config_schema().clone(),
+                config_schema(),
                 env_var_values(),
-                custom_script(),
                 saving,
                 save_status,
                 has_changes,
@@ -126,10 +124,10 @@ pub fn ConfigTab(project_name: String) -> Element {
                             // Custom script section
                             EnvVarRow {
                                 var: EnvVarWithHelp {
-                                    name: "Custom Script".to_string(),
+                                    name: CUSTOM_SCRIPT_KEY.to_string(),
                                     help: Some("Write any bash commands here to override or extend the pipeline behavior.\n\nExamples:\n- Call tools directly: colmap feature_extractor --database_path db.db --image_path images\n- Set environment variables: export COLMAP_NUM_THREADS=8\n- Exit early: exit 0 (or non-zero for error)\n- Add debugging: set -x\n\nThis script is appended to the configuration file and runs after environment variables are sourced. Use exit codes to control pipeline flow.".to_string()),
                                 },
-                                env_var_values: use_signal(|| HashMap::new()),
+                                env_var_values,
                                 has_changes,
                                 on_help: EventHandler::new(move |help_text: String| {
                                     help_modal_text.set(help_text.lines()
@@ -258,8 +256,7 @@ enum SaveStatus {
 fn save_config(
     project_name: String,
     schema: Option<ConfigSchema>,
-    values: HashMap<String, String>,
-    custom_script: String,
+    mut values: HashMap<String, String>,
     mut saving: Signal<bool>,
     mut save_status: Signal<Option<SaveStatus>>,
     mut has_changes: Signal<bool>,
@@ -269,6 +266,8 @@ fn save_config(
         save_status.set(None);
 
         spawn(async move {
+            let custom_script = values.remove(CUSTOM_SCRIPT_KEY).unwrap_or_default();
+
             let env_vars: Vec<EnvVarConfig> = values
                 .into_iter()
                 .filter(|(_, v)| !v.trim().is_empty())
@@ -307,7 +306,6 @@ fn spawn_fetch_config(
     mut loading: Signal<bool>,
     mut error: Signal<Option<String>>,
     mut env_var_values: Signal<HashMap<String, String>>,
-    mut custom_script: Signal<String>,
     project_name: String,
 ) {
     spawn(async move {
@@ -363,12 +361,12 @@ fn spawn_fetch_config(
                 for env_var in loaded_config.environment_variables {
                     values.insert(env_var.name, env_var.value);
                 }
-                env_var_values.set(values);
 
                 // Load the custom script
                 if !loaded_config.custom_script.is_empty() {
-                    custom_script.set(loaded_config.custom_script);
+                    values.insert(CUSTOM_SCRIPT_KEY.to_string(), loaded_config.custom_script);
                 }
+                env_var_values.set(values);
             }
             Err(_) => {
                 // It's okay if there's no saved config yet (first time opening)

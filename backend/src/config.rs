@@ -8,7 +8,6 @@ use colmap_openmvs_api::{
     ConfigParameter, ConfigSchema, EnvVarConfig, EnvVarWithHelp, LoadedProjectConfig,
     SavedProjectConfig, ToolConfig,
 };
-use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
