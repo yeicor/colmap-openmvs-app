@@ -320,9 +320,36 @@ async fn launch_ply_viewer(b64: &str, fname_safe: &str) {
         console.log('[3D Viewer] Renderer initialized with size:', w, 'x', h);
 
         const controls = new TrackballControls(camera, renderer.domElement);
-        controls.rotateSpeed = 1.0;
+        controls.rotateSpeed = 2.5;
         controls.zoomSpeed = 1.2;
         controls.panSpeed = 0.8;
+
+        // Inertia parameters
+        let rotationVelocity = new THREE.Vector3();
+        let isRotating = false;
+        let lastX = 0, lastY = 0;
+        const inertiaFriction = 0.95;
+        const inertiaThreshold = 0.001;
+
+        renderer.domElement.addEventListener('mousedown', () => {{
+            isRotating = true;
+            rotationVelocity.set(0, 0, 0);
+        }});
+
+        renderer.domElement.addEventListener('mouseup', () => {{
+            isRotating = false;
+        }});
+
+        renderer.domElement.addEventListener('mousemove', (e) => {{
+            if (isRotating) {{
+                const deltaX = e.clientX - lastX;
+                const deltaY = e.clientY - lastY;
+                rotationVelocity.x = deltaY * 0.001;
+                rotationVelocity.y = deltaX * 0.001;
+            }}
+            lastX = e.clientX;
+            lastY = e.clientY;
+        }});
 
         scene.add(new THREE.AmbientLight(0xffffff, 0.6));
         const dl = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -388,6 +415,7 @@ async fn launch_ply_viewer(b64: &str, fname_safe: &str) {
             resetBtn.onclick = () => {{
                 camera.position.copy(initialCameraPos);
                 controls.reset();
+                rotationVelocity.set(0, 0, 0);
             }};
 
             const ro = new ResizeObserver(() => {{
@@ -407,6 +435,29 @@ async fn launch_ply_viewer(b64: &str, fname_safe: &str) {
             const animate = () => {{
                 if (!document.contains(overlay)) {{ ro.disconnect(); renderer.dispose(); return; }}
                 requestAnimationFrame(animate);
+
+                // Apply inertia rotation when not actively rotating
+                if (!isRotating && (Math.abs(rotationVelocity.x) > inertiaThreshold || Math.abs(rotationVelocity.y) > inertiaThreshold)) {{
+                    // Apply rotation using quaternions for smooth momentum
+                    const qx = new THREE.Quaternion();
+                    const qy = new THREE.Quaternion();
+                    const axis = new THREE.Vector3(0, 1, 0);
+                    const perpAxis = new THREE.Vector3(1, 0, 0);
+
+                    qy.setFromAxisAngle(axis, rotationVelocity.y);
+                    qx.setFromAxisAngle(perpAxis, rotationVelocity.x);
+
+                    const combinedQ = new THREE.Quaternion();
+                    combinedQ.multiplyQuaternions(qy, qx);
+
+                    // Apply rotation to camera position
+                    const camPos = camera.position;
+                    camPos.applyQuaternion(combinedQ);
+
+                    // Decay velocity
+                    rotationVelocity.multiplyScalar(inertiaFriction);
+                }}
+
                 controls.update();
                 renderer.render(scene, camera);
             }};
