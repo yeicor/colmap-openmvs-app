@@ -200,7 +200,7 @@ pub fn OutputsTab(project_name: String) -> Element {
     }
 }
 
-// Three.js viewer launcher using CDN with dynamic imports
+// Three.js viewer launcher using CDN with dynamic imports and TrackballControls
 // ---------------------------------------------------------------------------
 
 async fn launch_ply_viewer(b64: &str, fname_safe: &str) {
@@ -215,12 +215,12 @@ async fn launch_ply_viewer(b64: &str, fname_safe: &str) {
         console.log('[3D Viewer] Loading libraries from esm.sh CDN...');
         const THREE = await import('https://esm.sh/three@0.169.0');
         const PLYLoaderMod = await import('https://esm.sh/three@0.169.0/examples/jsm/loaders/PLYLoader.js');
-        const OrbitControlsMod = await import('https://esm.sh/three@0.169.0/examples/jsm/controls/OrbitControls.js');
+        const TrackballControlsMod = await import('https://esm.sh/three@0.169.0/examples/jsm/controls/TrackballControls.js');
 
         const PLYLoader = PLYLoaderMod.PLYLoader;
-        const OrbitControls = OrbitControlsMod.OrbitControls;
+        const TrackballControls = TrackballControlsMod.TrackballControls;
 
-        console.log('[3D Viewer] Three.js, PLYLoader and OrbitControls loaded');
+        console.log('[3D Viewer] Three.js, PLYLoader and TrackballControls loaded');
 
         const b64 = '{}';
         const fname = '{}';
@@ -319,9 +319,10 @@ async fn launch_ply_viewer(b64: &str, fname_safe: &str) {
         renderer.setClearColor(0x0d1117);
         console.log('[3D Viewer] Renderer initialized with size:', w, 'x', h);
 
-        const controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.05;
+        const controls = new TrackballControls(camera, renderer.domElement);
+        controls.rotateSpeed = 1.0;
+        controls.zoomSpeed = 1.2;
+        controls.panSpeed = 0.8;
 
         scene.add(new THREE.AmbientLight(0xffffff, 0.6));
         const dl = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -339,35 +340,6 @@ async fn launch_ply_viewer(b64: &str, fname_safe: &str) {
         loader.load(blobUrl, (geometry) => {{
             console.log('[3D Viewer] PLY loaded, rendering geometry...');
             console.log('[3D Viewer] Geometry vertices:', geometry.attributes.position?.count || 0);
-
-            // Convert from OpenMVS/COLMAP convention to Three.js convention
-            // COLMAP: X=right, Y=down, Z=forward
-            // Three.js: X=right, Y=up, Z=toward camera
-            // Transformation: (X, Y, Z) -> (X, -Z, Y)
-            const posAttr = geometry.getAttribute('position');
-            for (let i = 0; i < posAttr.count; i++) {{
-                const x = posAttr.getX(i);
-                const y = posAttr.getY(i);
-                const z = posAttr.getZ(i);
-                posAttr.setX(i, x);
-                posAttr.setY(i, -z);
-                posAttr.setZ(i, y);
-            }}
-            posAttr.needsUpdate = true;
-
-            // Also transform normals if they exist
-            if (geometry.hasAttribute('normal')) {{
-                const normAttr = geometry.getAttribute('normal');
-                for (let i = 0; i < normAttr.count; i++) {{
-                    const x = normAttr.getX(i);
-                    const y = normAttr.getY(i);
-                    const z = normAttr.getZ(i);
-                    normAttr.setX(i, x);
-                    normAttr.setY(i, -z);
-                    normAttr.setZ(i, y);
-                }}
-                normAttr.needsUpdate = true;
-            }}
 
             geometry.computeVertexNormals();
             originalGeometry = geometry.clone();
@@ -399,8 +371,6 @@ async fn launch_ply_viewer(b64: &str, fname_safe: &str) {
             camera.near = maxDim * 0.0005;
             camera.far = maxDim * 200;
             camera.updateProjectionMatrix();
-            controls.target.set(0, 0, 0);
-            controls.update();
 
             console.log('[3D Viewer] Camera position:', camera.position);
 
@@ -417,8 +387,7 @@ async fn launch_ply_viewer(b64: &str, fname_safe: &str) {
 
             resetBtn.onclick = () => {{
                 camera.position.copy(initialCameraPos);
-                controls.target.set(0, 0, 0);
-                controls.update();
+                controls.reset();
             }};
 
             const ro = new ResizeObserver(() => {{
