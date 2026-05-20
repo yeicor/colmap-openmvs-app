@@ -320,11 +320,12 @@ fn spawn_pipeline_stream(
                                 // During full run: mark any completed stage as completed
                                 if !is_dry_run || stage.cached || stage.skipped {
                                     stage.completed = true;
+                                    // Only set progress to 1.0 for stages that are actually completed
+                                    if stage.pipeline_stage_num.is_some() {
+                                        stage.progress = Some(1.0);
+                                    }
                                 }
                                 stage.is_running = false;
-                                if stage.pipeline_stage_num.is_some() {
-                                    stage.progress = Some(1.0);
-                                }
                             }
                             let total_pipeline =
                                 s.iter().filter(|x| x.pipeline_stage_num.is_some()).count() as f32;
@@ -673,12 +674,7 @@ pub fn LogsTab(project_name: String) -> Element {
                                 ("○", "stage-status-pending")
                             };
 
-                            // Counter badge: only for actual pipeline stages (not Config/Tool Discovery)
-                            let counter_str = if let Some(num) = stage.pipeline_stage_num {
-                                format!("{num}/{}  ", stage.total_stages)
-                            } else {
-                                String::new()
-                            };
+
 
                             // Suffix shown next to stage name.
                             let name_suffix = if stage.cached { " (cached)" } else if stage.skipped { " (skipped)" } else { "" };
@@ -702,12 +698,7 @@ pub fn LogsTab(project_name: String) -> Element {
                                             class: "stage-chevron",
                                             if is_expanded { "▾" } else { "▸" }
                                         }
-                                        if !counter_str.is_empty() {
-                                            span {
-                                                class: "stage-index",
-                                                "{counter_str}"
-                                            }
-                                        }
+                
                                         span {
                                             class: "stage-name",
                                             "{stage.name}{name_suffix}"
