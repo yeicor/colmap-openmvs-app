@@ -117,7 +117,7 @@ fn walk_for_outputs(
 pub async fn get_project_output(
     project_name: String,
     relative_path: String,
-) -> DioxusResult<Vec<u8>> {
+) -> DioxusResult<dioxus::fullstack::FileStream> {
     let project_path = {
         let projects = get_projects().await?;
         projects
@@ -136,9 +136,45 @@ pub async fn get_project_output(
     }
 
     let full_path = std::path::Path::new(&project_path).join(sanitized);
-    let bytes = tokio::fs::read(&full_path)
+    dioxus::fullstack::FileStream::from_path(full_path)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e).into())
+}
 
-    Ok(bytes)
+/// Delete an output file from a project.
+pub async fn delete_project_output(
+    project_name: String,
+    relative_path: String,
+) -> DioxusResult<()> {
+    let project_path = {
+        let projects = get_projects().await?;
+        projects
+            .into_iter()
+            .find(|p| p.name == project_name)
+            .map(|p| p.path)
+            .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
+    };
+
+    // Sanitize: strip leading slashes and reject path traversal components.
+    let sanitized = relative_path.trim_start_matches('/');
+    for component in std::path::Path::new(sanitized).components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(anyhow::anyhow!("Path traversal is not allowed").into());
+        }
+    }
+
+    let full_path = std::path::Path::new(&project_path).join(sanitized);
+
+    // Check if it's a file or directory
+    if full_path.is_file() {
+        tokio::fs::remove_file(&full_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to delete file: {}", e).into())
+    } else if full_path.is_dir() {
+        tokio::fs::remove_dir_all(&full_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to delete directory: {}", e).into())
+    } else {
+        Err(anyhow::anyhow!("Path does not exist").into())
+    }
 }

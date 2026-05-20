@@ -36,6 +36,11 @@ pub async fn get_project_output_for_viewer(
     }
 
     let full_path = std::path::Path::new(&project_path).join(sanitised);
+
+    // Verify file exists before attempting to read
+    if !full_path.exists() {
+        return Err(anyhow::anyhow!("Output file not found: {:?}", full_path).into());
+    }
     let file_name = full_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -43,17 +48,22 @@ pub async fn get_project_output_for_viewer(
         .to_lowercase();
 
     if file_name == "points3d.bin" {
-        let bytes = tokio::fs::read(&full_path)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to read points3D.bin: {}", e))?;
+        let bytes = tokio::fs::read(&full_path).await.map_err(|e| {
+            eprintln!("Error reading points3D.bin at {:?}: {}", full_path, e);
+            anyhow::anyhow!(
+                "Failed to read points3D.bin - check file permissions: {}",
+                e
+            )
+        })?;
         let ply = convert_points3d_bin_to_ply(&bytes)
             .map_err(|e| anyhow::anyhow!("Failed to convert points3D.bin: {}", e))?;
         Ok(ply)
     } else {
         // PLY or anything else – pass through.
-        let bytes = tokio::fs::read(&full_path)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e))?;
+        let bytes = tokio::fs::read(&full_path).await.map_err(|e| {
+            eprintln!("Error reading output file at {:?}: {}", full_path, e);
+            anyhow::anyhow!("Failed to read output file - check file permissions: {}", e)
+        })?;
         Ok(bytes)
     }
 }

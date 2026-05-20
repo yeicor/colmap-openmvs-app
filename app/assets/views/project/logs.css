@@ -317,6 +317,11 @@
     color: var(--secondary-color-5);
 }
 
+.stage-status-skipped {
+    color: var(--secondary-color-5);
+    opacity: 0.6;
+}
+
 /* ── Log output area ──────────────────────────────────────────────────────── */
 
 .logs-output {

@@ -1,7 +1,8 @@
-use crate::server::{get_project_output, get_project_output_for_viewer, list_project_outputs};
+use crate::server::{get_project_output_for_viewer, list_project_outputs};
 use base64::Engine as _;
 use dioxus::document::eval;
 use dioxus::prelude::*;
+use urlencoding::encode as url_encode;
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -40,8 +41,6 @@ pub fn OutputsTab(project_name: String) -> Element {
     // ── State ────────────────────────────────────────────────────────────
     let mut refresh_counter = use_signal(|| 0u32);
     let mut error_msg = use_signal(String::new);
-    // relative_path of the file currently being downloaded, if any
-    let mut downloading = use_signal(|| Option::<String>::None);
     // relative_path of the file currently being loaded for viewing, if any
     let mut viewing = use_signal(|| Option::<String>::None);
 
@@ -130,7 +129,6 @@ pub fn OutputsTab(project_name: String) -> Element {
                                 let pn_dl = project_name.clone();
                                 let pn_view = project_name.clone();
 
-                                let is_downloading = downloading() == Some(rel_path.clone());
                                 let is_viewing = viewing() == Some(rel_path.clone());
 
                                 rsx! {
@@ -155,48 +153,12 @@ pub fn OutputsTab(project_name: String) -> Element {
                                             }
                                         }
 
-                                        // Download button
-                                        button {
-                                            style: "padding:0.35rem 0.85rem;border:1px solid var(--primary-color-6);border-radius:0.375rem;background:var(--primary-color-4);color:var(--secondary-color);font-size:0.82rem;cursor:pointer;white-space:nowrap;flex-shrink:0;",
-                                            disabled: is_downloading,
-                                            onclick: move |_| {
-                                                let pn = pn_dl.clone();
-                                                let rp = rel_path_dl.clone();
-                                                let fn_ = fname_dl.clone();
-                                                downloading.set(Some(rp.clone()));
-                                                let mut err = error_msg;
-                                                spawn(async move {
-                                                    match get_project_output(pn, rp.clone()).await {
-                                                        Ok(bytes) => {
-                                                            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                                                            let fname_safe = js_escape(&fn_);
-                                                            let js = format!(r#"
-(function() {{
-    const b64 = '{b64}';
-    const binary = atob(b64);
-    const arr = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
-    const blob = new Blob([arr], {{type: 'application/octet-stream'}});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = '{fname_safe}';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-}})();
-"#);
-                                                            let _ = eval(&js);
-                                                        }
-                                                        Err(e) => {
-                                                            err.set(format!("Download failed: {e}"));
-                                                        }
-                                                    }
-                                                    downloading.set(None);
-                                                });
-                                            },
-                                            if is_downloading { "⏳ Downloading…" } else { "⬇ Download" }
+                                        // Download button (direct URL for streaming)
+                                        a {
+                                            href: "/projects/{pn_dl}/outputs/file?relative_path={url_encode(&rel_path_dl)}",
+                                            download: "{fname_dl}",
+                                            style: "padding:0.35rem 0.85rem;border:1px solid var(--primary-color-6);border-radius:0.375rem;background:var(--primary-color-4);color:var(--secondary-color);font-size:0.82rem;cursor:pointer;white-space:nowrap;flex-shrink:0;display:inline-block;text-decoration:none;text-align:center;",
+                                            "⬇ Download"
                                         }
 
                                         // 3D View button (only for viewable files)
@@ -291,8 +253,10 @@ fn launch_ply_viewer(b64: &str, fname_safe: &str) {
 
     try {{
         const THREE = await import('https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js');
-        const {{ PLYLoader }} = await import('https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/loaders/PLYLoader.js');
-        const {{ OrbitControls }} = await import('https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/controls/OrbitControls.js');
+        const PLYLoaderMod = await import('https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/loaders/PLYLoader.js');
+        const OrbitControlsMod = await import('https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/controls/OrbitControls.js');
+        const PLYLoader = PLYLoaderMod.PLYLoader;
+        const OrbitControls = OrbitControlsMod.OrbitControls;
 
         loading.remove();
 

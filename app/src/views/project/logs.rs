@@ -77,8 +77,12 @@ struct StageData {
     completed: bool,
     /// Stage output was served from cache (previous run)
     cached: bool,
+    /// Stage was explicitly skipped (--skip flag)
+    skipped: bool,
     /// Stage is currently being executed
     is_running: bool,
+    /// 1-based pipeline stage number (X from count=X/Y); None for Config/Tool Discovery groups
+    pipeline_stage_num: Option<u32>,
 }
 
 impl StageData {
@@ -91,7 +95,9 @@ impl StageData {
             progress: None,
             completed: false,
             cached: false,
+            skipped: false,
             is_running: false,
+            pipeline_stage_num: None,
         }
     }
 }
@@ -173,6 +179,9 @@ fn spawn_pipeline_stream(
                         // --------------------------------------------------
                         // Pre-populate stage list from the leading groups list
                         // --------------------------------------------------
+                        // NOTE: In recovery from a dry-run (full pipeline after dry-run),
+                        // stages may already be populated with cached/skipped flags.
+                        // We skip re-population to preserve that cached state information.
                         TaskEvent::PipelineRemainingGroups(names) => {
                             let total = names.len() as u32;
                             let mut s = stages.write();
@@ -186,7 +195,9 @@ fn spawn_pipeline_stream(
                                         progress: None,
                                         completed: false,
                                         cached: false,
+                                        skipped: false,
                                         is_running: false,
+                                        pipeline_stage_num: None,
                                     });
                                 }
                             }
@@ -200,6 +211,7 @@ fn spawn_pipeline_stream(
                             stage_name,
                             total_stages,
                             stage_status,
+                            pipeline_stage_num,
                         } => {
                             let mut s = stages.write();
                             while s.len() <= stage_index as usize {
@@ -207,28 +219,42 @@ fn spawn_pipeline_stream(
                                 s.push(StageData::new(idx, String::new(), total_stages));
                             }
                             let cached = matches!(stage_status, PipelineStageStatus::Cached);
+                            let skipped = matches!(stage_status, PipelineStageStatus::Skipped);
                             // In a dry-run, a "Run" status means "needs to execute" (pending),
                             // not that it is actually executing right now.
-                            let actually_running = !cached && !is_dry_run;
+                            let actually_running = !cached && !skipped && !is_dry_run;
 
                             let stage = &mut s[stage_index as usize];
                             stage.name = stage_name.clone();
-                            stage.total_stages = total_stages;
+                            // Only update total_stages for pipeline stages (those with a count)
+                            if total_stages > 0 {
+                                stage.total_stages = total_stages;
+                            }
                             stage.cached = cached;
-                            stage.completed = cached;
+                            stage.skipped = skipped;
+                            stage.completed = cached || skipped;
                             stage.is_running = actually_running;
+                            stage.pipeline_stage_num = pipeline_stage_num;
 
-                            if actually_running {
+                            // Auto-expand only actual running pipeline stages
+                            if actually_running && pipeline_stage_num.is_some() {
                                 expanded_stage.set(Some(stage_index));
                             }
 
-                            // Update global progress counter for cached stages
-                            if cached {
-                                let total_f =
-                                    s.first().map(|x| x.total_stages as f32).unwrap_or(1.0);
-                                let completed_f = s.iter().filter(|x| x.completed).count() as f32;
-                                pipeline_progress_ctx
-                                    .set(Some((completed_f / total_f).clamp(0.0, 1.0)));
+                            // Update global progress counter for cached/skipped stages
+                            if cached || skipped {
+                                let total_pipeline =
+                                    s.iter().filter(|x| x.pipeline_stage_num.is_some()).count()
+                                        as f32;
+                                let completed_pipeline =
+                                    s.iter()
+                                        .filter(|x| x.pipeline_stage_num.is_some() && x.completed)
+                                        .count() as f32;
+                                if total_pipeline > 0.0 {
+                                    pipeline_progress_ctx.set(Some(
+                                        (completed_pipeline / total_pipeline).clamp(0.0, 1.0),
+                                    ));
+                                }
                             }
                         }
 
@@ -265,13 +291,23 @@ fn spawn_pipeline_stream(
                         } => {
                             let mut s = stages.write();
                             if let Some(stage) = s.get_mut(stage_index as usize) {
-                                stage.progress = Some(progress);
+                                // Only update progress for pipeline stages (not Config/Tool Discovery)
+                                if stage.pipeline_stage_num.is_some() {
+                                    stage.progress = Some(progress);
+                                }
                             }
-                            let total = s.first().map(|x| x.total_stages as f32).unwrap_or(1.0);
-                            let completed = s.iter().filter(|x| x.completed).count() as f32;
-                            let sub = progress / total;
-                            pipeline_progress_ctx
-                                .set(Some((completed / total + sub).clamp(0.0, 1.0)));
+                            let total_pipeline =
+                                s.iter().filter(|x| x.pipeline_stage_num.is_some()).count() as f32;
+                            if total_pipeline > 0.0 {
+                                let completed_pipeline =
+                                    s.iter()
+                                        .filter(|x| x.pipeline_stage_num.is_some() && x.completed)
+                                        .count() as f32;
+                                let sub = progress / total_pipeline;
+                                pipeline_progress_ctx.set(Some(
+                                    (completed_pipeline / total_pipeline + sub).clamp(0.0, 1.0),
+                                ));
+                            }
                         }
 
                         // --------------------------------------------------
@@ -282,11 +318,21 @@ fn spawn_pipeline_stream(
                             if let Some(stage) = s.get_mut(stage_index as usize) {
                                 stage.completed = true;
                                 stage.is_running = false;
-                                stage.progress = Some(1.0);
+                                if stage.pipeline_stage_num.is_some() {
+                                    stage.progress = Some(1.0);
+                                }
                             }
-                            let total = s.first().map(|x| x.total_stages as f32).unwrap_or(1.0);
-                            let completed = s.iter().filter(|x| x.completed).count() as f32;
-                            pipeline_progress_ctx.set(Some((completed / total).clamp(0.0, 1.0)));
+                            let total_pipeline =
+                                s.iter().filter(|x| x.pipeline_stage_num.is_some()).count() as f32;
+                            if total_pipeline > 0.0 {
+                                let completed_pipeline =
+                                    s.iter()
+                                        .filter(|x| x.pipeline_stage_num.is_some() && x.completed)
+                                        .count() as f32;
+                                pipeline_progress_ctx.set(Some(
+                                    (completed_pipeline / total_pipeline).clamp(0.0, 1.0),
+                                ));
+                            }
                         }
 
                         // --------------------------------------------------
@@ -474,7 +520,20 @@ pub fn LogsTab(project_name: String) -> Element {
             // Mark as running synchronously so the mount-effect task won't
             // race and also start a dry-run.
             pipeline_status.set(PipelineStatus::Running);
-            stages.set(Vec::new());
+            // Reset runtime state but preserve cached/skipped flags from dry-run.
+            // This allows us to recover from a dry-run and start the real pipeline
+            // while keeping the cached stage information, so cached stages will be
+            // marked as done immediately when their PipelineStageStarted event arrives
+            // with status=cached.
+            let mut s = stages.write();
+            for stage in s.iter_mut() {
+                stage.completed = false; // Will be re-set by real pipeline events
+                stage.is_running = false; // No stage is running yet
+                stage.progress = None; // Clear old progress
+                stage.lines.clear(); // Clear old logs
+                                     // NOTE: cached and skipped flags are preserved!
+            }
+            drop(s);
             error_msg.set(String::new());
             pipeline_progress_ctx.set(Some(0.0));
             is_current_dry_run.set(false);
@@ -600,6 +659,8 @@ pub fn LogsTab(project_name: String) -> Element {
                             // Determine display icon and CSS class.
                             let (status_icon, stage_status_class) = if stage.completed && stage.cached {
                                 ("✓", "stage-status-cached")
+                            } else if stage.completed && stage.skipped {
+                                ("⊘", "stage-status-skipped")
                             } else if stage.completed {
                                 ("✓", "stage-status-done")
                             } else if stage.is_running {
@@ -608,8 +669,15 @@ pub fn LogsTab(project_name: String) -> Element {
                                 ("○", "stage-status-pending")
                             };
 
+                            // Counter badge: only for actual pipeline stages (not Config/Tool Discovery)
+                            let counter_str = if let Some(num) = stage.pipeline_stage_num {
+                                format!("{num}/{}  ", stage.total_stages)
+                            } else {
+                                String::new()
+                            };
+
                             // Suffix shown next to stage name.
-                            let name_suffix = if stage.cached { " (cached)" } else { "" };
+                            let name_suffix = if stage.cached { " (cached)" } else if stage.skipped { " (skipped)" } else { "" };
 
                             rsx! {
                                 div {
@@ -630,9 +698,11 @@ pub fn LogsTab(project_name: String) -> Element {
                                             class: "stage-chevron",
                                             if is_expanded { "▾" } else { "▸" }
                                         }
-                                        span {
-                                            class: "stage-index",
-                                            "{stage_idx + 1}/{stage.total_stages}"
+                                        if !counter_str.is_empty() {
+                                            span {
+                                                class: "stage-index",
+                                                "{counter_str}"
+                                            }
                                         }
                                         span {
                                             class: "stage-name",

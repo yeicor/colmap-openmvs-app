@@ -112,7 +112,10 @@ async fn run_pipeline_task(
         let mut stderr_lines = stderr.map(|r| r.lines());
 
         // Mutable group-tracking state shared across both stream arms.
-        let mut current_stage_index: u32 = 0;
+        // group_seq: next sequential index to assign on the next ::group marker.
+        // current_group_idx: the index assigned to the currently open ::group.
+        let mut group_seq: u32 = 0;
+        let mut current_group_idx: u32 = 0;
         let mut current_stage_name: String = String::new();
 
         loop {
@@ -130,7 +133,8 @@ async fn run_pipeline_task(
                             process_line(
                                 &task_id_log,
                                 &l,
-                                &mut current_stage_index,
+                                &mut group_seq,
+                                &mut current_group_idx,
                                 &mut current_stage_name,
                             );
                         }
@@ -153,7 +157,8 @@ async fn run_pipeline_task(
                             process_line(
                                 &task_id_log,
                                 &l,
-                                &mut current_stage_index,
+                                &mut group_seq,
+                                &mut current_group_idx,
                                 &mut current_stage_name,
                             );
                         }
@@ -180,6 +185,7 @@ async fn run_pipeline_task(
         return Err(anyhow::anyhow!("{}", msg));
     }
 
+    let _ = make_project_outputs_readable(&project_path).await;
     crate::task_registry::publish_event(&task_id, TaskEvent::Completed);
     Ok(())
 }
@@ -189,10 +195,14 @@ async fn run_pipeline_task(
 // ---------------------------------------------------------------------------
 
 /// Parse one output line and publish the appropriate task event(s).
+///
+/// `group_seq` is the next sequential index to assign to the next `::group` marker;
+/// `current_group_idx` is the currently-open group's assigned index (for log lines).
 fn process_line(
     task_id: &str,
     line: &str,
-    current_stage_index: &mut u32,
+    group_seq: &mut u32,
+    current_group_idx: &mut u32,
     current_stage_name: &mut String,
 ) {
     // ::remaining_groups::A,B,C,...
@@ -209,26 +219,32 @@ fn process_line(
 
         let attrs = parse_attrs(attr_str);
 
-        // Parse count=X/Y  →  stage_index = X-1 (0-based), total_stages = Y
-        let (stage_index, total_stages) = if let Some(count) = attrs.get("count") {
+        // Parse count=X/Y → pipeline_stage_num = X (1-based), total_stages = Y.
+        // The stage_index is always the sequential group counter (not X-1), so that
+        // Config and Tool Discovery groups get their own unique slots.
+        let (pipeline_stage_num, total_stages) = if let Some(count) = attrs.get("count") {
             let parts: Vec<&str> = count.splitn(2, '/').collect();
             if parts.len() == 2 {
                 let x = parts[0].trim().parse::<u32>().unwrap_or(1);
                 let y = parts[1].trim().parse::<u32>().unwrap_or(1);
-                (x.saturating_sub(1), y)
+                (Some(x), y)
             } else {
-                (*current_stage_index, 0)
+                (None, 0)
             }
         } else {
-            (*current_stage_index, 0)
+            (None, 0)
         };
 
         let stage_status = match attrs.get("status").map(|s| s.as_str()) {
             Some("cached") => PipelineStageStatus::Cached,
+            Some("skipped") => PipelineStageStatus::Skipped,
             _ => PipelineStageStatus::Run,
         };
 
-        *current_stage_index = stage_index;
+        // Assign the current sequential index then advance the counter.
+        let stage_index = *group_seq;
+        *current_group_idx = stage_index;
+        *group_seq += 1;
         *current_stage_name = stage_name.clone();
 
         crate::task_registry::publish_event(
@@ -238,6 +254,7 @@ fn process_line(
                 stage_name,
                 total_stages,
                 stage_status,
+                pipeline_stage_num,
             },
         );
         return;
@@ -248,7 +265,7 @@ fn process_line(
         crate::task_registry::publish_event(
             task_id,
             TaskEvent::PipelineStageCompleted {
-                stage_index: *current_stage_index,
+                stage_index: *current_group_idx,
                 stage_name: current_stage_name.clone(),
             },
         );
@@ -259,7 +276,7 @@ fn process_line(
     crate::task_registry::publish_event(
         task_id,
         TaskEvent::PipelineLog {
-            stage_index: *current_stage_index,
+            stage_index: *current_group_idx,
             stage_name: current_stage_name.clone(),
             line: line.to_string(),
         },
@@ -272,7 +289,7 @@ fn process_line(
                 crate::task_registry::publish_event(
                     task_id,
                     TaskEvent::PipelineStageProgress {
-                        stage_index: *current_stage_index,
+                        stage_index: *current_group_idx,
                         progress: (num / denom).clamp(0.0, 1.0),
                     },
                 );
@@ -286,7 +303,7 @@ fn process_line(
             crate::task_registry::publish_event(
                 task_id,
                 TaskEvent::PipelineStageProgress {
-                    stage_index: *current_stage_index,
+                    stage_index: *current_group_idx,
                     progress: (pct / 100.0).clamp(0.0, 1.0),
                 },
             );
@@ -310,4 +327,54 @@ fn parse_attrs(attr_str: &str) -> HashMap<String, String> {
         }
     }
     map
+}
+
+// ---------------------------------------------------------------------------
+// Permission fixing
+// ---------------------------------------------------------------------------
+
+/// Recursively make output files readable by ensuring they have user read permissions.
+/// This helps fix permission issues when files are created in containers.
+async fn make_project_outputs_readable(project_path: &str) -> anyhow::Result<()> {
+    let path = std::path::PathBuf::from(project_path);
+    if path.exists() {
+        tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || make_dir_readable_sync(&path)
+        })
+        .await
+        .ok();
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_dir_readable_sync(dir: &std::path::Path) {
+    use std::collections::VecDeque;
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut queue = VecDeque::new();
+    queue.push_back(dir.to_path_buf());
+
+    while let Some(current_dir) = queue.pop_front() {
+        if let Ok(entries) = std::fs::read_dir(&current_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    let mode = meta.permissions().mode();
+                    let new_mode = mode | 0o400;
+                    let _ = std::fs::set_permissions(&path, Permissions::from_mode(new_mode));
+                }
+                if path.is_dir() {
+                    queue.push_back(path);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn make_dir_readable_sync(_dir: &std::path::Path) {
+    // No-op on non-Unix systems
 }

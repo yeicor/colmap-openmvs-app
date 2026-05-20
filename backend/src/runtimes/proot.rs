@@ -514,7 +514,6 @@ impl Runtime for PRoot {
 
         // Build the tokio async Command
         let mut cmd = Command::new(&proot_bin);
-        cmd.env_clear();
 
         for env_var in &metadata.env {
             if let Some((key, value)) = env_var.split_once('=') {
@@ -545,15 +544,30 @@ impl Runtime for PRoot {
         if let Some(ep) = &metadata.entrypoint {
             full_cmd.extend(ep.clone());
         }
-        if let Some(c) = &metadata.cmd {
-            full_cmd.extend(c.clone());
+        // Follow Docker semantics: if the caller provides explicit args, they
+        // *replace* the image's default CMD entirely.  Only fall back to CMD
+        // when no args are supplied.
+        if args.is_empty() {
+            if let Some(c) = &metadata.cmd {
+                full_cmd.extend(c.clone());
+            }
+        } else {
+            full_cmd.extend(args.iter().cloned());
         }
-        full_cmd.extend(args.iter().cloned());
 
-        for arg in &full_cmd {
-            cmd.arg(arg);
+        // Wrap command with environment variable exports
+        if !metadata.env.is_empty() {
+            let mut env_exports = String::new();
+            for env_var in &metadata.env {
+                env_exports.push_str(&format!("export {}; ", env_var));
+            }
+            let cmd_str = full_cmd.join(" ");
+            cmd.arg("/bin/sh").arg("-c").arg(format!("{}exec {}", env_exports, cmd_str));
+        } else {
+            for arg in &full_cmd {
+                cmd.arg(arg);
+            }
         }
-
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());

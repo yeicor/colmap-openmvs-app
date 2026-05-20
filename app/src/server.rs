@@ -217,9 +217,9 @@ pub async fn list_project_outputs(project_name: String) -> Result<Vec<OutputFile
 }
 
 /// Return the raw bytes of an output file (used for download links).
-/// The `relative_path` is URL-encoded and decoded here.
-#[get("/projects/:project_name/outputs/file")]
-pub async fn get_project_output(project_name: String, relative_path: String) -> Result<Vec<u8>> {
+/// `relative_path` is a query parameter (e.g. ?relative_path=colmap%2Fdatabase.db).
+#[get("/projects/{project_name}/outputs/file?relative_path")]
+pub async fn get_project_output(project_name: String, relative_path: String) -> Result<FileStream> {
     backend::get_project_output(project_name, relative_path)
         .await
         .map_err(Into::into)
@@ -233,6 +233,14 @@ pub async fn get_project_output_for_viewer(
     relative_path: String,
 ) -> Result<Vec<u8>> {
     backend::get_project_output_for_viewer(project_name, relative_path)
+        .await
+        .map_err(Into::into)
+}
+
+/// Delete an output file.
+#[post("/projects/:project_name/outputs/delete")]
+pub async fn delete_project_output(project_name: String, relative_path: String) -> Result<()> {
+    backend::delete_project_output(project_name, relative_path)
         .await
         .map_err(Into::into)
 }

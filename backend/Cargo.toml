@@ -17,7 +17,7 @@ tokio = { version = "*", features = ["full"] }
 
 # Async utilities for streaming
 futures-util = { version = "0.3", features = ["sink", "io"] }
-dioxus = { version = "0.7.7", features = ["fullstack", "server"] }
+dioxus = { version = "0.7.9", features = ["fullstack", "server"] }
 
 # Async trait support
 async-trait = { version = "0.1" }

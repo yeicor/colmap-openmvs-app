@@ -216,6 +216,8 @@ pub enum PipelineStageStatus {
     Cached,
     /// Stage needs to run (or was skipped in dry-run mode)
     Run,
+    /// Stage was explicitly skipped via --skip flag
+    Skipped,
 }
 
 /// The state of a task
@@ -268,11 +270,15 @@ pub enum TaskEvent {
     PipelineRemainingGroups(Vec<String>),
     /// A stage started in the pipeline
     PipelineStageStarted {
+        /// Sequential index into the full group list (0-based, includes Config/Tool Discovery)
         stage_index: u32,
         stage_name: String,
+        /// Number of pipeline stages (excludes Config/Tool Discovery); 0 for non-pipeline groups
         total_stages: u32,
-        /// Whether the stage was already cached (completed in a previous run)
+        /// Whether the stage was cached/skipped/needs-run
         stage_status: PipelineStageStatus,
+        /// 1-based pipeline stage number from count=X/Y; None for Config/Tool Discovery groups
+        pipeline_stage_num: Option<u32>,
     },
     /// Pipeline sub-progress within the current stage (0.0..=1.0)
     PipelineStageProgress { stage_index: u32, progress: f32 },
