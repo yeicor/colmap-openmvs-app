@@ -316,7 +316,11 @@ fn spawn_pipeline_stream(
                         TaskEvent::PipelineStageCompleted { stage_index, .. } => {
                             let mut s = stages.write();
                             if let Some(stage) = s.get_mut(stage_index as usize) {
-                                stage.completed = true;
+                                // During dry-run: only mark cached/skipped as completed
+                                // During full run: mark any completed stage as completed
+                                if !is_dry_run || stage.cached || stage.skipped {
+                                    stage.completed = true;
+                                }
                                 stage.is_running = false;
                                 if stage.pipeline_stage_num.is_some() {
                                     stage.progress = Some(1.0);
