@@ -51,6 +51,9 @@ which = { version = "5.0" }
 
 futures = "0.3.32"
 
+# Process management
+libc = "0.2"
+
 # OCI Distribution client for pulling container images (renamed to oras-project/rust-oci-client)
 oci-client = { version = "0.16" }
 
@@ -65,3 +68,6 @@ indexmap = { version = "2.0" }
 
 # UUID generation for task IDs
 uuid = { version = "1", features = ["v4"] }
+
+# Unix signal handling
+nix = { version = "0.27", features = ["process"] }

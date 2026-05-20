@@ -24,6 +24,8 @@ pub struct TaskEntry {
     pub events: Arc<Mutex<Vec<TaskEvent>>>,
     /// Tracks current event count; subscribers call `.subscribe()` to get a `Receiver`.
     pub seq_sender: watch::Sender<usize>,
+    /// Optional kill function for the running task; can be called to cancel execution.
+    pub kill_fn: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
 }
 
 pub struct TaskRegistry {
@@ -54,6 +56,7 @@ impl TaskRegistry {
             info,
             events: Arc::new(Mutex::new(Vec::new())),
             seq_sender,
+            kill_fn: Arc::new(Mutex::new(None)),
         };
         self.tasks.insert(id.clone(), entry);
         id
@@ -115,9 +118,28 @@ impl TaskRegistry {
         self.tasks.get(task_id).map(|e| e.info.clone())
     }
 
-    /// Cancel a running task by publishing a Failed event.
+    /// Cancel a running task by killing its process and publishing a Failed event.
+    /// This function blocks until all processes are confirmed dead.
     pub fn cancel_task(&mut self, task_id: &str) {
+        // Try to kill the process if one is running
+        if let Some(entry) = self.tasks.get(task_id) {
+            if let Ok(kill_guard) = entry.kill_fn.lock() {
+                if let Some(ref kill_fn) = *kill_guard {
+                    kill_fn();
+                }
+            }
+        }
+
         self.publish_event(task_id, TaskEvent::Failed("Cancelled by user.".to_string()));
+    }
+
+    /// Store a kill function for a running task (for cancellation purposes).
+    pub fn set_kill_fn<F: Fn() + Send + 'static>(&mut self, task_id: &str, kill_fn: F) {
+        if let Some(entry) = self.tasks.get_mut(task_id) {
+            if let Ok(mut fn_guard) = entry.kill_fn.lock() {
+                *fn_guard = Some(Box::new(kill_fn));
+            }
+        }
     }
 }
 

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::{
+    process::kill_process_tree,
     runtimes::{Mount, Runtime, RuntimeFactory},
     settings::get_settings,
     task_registry::TASK_REGISTRY,
@@ -98,6 +99,20 @@ async fn run_pipeline_task(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to start pipeline container: {}", e))?;
 
+    // Store a kill function in the task registry so the process can be killed on cancellation
+    {
+        let task_id_kill = task_id.clone();
+        // We need to capture the PID to kill the process and its children
+        if let Some(pid) = handle.id() {
+            TASK_REGISTRY
+                .lock()
+                .unwrap()
+                .set_kill_fn(&task_id_kill, move || {
+                    kill_process_tree(pid as i32);
+                });
+        }
+    }
+
     // Take stdout/stderr before spawning the log reader task.
     let stdout = handle.take_stdout().map(BufReader::new);
     let stderr = handle.take_stderr().map(BufReader::new);
@@ -176,20 +191,38 @@ async fn run_pipeline_task(
     });
 
     // Wait for the container process to exit, then drain any remaining log output.
+    eprintln!("[run_pipeline_task] Waiting for process to exit");
     let exit_status = handle.wait().await?;
+    eprintln!(
+        "[run_pipeline_task] Process exited with status: {:?}",
+        exit_status
+    );
+
+    eprintln!("[run_pipeline_task] Waiting for log reading to complete");
     log_handle.await.ok();
+    eprintln!("[run_pipeline_task] Log reading complete");
 
     if !dry_run && !exit_status.success() {
         let msg = format!("Pipeline failed with exit code {:?}", exit_status.code());
+        eprintln!("[run_pipeline_task] Publishing Failed event: {}", msg);
         crate::task_registry::publish_event(&task_id, TaskEvent::Failed(msg.clone()));
         return Err(anyhow::anyhow!("{}", msg));
     }
 
+    eprintln!("[run_pipeline_task] Fixing output file permissions");
     let _ = make_project_outputs_readable(&project_path).await;
+
+    eprintln!("[run_pipeline_task] Publishing Completed event");
     crate::task_registry::publish_event(&task_id, TaskEvent::Completed);
+    eprintln!("[run_pipeline_task] Task completed successfully");
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Process group utilities
+// ---------------------------------------------------------------------------
+
+/// Get the process group ID for a given PID using ps command
 // ---------------------------------------------------------------------------
 // Line processor
 // ---------------------------------------------------------------------------

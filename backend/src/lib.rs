@@ -31,6 +31,9 @@ pub use task_registry::{create_event_stream, publish_event, task_registry, TaskR
 mod pipeline;
 pub use pipeline::run_pipeline;
 
+mod process;
+pub use process::kill_process_tree;
+
 pub use output_viewer::get_project_output_for_viewer;
 mod output_viewer;
 
