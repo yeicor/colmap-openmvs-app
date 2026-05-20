@@ -26,6 +26,20 @@ pub enum Route {
 
 #[component]
 pub fn App() -> Element {
+    // Inject Eruda console for debugging
+    let _ = dioxus::document::eval(
+        r#"
+        if (typeof eruda === 'undefined') {
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/eruda@3.0.1';
+            script.onload = () => {
+                eruda.init();
+            };
+            document.body.appendChild(script);
+        }
+        "#,
+    );
+
     rsx! {
         document::Link { rel: "icon", type: "image/png", href: asset!("/assets/icon.png") }
         document::Link { rel: "stylesheet", href: asset!("/assets/main.css") }
