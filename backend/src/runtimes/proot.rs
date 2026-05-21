@@ -28,11 +28,13 @@ async fn find_proot_binary(runtime_dir: &Path) -> RuntimeResult<String> {
     }
 
     // Strategy 2: Try direct execution (proot might be in system PATH)
-    match Command::new("proot").arg("--version").output().await {
-        Ok(_) => {
-            return Ok("proot".to_string());
-        }
-        Err(_) => {}
+    if Command::new("proot")
+        .arg("--version")
+        .output()
+        .await
+        .is_ok()
+    {
+        return Ok("proot".to_string());
     }
 
     // Strategy 3: Fall back to which (may be cached, least reliable)
@@ -430,7 +432,7 @@ impl Runtime for PRoot {
         use super::image_manager::ImageManager;
 
         // Use tag as directory name (normalized)
-        let tag_dir_name = image.replace(':', "_").replace('/', "_");
+        let tag_dir_name = image.replace([':', '/'], "_");
         let image_dir = self.images_dir.join(&tag_dir_name);
         let rootfs_dir = image_dir.join("rootfs");
 
@@ -462,7 +464,7 @@ impl Runtime for PRoot {
 
     async fn remove(&self, image_tag: &str) -> RuntimeResult<()> {
         // Use tag as directory name (normalized)
-        let tag_dir_name = image_tag.replace(':', "_").replace('/', "_");
+        let tag_dir_name = image_tag.replace([':', '/'], "_");
         let image_dir = self.images_dir.join(&tag_dir_name);
 
         if image_dir.exists() {
@@ -479,7 +481,7 @@ impl Runtime for PRoot {
         args: &[String],
         mounts: &[Mount],
     ) -> RuntimeResult<ProcessHandle> {
-        let tag_dir_name = image.replace(':', "_").replace('/', "_");
+        let tag_dir_name = image.replace([':', '/'], "_");
         let image_dir = self.images_dir.join(&tag_dir_name);
         let rootfs_dir = image_dir.join("rootfs");
 
@@ -562,7 +564,9 @@ impl Runtime for PRoot {
                 env_exports.push_str(&format!("export {}; ", env_var));
             }
             let cmd_str = full_cmd.join(" ");
-            cmd.arg("/bin/sh").arg("-c").arg(format!("{}exec {}", env_exports, cmd_str));
+            cmd.arg("/bin/sh")
+                .arg("-c")
+                .arg(format!("{}exec {}", env_exports, cmd_str));
         } else {
             for arg in &full_cmd {
                 cmd.arg(arg);

@@ -1,4 +1,6 @@
 use colmap_openmvs_api::PrepareProgress;
+use tracing::{debug, error, info};
+
 mod image_manager;
 mod proot;
 mod registry;
@@ -35,15 +37,25 @@ pub struct ProcessHandle {
 impl ProcessHandle {
     /// Wait asynchronously for the process to exit.
     pub async fn wait(&mut self) -> RuntimeResult<std::process::ExitStatus> {
-        self.child
+        debug!("Waiting for process to exit");
+        let status = self
+            .child
             .wait()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to wait for process: {}", e))
+            .map_err(|e| anyhow::anyhow!("Failed to wait for process: {}", e))?;
+        info!(exit_status = ?status, "Process exited");
+        Ok(status)
     }
 
     /// Return the OS process ID, if still alive.
     pub fn id(&self) -> Option<u32> {
-        self.child.id()
+        let pid = self.child.id();
+        if let Some(id) = pid {
+            debug!(pid = id, "Process ID retrieved");
+        } else {
+            debug!("Process ID not available (process may have exited)");
+        }
+        pid
     }
 
     /// Borrow stdin for writing.
@@ -63,28 +75,33 @@ impl ProcessHandle {
 
     /// Take ownership of stdin (useful for passing to another task).
     pub fn take_stdin(&mut self) -> Option<tokio::process::ChildStdin> {
+        debug!("Taking ownership of process stdin");
         self.child.stdin.take()
     }
 
     /// Take ownership of stdout.
     pub fn take_stdout(&mut self) -> Option<tokio::process::ChildStdout> {
+        debug!("Taking ownership of process stdout");
         self.child.stdout.take()
     }
 
     /// Take ownership of stderr.
     pub fn take_stderr(&mut self) -> Option<tokio::process::ChildStderr> {
+        debug!("Taking ownership of process stderr");
         self.child.stderr.take()
     }
 
     /// Kill the process asynchronously.
     pub async fn kill(&mut self) -> RuntimeResult<()> {
-        self.child
-            .kill()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to kill process: {}", e))
+        debug!("Killing process");
+        self.child.kill().await.map_err(|e| {
+            error!(error = %e, "Failed to kill process");
+            anyhow::anyhow!("Failed to kill process: {}", e)
+        })?;
+        info!("Process killed successfully");
+        Ok(())
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Progress channel helpers
@@ -271,12 +288,14 @@ pub struct RuntimeFactory;
 impl RuntimeFactory {
     /// Create a [`PRoot`] runtime using the configured install directory from settings.
     pub fn proot() -> PRoot {
-        let default_dir = crate::settings::default_proot_dir().into();
+        let default_dir: PathBuf = crate::settings::default_proot_dir().into();
+        debug!(runtime_dir = %default_dir.display(), "Creating PRoot runtime with default directory");
         PRoot::new(default_dir)
     }
 
     /// Create a [`PRoot`] runtime with a custom install directory.
     pub fn proot_with_dir(runtime_dir: PathBuf) -> PRoot {
+        debug!(runtime_dir = %runtime_dir.display(), "Creating PRoot runtime with custom directory");
         PRoot::new(runtime_dir)
     }
 }

@@ -2,6 +2,7 @@ use crate::server::{get_project_output_for_viewer, list_project_outputs};
 use base64::Engine as _;
 use dioxus::document::eval;
 use dioxus::prelude::*;
+use tracing::{debug, error, info};
 use urlencoding::encode as url_encode;
 
 // ---------------------------------------------------------------------------
@@ -38,19 +39,31 @@ fn js_escape(s: &str) -> String {
 
 #[component]
 pub fn OutputsTab(project_name: String) -> Element {
-    // ── State ────────────────────────────────────────────────────────────
+    debug!(project_name = %project_name, "Initializing outputs tab");
+    // State
     let mut refresh_counter = use_signal(|| 0u32);
     let mut error_msg = use_signal(String::new);
     // relative_path of the file currently being loaded for viewing, if any
     let mut viewing = use_signal(|| Option::<String>::None);
 
-    // ── Data ─────────────────────────────────────────────────────────────
+    // Data
     let project_name_res = project_name.clone();
     let files = use_resource(move || {
         let pn = project_name_res.clone();
         async move {
             let _ = refresh_counter(); // subscribe so refresh button re-runs this
-            list_project_outputs(pn).await
+            debug!(project_name = %pn, "Fetching output files list");
+            match list_project_outputs(pn.clone()).await {
+                Ok(files) => {
+                    let file_count = files.len();
+                    info!(project_name = %pn, file_count = file_count, "Successfully loaded output files");
+                    Ok(files)
+                }
+                Err(e) => {
+                    error!(project_name = %pn, error = %e, "Failed to load output files");
+                    Err(e)
+                }
+            }
         }
     });
 
@@ -58,34 +71,36 @@ pub fn OutputsTab(project_name: String) -> Element {
     rsx! {
         div {
             class: "tab-content outputs-tab",
-            style: "display:flex;flex-direction:column;gap:0.75rem;padding:0.75rem;height:100%;min-height:0;",
 
             // ── Toolbar ──────────────────────────────────────────────────
             div {
-                style: "display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;padding:0.5rem 0.75rem;background:var(--primary-color-5);border:1px solid var(--primary-color-6);border-radius:0.5rem;",
+                class: "outputs-toolbar",
 
                 span {
-                    style: "font-size:0.9rem;font-weight:600;color:var(--secondary-color);",
+                    class: "outputs-toolbar-title",
                     "Output Files"
                 }
 
                 // Spacer
-                div { style: "flex:1;" }
+                div { class: "outputs-toolbar-spacer" }
 
                 button {
-                    style: "padding:0.35rem 0.85rem;border:1px solid var(--primary-color-6);border-radius:0.375rem;background:var(--primary-color-4);color:var(--secondary-color);font-size:0.82rem;cursor:pointer;",
-                    onclick: move |_| { refresh_counter += 1; },
-                    "↻ Refresh"
+                    class: "outputs-refresh-btn",
+                    onclick: move |_| {
+                        debug!(project_name = %project_name, "User clicked refresh output files");
+                        refresh_counter += 1;
+                    },
+                    "Refresh"
                 }
             }
 
             // ── Error banner ──────────────────────────────────────────────
             if !error_msg().is_empty() {
                 div {
-                    style: "display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.75rem;background:var(--primary-error-color);color:var(--secondary-error-color);border:1px solid var(--secondary-error-color);border-radius:0.375rem;font-size:0.88rem;",
-                    span { style: "flex:1;", "{error_msg}" }
+                    class: "outputs-error-banner",
+                    span { "{error_msg}" }
                     button {
-                        style: "background:transparent;border:none;color:var(--secondary-error-color);cursor:pointer;font-size:1rem;padding:0.1rem 0.3rem;",
+                        class: "outputs-error-dismiss",
                         onclick: move |_| error_msg.set(String::new()),
                         "✕"
                     }
@@ -96,25 +111,25 @@ pub fn OutputsTab(project_name: String) -> Element {
             match files() {
                 None => rsx! {
                     div {
-                        style: "text-align:center;padding:3rem 1rem;color:var(--secondary-color-5);font-size:0.95rem;",
+                        class: "outputs-placeholder",
                         "Loading output files…"
                     }
                 },
                 Some(Err(e)) => rsx! {
                     div {
-                        style: "text-align:center;padding:3rem 1rem;color:var(--secondary-error-color);font-size:0.95rem;",
+                        class: "outputs-placeholder error",
                         "Failed to list output files: {e}"
                     }
                 },
                 Some(Ok(file_list)) if file_list.is_empty() => rsx! {
                     div {
-                        style: "text-align:center;padding:3rem 1rem;color:var(--secondary-color-5);font-size:0.95rem;",
+                        class: "outputs-placeholder",
                         "No output files yet. Run the pipeline to generate results."
                     }
                 },
                 Some(Ok(file_list)) => rsx! {
                     div {
-                        style: "display:flex;flex-direction:column;gap:0.4rem;overflow-y:auto;flex:1;min-height:0;",
+                        class: "outputs-file-list",
 
                         for file in file_list.iter() {
                             {
@@ -134,21 +149,21 @@ pub fn OutputsTab(project_name: String) -> Element {
                                 rsx! {
                                     div {
                                         key: "{rel_path}",
-                                        style: "display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.75rem;background:var(--primary-color-5);border:1px solid var(--primary-color-6);border-radius:0.5rem;flex-wrap:wrap;",
+                                        class: "outputs-file-item",
 
                                         // File icon + name
                                         span {
-                                            style: "font-size:0.88rem;color:var(--secondary-color-5);flex-shrink:0;",
+                                            class: "outputs-file-icon",
                                             "📄"
                                         }
                                         div {
-                                            style: "flex:1;min-width:0;",
+                                            class: "outputs-file-info-wrapper",
                                             div {
-                                                style: "font-size:0.88rem;font-weight:600;color:var(--secondary-color);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                                                class: "outputs-file-name",
                                                 "{fname}"
                                             }
                                             div {
-                                                style: "font-size:0.75rem;color:var(--secondary-color-5);margin-top:0.1rem;",
+                                                class: "outputs-file-meta",
                                                 "{rel_path}  ·  {size_str}"
                                             }
                                         }
@@ -157,29 +172,33 @@ pub fn OutputsTab(project_name: String) -> Element {
                                         a {
                                             href: "/projects/{pn_dl}/outputs/file?relative_path={url_encode(&rel_path_dl)}",
                                             download: "{fname_dl}",
-                                            style: "padding:0.35rem 0.85rem;border:1px solid var(--primary-color-6);border-radius:0.375rem;background:var(--primary-color-4);color:var(--secondary-color);font-size:0.82rem;cursor:pointer;white-space:nowrap;flex-shrink:0;display:inline-block;text-decoration:none;text-align:center;",
+                                            class: "outputs-download-link",
                                             "⬇ Download"
                                         }
 
                                         // 3D View button (only for viewable files)
                                         if is_viewable {
                                             button {
-                                                style: "padding:0.35rem 0.85rem;border:1px solid var(--focused-border-color);border-radius:0.375rem;background:var(--primary-color-4);color:var(--focused-border-color);font-size:0.82rem;cursor:pointer;white-space:nowrap;flex-shrink:0;",
+                                                class: "outputs-view-3d-btn",
                                                 disabled: is_viewing,
                                                 onclick: move |_| {
                                                     let pn = pn_view.clone();
                                                     let rp = rel_path_view.clone();
                                                     let fn_ = fname_view.clone();
+                                                    debug!(project_name = %pn, file_name = %fn_, "User clicked view 3D");
                                                     viewing.set(Some(rp.clone()));
                                                     let mut err = error_msg;
                                                     spawn(async move {
-                                                        match get_project_output_for_viewer(pn, rp.clone()).await {
+                                                        debug!(project_name = %pn, file_path = %rp, "Loading file for 3D viewer");
+                                                        match get_project_output_for_viewer(pn.clone(), rp.clone()).await {
                                                             Ok(bytes) => {
+                                                                info!(project_name = %pn, file_name = %fn_, bytes_loaded = bytes.len(), "Successfully loaded file for 3D viewer");
                                                                 let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                                                                 let fname_safe = js_escape(&fn_);
                                                                 launch_ply_viewer(&b64, &fname_safe).await;
                                                             }
                                                             Err(e) => {
+                                                                error!(project_name = %pn, file_name = %fn_, error = %e, "Failed to load file for 3D viewer");
                                                                 err.set(format!("Failed to load viewer data: {e}"));
                                                             }
                                                         }
@@ -204,6 +223,8 @@ pub fn OutputsTab(project_name: String) -> Element {
 // ---------------------------------------------------------------------------
 
 async fn launch_ply_viewer(b64: &str, fname_safe: &str) {
+    info!(file_name = %fname_safe, "Launching 3D PLY viewer");
+    debug!("Encoding and preparing PLY data for viewer");
     let b64_esc = js_escape(b64);
     let fname_esc = js_escape(fname_safe);
 

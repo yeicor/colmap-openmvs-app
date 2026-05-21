@@ -244,10 +244,7 @@ pub async fn subscribe_task_events(task_id: String) -> Result<ServerEvents<TaskE
     let stream = crate::task_registry::create_event_stream(&task_id)
         .ok_or_else(|| anyhow::anyhow!("Task not found: {}", task_id))?;
     let stream = stream.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-        Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            e.to_string(),
-        ))
+        Box::new(std::io::Error::other(e.to_string()))
     });
     Ok(ServerEvents::from_stream(stream))
 }

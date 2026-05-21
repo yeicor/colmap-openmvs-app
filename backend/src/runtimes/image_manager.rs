@@ -17,23 +17,12 @@ use std::path::Path;
 use tokio::sync::mpsc;
 
 /// Docker image configuration extracted from image config blob
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImageConfig {
     pub env: Vec<String>,
     pub entrypoint: Option<Vec<String>>,
     pub cmd: Option<Vec<String>>,
     pub working_dir: Option<String>,
-}
-
-impl Default for ImageConfig {
-    fn default() -> Self {
-        Self {
-            env: vec![],
-            entrypoint: None,
-            cmd: None,
-            working_dir: None,
-        }
-    }
 }
 
 /// Docker image manager using OCI Distribution client
@@ -83,7 +72,7 @@ impl ImageManager {
                 // Auto-select platform matching the host
                 let (host_os, host_arch) = get_host_platform();
                 let selected_manifest = self
-                    .select_platform_manifest(&reference, &index, &host_os, &host_arch)
+                    .select_platform_manifest(&reference, &index, host_os, host_arch)
                     .await?;
                 (
                     selected_manifest.config.clone(),
@@ -227,7 +216,7 @@ impl ImageManager {
         // Pull the specific manifest for this platform
         let (manifest, _, _) = self
             .client
-            .pull_manifest_and_config(&reference, &RegistryAuth::Anonymous)
+            .pull_manifest_and_config(reference, &RegistryAuth::Anonymous)
             .await
             .map_err(|e| anyhow!("Failed to pull platform-specific manifest: {}", e))?;
 

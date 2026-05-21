@@ -3,6 +3,7 @@ use dioxus::fullstack::FileStream;
 use futures::StreamExt;
 use image::{DynamicImage, ImageDecoder, ImageReader};
 use once_cell::sync::Lazy;
+use tracing::{debug, error, info, warn};
 
 use sevenz_rust2::decompress_with_extract_fn;
 use std::collections::HashMap;
@@ -55,18 +56,22 @@ fn validate_and_canonicalize_image_path(
 }
 
 pub async fn get_project_images(project_name: String) -> dioxus::Result<Vec<String>> {
+    debug!(project_name = %project_name, "Retrieving project images list");
     validate_project_name(&project_name)?;
     let settings = crate::get_settings().await?;
     let images_path = Path::new(&settings.projects_folder)
         .join(&project_name)
         .join("images");
+    debug!(images_path = %images_path.display(), "Resolved images directory path");
 
     let lock = lock_for_image_path(&images_path).await;
     let _guard = lock.lock().await;
 
     if !images_path.exists() {
+        debug!(images_path = %images_path.display(), "Images directory does not exist, creating it");
         std::fs::create_dir_all(&images_path)
             .map_err(|e| anyhow!("Failed to create images folder: {}", e))?;
+        info!(images_path = %images_path.display(), project_name = %project_name, "Images directory created");
         return Ok(Vec::new());
     }
 
@@ -77,6 +82,7 @@ pub async fn get_project_images(project_name: String) -> dioxus::Result<Vec<Stri
             if path.is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if is_image_file(name) {
+                        debug!(image_name = %name, "Found image file");
                         images.push(name.to_string());
                     }
                 }
@@ -85,6 +91,7 @@ pub async fn get_project_images(project_name: String) -> dioxus::Result<Vec<Stri
     }
 
     images.sort();
+    info!(project_name = %project_name, image_count = images.len(), "Successfully retrieved images list");
     Ok(images)
 }
 
@@ -92,15 +99,18 @@ pub async fn get_project_image(
     project_name: String,
     image_name: String,
 ) -> dioxus::Result<FileStream> {
+    debug!(project_name = %project_name, image_name = %image_name, "Retrieving project image");
     validate_project_name(&project_name)?;
     let settings = crate::get_settings().await?;
     let images_path = Path::new(&settings.projects_folder)
         .join(&project_name)
         .join("images");
+    debug!(images_path = %images_path.display(), "Resolved images directory");
 
     let canonical_image = validate_and_canonicalize_image_path(&images_path, &image_name)?;
     let lock = lock_for_image_path(&canonical_image).await;
     let _guard = lock.lock().await;
+    debug!(image_path = %canonical_image.display(), "Reading image file");
     Ok(FileStream::from_path(canonical_image)
         .await
         .context("Failed to read file")?)
@@ -111,12 +121,14 @@ pub async fn add_project_image(
     image_name: String,
     body: Vec<u8>,
 ) -> dioxus::Result<()> {
+    debug!(project_name = %project_name, image_name = %image_name, body_size = body.len(), "Adding image to project");
     validate_project_name(&project_name)?;
     validate_image_name(&image_name)?;
     let settings = crate::get_settings().await?;
     let images_path = Path::new(&settings.projects_folder)
         .join(&project_name)
         .join("images");
+    debug!(images_path = %images_path.display(), "Resolved images directory");
 
     std::fs::create_dir_all(&images_path)
         .map_err(|e| anyhow!("Failed to create images folder: {}", e))?;
@@ -129,43 +141,65 @@ pub async fn add_project_image(
     let canonical_dest = std::path::PathBuf::from(&image_path);
 
     if !canonical_dest.starts_with(&canonical_base) && canonical_dest.canonicalize().is_ok() {
-        Err(anyhow!("Access denied: path traversal attempt detected"))?;
+        warn!(image_name = %image_name, "Path traversal attempt detected");
+        Err(anyhow!("Access denied: path traversal attempt detected"))?
     }
 
     let lock = lock_for_image_path(&image_path).await;
     let _guard = lock.lock().await;
 
-    std::fs::write(&image_path, body).map_err(|e| anyhow!("Failed to write image file: {}", e))?;
+    debug!(image_path = %image_path.display(), "Writing image file");
+    std::fs::write(&image_path, body).map_err(|e| {
+        error!(image_path = %image_path.display(), error = %e, "Failed to write image file");
+        anyhow!("Failed to write image file: {}", e)
+    })?;
+    info!(project_name = %project_name, image_name = %image_name, image_path = %image_path.display(), "Image added successfully");
 
     Ok(())
 }
 
 pub async fn delete_project_image(project_name: String, image_name: String) -> dioxus::Result<()> {
+    debug!(project_name = %project_name, image_name = %image_name, "Deleting image from project");
     validate_project_name(&project_name)?;
     let settings = crate::get_settings().await?;
     let images_path = Path::new(&settings.projects_folder)
         .join(&project_name)
         .join("images");
+    debug!(images_path = %images_path.display(), "Resolved images directory");
 
     let canonical_image = validate_and_canonicalize_image_path(&images_path, &image_name)?;
     let lock = lock_for_image_path(&canonical_image).await;
     let _guard = lock.lock().await;
 
-    std::fs::remove_file(&canonical_image).map_err(|e| anyhow!("Failed to delete image: {}", e))?;
+    debug!(image_path = %canonical_image.display(), "Removing image file");
+    std::fs::remove_file(&canonical_image).map_err(|e| {
+        error!(image_path = %canonical_image.display(), error = %e, "Failed to delete image");
+        anyhow!("Failed to delete image: {}", e)
+    })?;
+    info!(project_name = %project_name, image_name = %image_name, "Image deleted successfully");
 
     Ok(())
 }
 
 pub async fn clear_project_images(project_name: String) -> dioxus::Result<()> {
+    debug!(project_name = %project_name, "Clearing all images from project");
     validate_project_name(&project_name)?;
     let settings = crate::get_settings().await?;
     let images_path = Path::new(&settings.projects_folder)
         .join(&project_name)
         .join("images");
+    debug!(images_path = %images_path.display(), "Resolved images directory");
 
     if images_path.exists() {
+        debug!("Images directory exists, removing it");
         std::fs::remove_dir_all(&images_path)
-            .map_err(|e| anyhow!("Failed to clear images: {}", e))?;
+            .map_err(|e| {
+                error!(images_path = %images_path.display(), error = %e, "Failed to clear images directory");
+                anyhow!("Failed to clear images: {}", e)
+            })?;
+        info!(project_name = %project_name, "All project images cleared successfully");
+    } else {
+        debug!(images_path = %images_path.display(), "Images directory does not exist");
     }
 
     Ok(())
@@ -176,16 +210,19 @@ pub async fn batch_resize_images(
     project_name: String,
     max_dimension: u32,
 ) -> dioxus::Result<String> {
+    debug!(project_name = %project_name, max_dimension = max_dimension, "Starting batch image resize");
     validate_project_name(&project_name)?;
 
-    if max_dimension < 64 || max_dimension > 8192 {
-        Err(anyhow!("Max dimension must be between 64 and 8192 pixels"))?;
+    if !(64..=8192).contains(&max_dimension) {
+        warn!(max_dimension = max_dimension, "Invalid max dimension value");
+        Err(anyhow!("Max dimension must be between 64 and 8192 pixels"))?
     }
 
     let task_id = {
         let mut registry = crate::task_registry::TASK_REGISTRY.lock().unwrap();
         registry.create_task(TaskKind::BatchResize, project_name.clone())
     };
+    info!(task_id = %task_id, project_name = %project_name, "Batch resize task created");
 
     let task_id_clone = task_id.clone();
     let project_name_clone = project_name.clone();
@@ -197,11 +234,13 @@ pub async fn batch_resize_images(
         });
         while let Some(event) = rx.next().await {
             let is_error = matches!(event, ResizeProgressEvent::Error { .. });
+            debug!(error = is_error, "Processing resize progress event");
             crate::task_registry::publish_event(
                 &task_id_clone,
                 colmap_openmvs_api::TaskEvent::ResizeProgress(event),
             );
             if is_error {
+                error!("Resize operation encountered an error");
                 crate::task_registry::publish_event(
                     &task_id_clone,
                     colmap_openmvs_api::TaskEvent::Failed("Resize failed.".to_string()),
@@ -209,6 +248,7 @@ pub async fn batch_resize_images(
                 return;
             }
         }
+        info!(task_id = %task_id_clone, "Resize operation completed successfully");
         crate::task_registry::publish_event(
             &task_id_clone,
             colmap_openmvs_api::TaskEvent::Completed,
@@ -220,12 +260,14 @@ pub async fn batch_resize_images(
 
 /// Download demo images with streaming progress events
 pub async fn download_demo_images(project_name: String) -> dioxus::Result<String> {
+    debug!(project_name = %project_name, "Starting demo image download");
     validate_project_name(&project_name)?;
 
     let task_id = {
         let mut registry = crate::task_registry::TASK_REGISTRY.lock().unwrap();
         registry.create_task(TaskKind::DownloadDemo, project_name.clone())
     };
+    info!(task_id = %task_id, project_name = %project_name, "Demo download task created");
 
     let task_id_clone = task_id.clone();
     let project_name_clone = project_name.clone();
@@ -237,11 +279,13 @@ pub async fn download_demo_images(project_name: String) -> dioxus::Result<String
         });
         while let Some(event) = rx.next().await {
             let is_error = matches!(event, DemoProgressEvent::Error { .. });
+            debug!(error = is_error, "Processing demo progress event");
             crate::task_registry::publish_event(
                 &task_id_clone,
                 colmap_openmvs_api::TaskEvent::DemoProgress(event),
             );
             if is_error {
+                error!("Demo download operation encountered an error");
                 crate::task_registry::publish_event(
                     &task_id_clone,
                     colmap_openmvs_api::TaskEvent::Failed("Demo download failed.".to_string()),
@@ -249,6 +293,7 @@ pub async fn download_demo_images(project_name: String) -> dioxus::Result<String
                 return;
             }
         }
+        info!(task_id = %task_id_clone, "Demo download completed successfully");
         crate::task_registry::publish_event(
             &task_id_clone,
             colmap_openmvs_api::TaskEvent::Completed,
@@ -260,8 +305,11 @@ pub async fn download_demo_images(project_name: String) -> dioxus::Result<String
 
 /// Helper function to resize a single image file
 async fn resize_image_file(image_path: &Path, max_dimension: u32) -> dioxus::Result<bool> {
+    debug!(image_path = %image_path.display(), max_dimension = max_dimension, "Starting image resize");
+
     let decoder = ImageReader::open(image_path)
         .map_err(|e| {
+            error!(image_path = %image_path.display(), error = %e, "Failed to open image file");
             anyhow!(
                 "Failed to open image file: {} ({})",
                 image_path.display(),
@@ -270,6 +318,7 @@ async fn resize_image_file(image_path: &Path, max_dimension: u32) -> dioxus::Res
         })?
         .with_guessed_format()
         .map_err(|e| {
+            error!(image_path = %image_path.display(), error = %e, "Failed to guess image format");
             anyhow!(
                 "Failed to guess image format: {} ({})",
                 image_path.display(),
@@ -278,6 +327,7 @@ async fn resize_image_file(image_path: &Path, max_dimension: u32) -> dioxus::Res
         })?
         .into_decoder()
         .map_err(|e| {
+            error!(image_path = %image_path.display(), error = %e, "Failed to create image decoder");
             anyhow!(
                 "Failed to create image decoder: {} ({})",
                 image_path.display(),
@@ -286,7 +336,10 @@ async fn resize_image_file(image_path: &Path, max_dimension: u32) -> dioxus::Res
         })?;
 
     let (width, height) = decoder.dimensions();
+    debug!(image_path = %image_path.display(), width = width, height = height, "Image dimensions determined");
+
     if width <= max_dimension && height <= max_dimension {
+        debug!(image_path = %image_path.display(), width = width, height = height, max_dimension = max_dimension, "Image already within size limit");
         return Ok(false); // No resizing needed
     }
 
@@ -299,17 +352,21 @@ async fn resize_image_file(image_path: &Path, max_dimension: u32) -> dioxus::Res
         let new_w = ((width as f64 / height as f64) * max_dimension as f64).max(1.0) as u32;
         (new_w, new_h)
     };
+    debug!(image_path = %image_path.display(), old_width = width, old_height = height, new_width = new_width, new_height = new_height, "Calculated new dimensions");
 
     let img = DynamicImage::from_decoder(decoder).map_err(|e| {
+        error!(image_path = %image_path.display(), error = %e, "Failed to decode image for resizing");
         anyhow!(
             "Failed to decode image for resizing: {} ({})",
             image_path.display(),
             e
         )
     })?;
+    debug!(image_path = %image_path.display(), "Resizing image");
     let resized = img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3);
     // Write resized image directly to file without buffering in RAM
     let file = std::fs::File::create(image_path).map_err(|e| {
+        error!(image_path = %image_path.display(), error = %e, "Failed to create resized image file");
         anyhow!(
             "Failed to create resized image file: {} ({})",
             image_path.display(),
@@ -318,8 +375,12 @@ async fn resize_image_file(image_path: &Path, max_dimension: u32) -> dioxus::Res
     })?;
     resized
         .write_to(&mut std::io::BufWriter::new(file), image::ImageFormat::Jpeg)
-        .map_err(|e| anyhow!("Failed to encode JPEG: {}", e))?;
+        .map_err(|e| {
+            error!(image_path = %image_path.display(), error = %e, "Failed to encode JPEG");
+            anyhow!("Failed to encode JPEG: {}", e)
+        })?;
 
+    info!(image_path = %image_path.display(), "Image resized successfully");
     Ok(true)
 }
 

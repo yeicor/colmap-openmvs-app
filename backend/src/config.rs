@@ -220,8 +220,8 @@ fn parse_parameter_line(line: &str) -> Option<ConfigParameter> {
     let rest = line[param_name.len()..].trim();
 
     // Check for arg keyword
-    let rest = if rest.starts_with("arg") {
-        rest[3..].trim()
+    let rest = if let Some(stripped) = rest.strip_prefix("arg") {
+        stripped.trim()
     } else {
         rest
     };
@@ -276,7 +276,7 @@ fn parse_bracketed_parameter(line: &str) -> Option<ConfigParameter> {
     let line = line.trim();
 
     // Extract the main parameter name (before any brackets)
-    let parts: Vec<&str> = line.split(|c| c == '[' || c == ']').collect();
+    let parts: Vec<&str> = line.split(['[', ']']).collect();
     if parts.is_empty() {
         return None;
     }
@@ -450,7 +450,7 @@ pub async fn save_project_config(
     script_content.push_str("#\n");
     script_content.push_str("# Usage: source ./config.sh\n");
     script_content.push_str("# Then run your COLMAP/OpenMVS commands\n");
-    script_content.push_str("\n");
+    script_content.push('\n');
 
     if config.environment_variables.is_empty() {
         script_content.push_str("# No environment variables configured\n");

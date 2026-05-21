@@ -4,6 +4,8 @@
 mod config;
 pub use config::{get_image_config, load_project_config, save_project_config};
 
+pub mod logging;
+
 mod project;
 pub use project::{
     add_project_image, batch_resize_images, clear_project_images, delete_project_image,
@@ -39,6 +41,7 @@ mod output_viewer;
 
 use colmap_openmvs_api::OutputFile;
 use dioxus::Result as DioxusResult;
+use tracing::debug;
 
 /// List output files in a project's work directory.
 /// Scans for *.ply files and known COLMAP output files (points3D.bin, database.db).
@@ -52,6 +55,8 @@ pub async fn list_project_outputs(project_name: String) -> DioxusResult<Vec<Outp
             .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
     };
 
+    debug!("Scanning project outputs from: {}", project_path);
+
     let root = std::path::PathBuf::from(&project_path);
     let mut outputs: Vec<OutputFile> = Vec::new();
 
@@ -59,6 +64,7 @@ pub async fn list_project_outputs(project_name: String) -> DioxusResult<Vec<Outp
         .map_err(|e| anyhow::anyhow!("Failed to scan project outputs: {}", e))?;
 
     outputs.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    debug!("Found {} output files", outputs.len());
     Ok(outputs)
 }
 
@@ -139,6 +145,7 @@ pub async fn get_project_output(
     }
 
     let full_path = std::path::Path::new(&project_path).join(sanitized);
+    debug!("Reading output file from: {}", full_path.display());
     dioxus::fullstack::FileStream::from_path(full_path)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e).into())
@@ -167,6 +174,8 @@ pub async fn delete_project_output(
     }
 
     let full_path = std::path::Path::new(&project_path).join(sanitized);
+
+    debug!("Deleting output file: {}", full_path.display());
 
     // Check if it's a file or directory
     if full_path.is_file() {

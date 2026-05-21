@@ -18,14 +18,19 @@ use tokio::sync::watch;
 /// Maximum number of events buffered per task (oldest are dropped if exceeded).
 const MAX_EVENTS: usize = 100_000;
 
+// Type aliases for complex types
+type TaskEventLog = Arc<Mutex<Vec<TaskEvent>>>;
+type KillFn = Arc<Mutex<Option<Box<dyn Fn() + Send>>>>;
+type EventSubscriber = (TaskEventLog, watch::Receiver<usize>);
+
 pub struct TaskEntry {
     pub info: TaskInfo,
     /// Append-only event log; protected by a plain Mutex so it can be locked briefly.
-    pub events: Arc<Mutex<Vec<TaskEvent>>>,
+    pub events: TaskEventLog,
     /// Tracks current event count; subscribers call `.subscribe()` to get a `Receiver`.
     pub seq_sender: watch::Sender<usize>,
     /// Optional kill function for the running task; can be called to cancel execution.
-    pub kill_fn: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
+    pub kill_fn: KillFn,
 }
 
 pub struct TaskRegistry {
@@ -38,7 +43,15 @@ impl TaskRegistry {
             tasks: HashMap::new(),
         }
     }
+}
 
+impl Default for TaskRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TaskRegistry {
     /// Register a new task. Returns the task_id.
     pub fn create_task(&mut self, kind: TaskKind, context_key: String) -> TaskId {
         let id = uuid::Uuid::new_v4().to_string();
@@ -93,10 +106,7 @@ impl TaskRegistry {
 
     /// Subscribe to a task's events for replay+live streaming.
     /// Returns `None` if the task doesn't exist.
-    pub fn subscribe(
-        &self,
-        task_id: &str,
-    ) -> Option<(Arc<Mutex<Vec<TaskEvent>>>, watch::Receiver<usize>)> {
+    pub fn subscribe(&self, task_id: &str) -> Option<EventSubscriber> {
         self.tasks.get(task_id).map(|entry| {
             // IMPORTANT: subscribe to seq_sender BEFORE reading the events buffer
             // so we can't miss events published between the two operations.

@@ -4,8 +4,10 @@
 //! It imports from the server package for types and function calls.
 
 use dioxus::prelude::*;
+use tracing::info;
 
 pub mod components;
+pub mod logging;
 pub mod mycomponents;
 pub mod server;
 pub mod views;
@@ -51,5 +53,9 @@ pub fn App() -> Element {
 }
 
 fn main() {
+    // Initialize structured logging
+    logging::init();
+    info!("🚀 Application starting");
+
     dioxus::launch(App);
 }

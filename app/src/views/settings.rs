@@ -93,8 +93,8 @@ fn DateBadge(date: String) -> Element {
 
 /// Store a task ID in localStorage.  Key is sanitised to avoid JS injection.
 fn ls_set_task_id(context_key: &str, task_id: &str) {
-    let safe_key = context_key.replace('\'', "_").replace('\\', "_");
-    let safe_val = task_id.replace('\'', "_").replace('\\', "_");
+    let safe_key = context_key.replace(['\'', '\\'], "_");
+    let safe_val = task_id.replace(['\'', '\\'], "_");
     let _ = eval(&format!(
         "try {{ localStorage.setItem('colmap_task_{safe_key}', '{safe_val}'); }} catch(e) {{}}"
     ));
@@ -102,7 +102,7 @@ fn ls_set_task_id(context_key: &str, task_id: &str) {
 
 /// Read a task ID from localStorage (async – must be awaited inside spawn).
 async fn ls_get_task_id(context_key: &str) -> Option<String> {
-    let safe_key = context_key.replace('\'', "_").replace('\\', "_");
+    let safe_key = context_key.replace(['\'', '\\'], "_");
     let js = eval(&format!(
         "return (localStorage.getItem('colmap_task_{safe_key}') || '');"
     ));
@@ -114,7 +114,7 @@ async fn ls_get_task_id(context_key: &str) -> Option<String> {
 
 /// Remove a task ID from localStorage.
 fn ls_clear_task_id(context_key: &str) {
-    let safe_key = context_key.replace('\'', "_").replace('\\', "_");
+    let safe_key = context_key.replace(['\'', '\\'], "_");
     let _ = eval(&format!(
         "try {{ localStorage.removeItem('colmap_task_{safe_key}'); }} catch(e) {{}}"
     ));
@@ -393,14 +393,11 @@ fn runtime_proot_tab() -> Element {
                 Err(e) => error.set(format!("Failed to load runtime info: {}", e)),
             }
 
-            match get_available_runtime_versions().await {
-                Ok(versions) => {
-                    if let Some(first) = versions.first() {
-                        selected_version.set(first.clone());
-                    }
-                    available_versions.set(versions);
+            if let Ok(versions) = get_available_runtime_versions().await {
+                if let Some(first) = versions.first() {
+                    selected_version.set(first.clone());
                 }
-                Err(_) => {} // non-fatal – user can retry
+                available_versions.set(versions);
             }
 
             loading.set(false);
@@ -712,8 +709,8 @@ fn RuntimeImagesTab() -> Element {
                         // Extract the tag name from the context_key (full image ref "repo:tag")
                         let tag = info
                             .context_key
-                            .splitn(2, ':')
-                            .nth(1)
+                            .split_once(':')
+                            .map(|x| x.1)
                             .unwrap_or("unknown")
                             .to_string();
                         preparing.set(true);

@@ -16,17 +16,17 @@ use colmap_openmvs_backend as backend;
 
 #[get("/projects")]
 pub async fn get_projects() -> Result<Vec<Project>> {
-    backend::get_projects().await.map_err(Into::into)
+    backend::get_projects().await
 }
 
 #[post("/projects/:name")]
 pub async fn create_project(name: String) -> Result<Project> {
-    backend::create_project(name).await.map_err(Into::into)
+    backend::create_project(name).await
 }
 
 #[delete("/projects/:name")]
 pub async fn delete_project(name: String) -> Result<()> {
-    backend::delete_project(name).await.map_err(Into::into)
+    backend::delete_project(name).await
 }
 
 #[patch("/projects/:name")]
@@ -36,7 +36,7 @@ pub async fn rename_project(name: String, new_name: String) -> Result<Project> {
 
 #[get("/settings")]
 pub async fn get_settings() -> Result<Settings> {
-    backend::get_settings().await.map_err(Into::into)
+    backend::get_settings().await
 }
 
 #[post("/settings")]
@@ -128,9 +128,7 @@ pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
 
 #[post("/config")]
 pub async fn get_image_config(image_tag: String) -> Result<ConfigSchema> {
-    backend::get_image_config(image_tag)
-        .await
-        .map_err(Into::into)
+    Ok(backend::get_image_config(image_tag).await?)
 }
 
 #[get("/projects/:project_name/config")]
@@ -142,9 +140,7 @@ pub async fn load_project_config(project_name: String) -> Result<LoadedProjectCo
         .find(|p| p.name == project_name)
         .ok_or_else(|| dioxus::prelude::ServerFnError::new("Project not found"))?;
 
-    backend::load_project_config(project.path)
-        .await
-        .map_err(Into::into)
+    Ok(backend::load_project_config(project.path).await?)
 }
 
 #[post("/projects/:project_name/config")]
@@ -156,9 +152,7 @@ pub async fn save_project_config(project_name: String, config: SavedProjectConfi
         .find(|p| p.name == project_name)
         .ok_or_else(|| dioxus::prelude::ServerFnError::new("Project not found"))?;
 
-    backend::save_project_config(project.path, config)
-        .await
-        .map_err(Into::into)
+    Ok(backend::save_project_config(project.path, config).await?)
 }
 
 // ---------------------------------------------------------------------------
@@ -202,9 +196,7 @@ pub async fn cancel_task(task_id: String) -> Result<()> {
 
 #[post("/projects/:project_name/pipeline")]
 pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String> {
-    backend::run_pipeline(project_name, dry_run)
-        .await
-        .map_err(Into::into)
+    Ok(backend::run_pipeline(project_name, dry_run).await?)
 }
 
 // ---------------------------------------------------------------------------
@@ -220,9 +212,7 @@ pub async fn list_project_outputs(project_name: String) -> Result<Vec<OutputFile
 /// `relative_path` is a query parameter (e.g. ?relative_path=colmap%2Fdatabase.db).
 #[get("/projects/{project_name}/outputs/file?relative_path")]
 pub async fn get_project_output(project_name: String, relative_path: String) -> Result<FileStream> {
-    backend::get_project_output(project_name, relative_path)
-        .await
-        .map_err(Into::into)
+    backend::get_project_output(project_name, relative_path).await
 }
 
 /// Return an output file in a viewer-friendly PLY format.
@@ -232,15 +222,11 @@ pub async fn get_project_output_for_viewer(
     project_name: String,
     relative_path: String,
 ) -> Result<Vec<u8>> {
-    backend::get_project_output_for_viewer(project_name, relative_path)
-        .await
-        .map_err(Into::into)
+    backend::get_project_output_for_viewer(project_name, relative_path).await
 }
 
 /// Delete an output file.
 #[post("/projects/:project_name/outputs/delete")]
 pub async fn delete_project_output(project_name: String, relative_path: String) -> Result<()> {
-    backend::delete_project_output(project_name, relative_path)
-        .await
-        .map_err(Into::into)
+    backend::delete_project_output(project_name, relative_path).await
 }

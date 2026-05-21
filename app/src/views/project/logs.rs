@@ -9,15 +9,15 @@ use dioxus::prelude::*;
 // ---------------------------------------------------------------------------
 
 fn ls_set_pipeline_task(project_name: &str, task_id: &str) {
-    let safe_key = project_name.replace('\'', "_").replace('\\', "_");
-    let safe_val = task_id.replace('\'', "_").replace('\\', "_");
+    let safe_key = project_name.replace(['\'', '\\'], "_");
+    let safe_val = task_id.replace(['\'', '\\'], "_");
     let _ = eval(&format!(
         "try {{ localStorage.setItem('colmap_task_pipeline_{safe_key}', '{safe_val}'); }} catch(e) {{}}"
     ));
 }
 
 async fn ls_get_pipeline_task(project_name: &str) -> Option<String> {
-    let safe_key = project_name.replace('\'', "_").replace('\\', "_");
+    let safe_key = project_name.replace(['\'', '\\'], "_");
     let js = eval(&format!(
         "return (localStorage.getItem('colmap_task_pipeline_{safe_key}') || '');"
     ));
@@ -28,22 +28,22 @@ async fn ls_get_pipeline_task(project_name: &str) -> Option<String> {
 }
 
 fn ls_clear_pipeline_task(project_name: &str) {
-    let safe_key = project_name.replace('\'', "_").replace('\\', "_");
+    let safe_key = project_name.replace(['\'', '\\'], "_");
     let _ = eval(&format!(
         "try {{ localStorage.removeItem('colmap_task_pipeline_{safe_key}'); }} catch(e) {{}}"
     ));
 }
 
 fn ls_set_dryrun_task(project_name: &str, task_id: &str) {
-    let safe_key = project_name.replace('\'', "_").replace('\\', "_");
-    let safe_val = task_id.replace('\'', "_").replace('\\', "_");
+    let safe_key = project_name.replace(['\'', '\\'], "_");
+    let safe_val = task_id.replace(['\'', '\\'], "_");
     let _ = eval(&format!(
         "try {{ localStorage.setItem('colmap_task_dryrun_{safe_key}', '{safe_val}'); }} catch(e) {{}}"
     ));
 }
 
 async fn ls_get_dryrun_task(project_name: &str) -> Option<String> {
-    let safe_key = project_name.replace('\'', "_").replace('\\', "_");
+    let safe_key = project_name.replace(['\'', '\\'], "_");
     let js = eval(&format!(
         "return (localStorage.getItem('colmap_task_dryrun_{safe_key}') || '');"
     ));
@@ -54,7 +54,7 @@ async fn ls_get_dryrun_task(project_name: &str) -> Option<String> {
 }
 
 fn ls_clear_dryrun_task(project_name: &str) {
-    let safe_key = project_name.replace('\'', "_").replace('\\', "_");
+    let safe_key = project_name.replace(['\'', '\\'], "_");
     let _ = eval(&format!(
         "try {{ localStorage.removeItem('colmap_task_dryrun_{safe_key}'); }} catch(e) {{}}"
     ));
@@ -698,7 +698,7 @@ pub fn LogsTab(project_name: String) -> Element {
                                             class: "stage-chevron",
                                             if is_expanded { "▾" } else { "▸" }
                                         }
-                
+
                                         span {
                                             class: "stage-name",
                                             "{stage.name}{name_suffix}"

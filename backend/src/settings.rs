@@ -3,6 +3,7 @@ use dioxus::Result;
 use std::convert::Infallible;
 use std::path::PathBuf;
 use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
 
 pub static SETTINGS: dioxus::fullstack::Lazy<RwLock<Settings>> =
     dioxus::fullstack::Lazy::new(|| async move {
@@ -74,25 +75,24 @@ pub fn settings_file_path(projects_folder: &str) -> PathBuf {
 
 fn load_settings_from_disk() -> Settings {
     let path = settings_file_path(&default_projects_folder());
+    debug!(path = %path.display(), "Loading settings from disk");
+
     match std::fs::read_to_string(&path) {
         Ok(contents) => match serde_json::from_str::<Settings>(&contents) {
-            Ok(settings) => settings,
+            Ok(settings) => {
+                info!(path = %path.display(), "Settings loaded successfully from disk");
+                settings
+            }
             Err(e) => {
-                eprintln!(
-                    "Failed to parse settings from {}: {}. Using defaults.",
-                    path.display(),
-                    e
-                );
+                error!(path = %path.display(), error = %e, "Failed to parse settings file, using defaults");
                 default_settings()
             }
         },
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "Failed to read settings from {}: {}. Using defaults.",
-                    path.display(),
-                    e
-                );
+                warn!(path = %path.display(), error = %e, "Failed to read settings file, using defaults");
+            } else {
+                debug!(path = %path.display(), "Settings file not found, using defaults");
             }
             default_settings()
         }
@@ -100,29 +100,34 @@ fn load_settings_from_disk() -> Settings {
 }
 
 pub async fn get_settings() -> Result<Settings> {
+    debug!("Retrieving current settings");
     Ok(SETTINGS.read().await.clone())
 }
 
 pub async fn update_settings(new_settings: Settings) -> Result<()> {
+    debug!(projects_folder = %new_settings.projects_folder, "Updating settings");
+
     let mut settings = SETTINGS.write().await;
     *settings = new_settings;
 
     // Persist to disk
+    debug!(folder = %settings.projects_folder, "Creating projects folder");
     if let Err(e) = std::fs::create_dir_all(&settings.projects_folder) {
-        eprintln!(
-            "Failed to create projects folder '{}': {}",
-            settings.projects_folder, e
-        );
+        error!(folder = %settings.projects_folder, error = %e, "Failed to create projects folder");
     } else {
         let path = settings_file_path(&settings.projects_folder);
+        debug!(path = %path.display(), "Serializing settings for persistence");
         match serde_json::to_string_pretty(&*settings) {
             Ok(json) => {
+                debug!(path = %path.display(), json_len = json.len(), "Writing settings to disk");
                 if let Err(e) = std::fs::write(&path, json) {
-                    eprintln!("Failed to write settings to {}: {}", path.display(), e);
+                    error!(path = %path.display(), error = %e, "Failed to write settings to disk");
+                } else {
+                    info!(path = %path.display(), "Settings persisted to disk successfully");
                 }
             }
             Err(e) => {
-                eprintln!("Failed to serialize settings: {}", e);
+                error!(error = %e, "Failed to serialize settings");
             }
         }
     }

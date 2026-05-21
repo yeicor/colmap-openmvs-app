@@ -54,7 +54,7 @@ impl fmt::Display for Version {
 
 impl PartialOrd for Version {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.compare(other))
+        Some(self.cmp(other))
     }
 }
 
@@ -354,7 +354,7 @@ impl RegistryClient {
             .headers()
             .get("Docker-Content-Digest")
             .and_then(|h| h.to_str().ok())
-            .map(|s| ImageDigest::new(s))
+            .map(ImageDigest::new)
             .ok_or_else(|| anyhow::anyhow!("No digest found in response"))
     }
 

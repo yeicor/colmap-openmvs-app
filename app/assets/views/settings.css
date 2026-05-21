@@ -85,6 +85,10 @@
     box-shadow: 0 0 0 3px var(--primary-color-7);
 }
 
+#settings .hidden-file-input {
+    display: none;
+}
+
 #settings .folder-row {
     display: flex;
     flex: 1;

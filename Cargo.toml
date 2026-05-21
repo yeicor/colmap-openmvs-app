@@ -7,3 +7,19 @@ resolver = "2"
 version = "0.1.0"
 authors = ["Yeicor <yeicor+no-reply@github.com>"]
 edition = "2021"
+
+# Shared common dependencies across workspace
+[workspace.dependencies]
+# Serialization (used by all/most crates)
+serde = { version = "1.0", features = ["derive"] }
+
+# Logging (used by all/most crates)
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi", "time", "tracing-log"] }
+tracing-log = { version = "0.2" }
+
+# Error handling (used by multiple crates)
+anyhow = { version = "1.0" }
+
+# Common utilities
+chrono = { version = "0.4", features = ["serde", "wasmbind"] }

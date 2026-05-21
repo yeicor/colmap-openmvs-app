@@ -17,6 +17,7 @@ use dioxus_free_icons::icons::bs_icons::{
 use dioxus_free_icons::Icon;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
+use tracing::{debug, error, info};
 
 static CACHE_BUSTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
 fn generate_cache_busting_num() -> u64 {
@@ -25,6 +26,7 @@ fn generate_cache_busting_num() -> u64 {
 
 #[component]
 pub fn ImagesTab(project_name: String) -> Element {
+    debug!(project_name = %project_name, "Initializing images tab");
     let mut image_paths = use_signal(Vec::<String>::new);
     let mut selected_images = use_signal(Vec::<String>::new);
     let mut demo_loading = use_signal(|| false);
@@ -37,15 +39,24 @@ pub fn ImagesTab(project_name: String) -> Element {
     let mut uploading = use_signal(|| false);
 
     // ── Load image list on mount + reconnect any running task ────────────
+    // ââ Load image list on mount + reconnect any running task ââââ
     let project_name_clone = project_name.clone();
     use_effect(move || {
         info_message.read_unchecked();
         error_message.read_unchecked();
         let project_name = project_name_clone.clone();
+        debug!(project_name = %project_name, "Loading image list on mount");
         spawn(async move {
             match crate::server::get_project_images(project_name.clone()).await {
-                Ok(imgs) => image_paths.set(imgs),
-                Err(e) => error_message.set(Some(format!("Failed to load images: {}", e))),
+                Ok(imgs) => {
+                    let count = imgs.len();
+                    info!(project_name = %project_name, image_count = count, "Successfully loaded project images");
+                    image_paths.set(imgs);
+                }
+                Err(e) => {
+                    error!(project_name = %project_name, error = %e, "Failed to load project images");
+                    error_message.set(Some(format!("Failed to load images: {}", e)));
+                }
             }
 
             // -- Reconnect demo task ------------------------------------------
@@ -61,8 +72,10 @@ pub fn ImagesTab(project_name: String) -> Element {
                     .filter(|s| !s.is_empty())
             };
             let reconnect_demo = if let Some(id) = stored_demo {
+                debug!(project_name = %project_name, task_id = %id, "Reconnecting to demo task from localStorage");
                 Some(id)
             } else {
+                debug!(project_name = %project_name, "Looking for running demo task on server");
                 crate::server::list_tasks(
                     Some("DownloadDemo".to_string()),
                     Some(project_name.clone()),
@@ -73,7 +86,10 @@ pub fn ImagesTab(project_name: String) -> Element {
                     tasks
                         .into_iter()
                         .find(|t| t.state == TaskState::Running)
-                        .map(|t| t.id)
+                        .map(|t| {
+                            debug!(project_name = %project_name, task_id = %t.id, "Found running demo task on server");
+                            t.id
+                        })
                 })
             };
             if let Some(task_id) = reconnect_demo {

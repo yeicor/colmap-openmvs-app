@@ -1,0 +1,299 @@
+name: Release - Build and Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Build all binaries for release
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux build
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: colmap-openmvs-app
+            asset_name: colmap-openmvs-app-linux-x64
+            compress: tar.gz
+          # macOS Intel
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: colmap-openmvs-app
+            asset_name: colmap-openmvs-app-macos-intel
+            compress: tar.gz
+          # macOS ARM (Apple Silicon)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: colmap-openmvs-app
+            asset_name: colmap-openmvs-app-macos-arm64
+            compress: tar.gz
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: colmap-openmvs-app.exe
+            asset_name: colmap-openmvs-app-windows-x64
+            compress: zip
+
+    outputs:
+      build_matrix: ${{ toJson(matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      # Linux dependencies
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      # Build desktop app
+      - name: Build desktop app
+        run: cargo build --package colmap-openmvs-app --target ${{ matrix.target }} --release --features desktop
+
+      # Prepare artifacts for upload
+      - name: Prepare artifacts (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p release-artifacts
+          cp "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" "release-artifacts/"
+
+      - name: Prepare artifacts (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir release-artifacts
+          copy "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" "release-artifacts/"
+
+      # Compress artifacts
+      - name: Compress (tar.gz)
+        if: matrix.compress == 'tar.gz'
+        run: |
+          cd release-artifacts
+          tar czf "${{ matrix.asset_name }}.tar.gz" "${{ matrix.artifact_name }}"
+          cd ..
+
+      - name: Compress (zip)
+        if: matrix.compress == 'zip'
+        run: |
+          cd release-artifacts
+          7z a "${{ matrix.asset_name }}.zip" "${{ matrix.artifact_name }}"
+          cd ..
+
+      # Upload artifacts
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release-artifacts/
+          retention-days: 1
+
+  # Build web exports
+  build-web:
+    name: Build Web Export
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-web
+
+      - name: Install dioxus CLI
+        run: cargo install dioxus-cli
+
+      - name: Build web app
+        run: dx build --package colmap-openmvs-app --release --platform web
+
+      - name: Prepare web artifacts
+        run: |
+          mkdir -p release-artifacts/web
+          # Copy the dist folder from dioxus build
+          cp -r dist/* release-artifacts/web/ 2>/dev/null || true
+
+      - name: Compress web
+        run: |
+          cd release-artifacts
+          tar czf colmap-openmvs-app-web.tar.gz web/
+          zip -r colmap-openmvs-app-web.zip web/
+          cd ..
+
+      - name: Upload web artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-web
+          path: release-artifacts/
+          retention-days: 1
+
+  # Build server
+  build-server:
+    name: Build Server Binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-server
+
+      - name: Build server
+        run: cargo build --package colmap-openmvs-app --target x86_64-unknown-linux-gnu --release --features server
+
+      - name: Prepare server artifacts
+        run: |
+          mkdir -p release-artifacts
+          cp "target/x86_64-unknown-linux-gnu/release/colmap-openmvs-app" "release-artifacts/colmap-openmvs-app-server"
+
+      - name: Compress server
+        run: |
+          cd release-artifacts
+          tar czf colmap-openmvs-app-server-linux-x64.tar.gz colmap-openmvs-app-server
+          zip colmap-openmvs-app-server-linux-x64.zip colmap-openmvs-app-server
+          cd ..
+
+      - name: Upload server artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-server
+          path: release-artifacts/
+          retention-days: 1
+
+  # Create GitHub Release
+  create-release:
+    name: Create GitHub Release
+    needs: [build-binaries, build-web, build-server]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: List artifacts
+        run: find all-artifacts -type f -exec ls -lh {} \;
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p final-artifacts
+          find all-artifacts -type f -name "*.tar.gz" -o -name "*.zip" | while read file; do
+            cp "$file" final-artifacts/
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: final-artifacts/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Deploy web to GitHub Pages
+  deploy-web:
+    name: Deploy Web to GitHub Pages
+    needs: build-web
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download web artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-web
+          path: web-output
+
+      - name: Extract web
+        run: |
+          mkdir -p web-dist
+          cd web-output
+          tar xzf colmap-openmvs-app-web.tar.gz -C ../web-dist/
+          cd ..
+
+      - name: Upload to Pages
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: web-dist/web
+
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@v2
+
+  # Build and push Docker image (optional, for server deployment)
+  docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max

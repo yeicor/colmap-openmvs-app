@@ -6,6 +6,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tracing::{debug, error, info, span, Level};
 
 use crate::{
     process::kill_process_tree,
@@ -31,10 +32,16 @@ static FRACTION_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d+)\s*/\s*(\d+)").
 
 /// Start the reconstruction pipeline for a project. Returns the task ID.
 pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String> {
+    let span = span!(Level::DEBUG, "run_pipeline", project = %project_name, dry_run = %dry_run);
+    let _enter = span.enter();
+
+    debug!("Starting pipeline execution");
     let settings = get_settings().await.map_err(|e| anyhow::anyhow!("{}", e))?;
-    let image_tag = settings
-        .default_image_tag
-        .ok_or_else(|| anyhow::anyhow!("No default image configured"))?;
+    let image_tag = settings.default_image_tag.ok_or_else(|| {
+        error!("No default image configured");
+        anyhow::anyhow!("No default image configured")
+    })?;
+    debug!(image_tag = %image_tag, "Using container image");
 
     let project_path = {
         let projects = crate::projects::get_projects()
@@ -44,8 +51,12 @@ pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String>
             .into_iter()
             .find(|p| p.name == project_name)
             .map(|p| p.path)
-            .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
+            .ok_or_else(|| {
+                error!("Project not found");
+                anyhow::anyhow!("Project not found: {}", project_name)
+            })?
     };
+    debug!(project_path = %project_path, "Resolved project path");
 
     let task_kind = if dry_run {
         TaskKind::DryRunPipeline
@@ -57,12 +68,14 @@ pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String>
         let mut registry = TASK_REGISTRY.lock().unwrap();
         registry.create_task(task_kind, project_name.clone())
     };
+    info!(task_id = %task_id, "Pipeline task created");
 
     let task_id_clone = task_id.clone();
     tokio::spawn(async move {
         if let Err(e) =
             run_pipeline_task(task_id_clone.clone(), image_tag, project_path, dry_run).await
         {
+            error!(error = %e, "Pipeline task failed");
             crate::task_registry::publish_event(&task_id_clone, TaskEvent::Failed(e.to_string()));
         }
     });
@@ -80,6 +93,10 @@ async fn run_pipeline_task(
     project_path: String,
     dry_run: bool,
 ) -> Result<()> {
+    let span = span!(Level::DEBUG, "run_pipeline_task", task_id = %task_id, project_path = %project_path, dry_run = %dry_run);
+    let _enter = span.enter();
+
+    info!("Starting pipeline container");
     let rt = RuntimeFactory::proot();
 
     // Mount the project directory at /work inside the container.
@@ -87,27 +104,32 @@ async fn run_pipeline_task(
         host_path: std::path::PathBuf::from(&project_path),
         container_path: "/work".to_string(),
     }];
+    debug!(count = mounts.len(), "Configured container mounts");
 
     // Build args: /work -v [--dry-run]
     let mut args = vec!["/work".to_string(), "-v".to_string()];
     if dry_run {
         args.push("--dry-run".to_string());
+        debug!("Added --dry-run flag to container arguments");
     }
+    debug!(args = ?args, "Container arguments prepared");
 
-    let mut handle = rt
-        .run(&image_tag, &args, &mounts)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to start pipeline container: {}", e))?;
+    let mut handle = rt.run(&image_tag, &args, &mounts).await.map_err(|e| {
+        error!(error = %e, "Failed to start pipeline container");
+        anyhow::anyhow!("Failed to start pipeline container: {}", e)
+    })?;
 
     // Store a kill function in the task registry so the process can be killed on cancellation
     {
         let task_id_kill = task_id.clone();
         // We need to capture the PID to kill the process and its children
         if let Some(pid) = handle.id() {
+            debug!(pid = pid, "Registered process termination handler");
             TASK_REGISTRY
                 .lock()
                 .unwrap()
                 .set_kill_fn(&task_id_kill, move || {
+                    info!(pid = pid, "Terminating pipeline process tree");
                     kill_process_tree(pid as i32);
                 });
         }
@@ -123,6 +145,7 @@ async fn run_pipeline_task(
     // We use the two-arm select pattern: when one stream ends it is replaced
     // with `pending()` so the other stream continues to be drained normally.
     let log_handle = tokio::spawn(async move {
+        debug!("Log reader task started");
         let mut stdout_lines = stdout.map(|r| r.lines());
         let mut stderr_lines = stderr.map(|r| r.lines());
 
@@ -188,33 +211,31 @@ async fn run_pipeline_task(
                 break;
             }
         }
+        debug!("Log reader task completed");
     });
 
     // Wait for the container process to exit, then drain any remaining log output.
-    eprintln!("[run_pipeline_task] Waiting for process to exit");
+    debug!("Waiting for pipeline process to exit");
     let exit_status = handle.wait().await?;
-    eprintln!(
-        "[run_pipeline_task] Process exited with status: {:?}",
-        exit_status
-    );
+    info!(exit_status = ?exit_status, "Pipeline process exited");
 
-    eprintln!("[run_pipeline_task] Waiting for log reading to complete");
+    debug!("Waiting for log reading to complete");
     log_handle.await.ok();
-    eprintln!("[run_pipeline_task] Log reading complete");
+    info!("Log reading completed");
 
     if !dry_run && !exit_status.success() {
         let msg = format!("Pipeline failed with exit code {:?}", exit_status.code());
-        eprintln!("[run_pipeline_task] Publishing Failed event: {}", msg);
+        error!("Pipeline execution failed");
         crate::task_registry::publish_event(&task_id, TaskEvent::Failed(msg.clone()));
         return Err(anyhow::anyhow!("{}", msg));
     }
 
-    eprintln!("[run_pipeline_task] Fixing output file permissions");
+    debug!("Fixing output file permissions");
     let _ = make_project_outputs_readable(&project_path).await;
 
-    eprintln!("[run_pipeline_task] Publishing Completed event");
+    info!("Publishing pipeline completion event");
     crate::task_registry::publish_event(&task_id, TaskEvent::Completed);
-    eprintln!("[run_pipeline_task] Task completed successfully");
+    info!("Pipeline task completed successfully");
     Ok(())
 }
 
@@ -222,12 +243,12 @@ async fn run_pipeline_task(
 // Process group utilities
 // ---------------------------------------------------------------------------
 
-/// Get the process group ID for a given PID using ps command
 // ---------------------------------------------------------------------------
 // Line processor
 // ---------------------------------------------------------------------------
 
 /// Parse one output line and publish the appropriate task event(s).
+/// Get the process group ID for a given PID using ps command
 ///
 /// `group_seq` is the next sequential index to assign to the next `::group` marker;
 /// `current_group_idx` is the currently-open group's assigned index (for log lines).

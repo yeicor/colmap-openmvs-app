@@ -4,12 +4,14 @@ use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::BsQuestionCircle;
 use dioxus_free_icons::Icon;
 use std::collections::HashMap;
+use tracing::{debug, error, info};
 
 type EnvVarValuesSignal = Signal<HashMap<String, String>>;
 static CUSTOM_SCRIPT_KEY: &str = "Custom Script";
 
 #[component]
 pub fn ConfigTab(project_name: String) -> Element {
+    debug!(project_name = %project_name, "Initializing config tab");
     // Clone project_name early so we can use it in multiple closures
     let project_name_effect = project_name.clone();
     let project_name_save = project_name.clone();
@@ -17,17 +19,18 @@ pub fn ConfigTab(project_name: String) -> Element {
     let mut config_schema = use_signal(|| Option::<ConfigSchema>::None);
     let loading = use_signal(|| false);
     let mut error = use_signal(|| Option::<String>::None);
-    let env_var_values = use_signal(|| HashMap::<String, String>::new());
+    let env_var_values = use_signal(HashMap::<String, String>::new);
     let mut refresh_counter = use_signal(|| 0u32);
     let saving = use_signal(|| false);
     let save_status = use_signal(|| Option::<SaveStatus>::None);
     let has_changes = use_signal(|| false);
     let mut help_modal_open = use_signal(|| false);
-    let mut help_modal_text = use_signal(|| String::new());
+    let mut help_modal_text = use_signal(String::new);
 
     // Fetch on mount and on manual refresh
     use_effect(move || {
         let _trigger = refresh_counter();
+        debug!(project_name = %project_name_effect, "Triggering config fetch");
         spawn_fetch_config(
             config_schema,
             loading,
@@ -210,6 +213,7 @@ fn EnvVarRow(
                             class: "config-var-help-button",
                             title: "Show help for this variable",
                             onclick: move |_| {
+                                debug!("User clicking help button for config variable");
                                 on_help.call(help.clone());
                             },
                             Icon { icon: BsQuestionCircle }
@@ -264,15 +268,19 @@ fn save_config(
     if let Some(schema) = schema {
         saving.set(true);
         save_status.set(None);
+        info!(project_name = %project_name, "Starting config save");
 
         spawn(async move {
             let custom_script = values.remove(CUSTOM_SCRIPT_KEY).unwrap_or_default();
+            let env_var_count = values.len();
 
             let env_vars: Vec<EnvVarConfig> = values
                 .into_iter()
                 .filter(|(_, v)| !v.trim().is_empty())
                 .map(|(k, v)| EnvVarConfig { name: k, value: v })
                 .collect();
+
+            debug!(project_name = %project_name, env_var_count = env_var_count, has_custom_script = !custom_script.is_empty(), "Saving config with environment variables and custom script");
 
             let config = SavedProjectConfig {
                 image_tag: schema.image_tag,
@@ -284,14 +292,16 @@ fn save_config(
                 },
             };
 
-            match crate::server::save_project_config(project_name, config).await {
+            match crate::server::save_project_config(project_name.clone(), config).await {
                 Ok(_) => {
+                    info!(project_name = %project_name, "Configuration saved successfully");
                     save_status.set(Some(SaveStatus::Success(
                         "Configuration saved successfully!".to_string(),
                     )));
                     has_changes.set(false);
                 }
                 Err(e) => {
+                    error!(project_name = %project_name, error = %e, "Failed to save configuration");
                     save_status.set(Some(SaveStatus::Error(format!("Failed to save: {}", e))));
                 }
             }
@@ -311,11 +321,16 @@ fn spawn_fetch_config(
     spawn(async move {
         loading.set(true);
         error.set(None);
+        debug!(project_name = %project_name, "Starting config load");
 
         let image_tag = match crate::server::get_settings().await {
             Ok(settings) => match settings.default_image_tag {
-                Some(tag) if !tag.trim().is_empty() => tag,
+                Some(tag) if !tag.trim().is_empty() => {
+                    debug!(project_name = %project_name, image_tag = %tag, "Using default image tag");
+                    tag
+                }
                 _ => {
+                    error!(project_name = %project_name, "No default image configured");
                     error.set(Some(
                         "No default image configured. Go to Settings → Images and set one."
                             .to_string(),
@@ -325,6 +340,7 @@ fn spawn_fetch_config(
                 }
             },
             Err(e) => {
+                error!(project_name = %project_name, error = %e, "Failed to load settings");
                 error.set(Some(format!("Failed to load settings: {}", e)));
                 loading.set(false);
                 return;
@@ -332,19 +348,25 @@ fn spawn_fetch_config(
         };
 
         // Fetch the configuration schema
+        debug!(project_name = %project_name, image_tag = %image_tag, "Fetching configuration schema");
         match crate::server::get_image_config(image_tag).await {
             Ok(schema) => {
+                let env_var_count = schema.environment_variables.len();
+                info!(project_name = %project_name, env_var_count = env_var_count, "Successfully loaded configuration schema");
                 config_schema.set(Some(schema));
             }
             Err(e) => {
                 let error_msg = e.to_string();
                 let display_msg = if error_msg.contains("Image not prepared") {
+                    error!(project_name = %project_name, "Container image not prepared");
                     "Container image not prepared. Go to Settings → Images to prepare it."
                         .to_string()
                 } else if error_msg.contains("PRoot binary not found") {
+                    error!(project_name = %project_name, "PRoot binary not found");
                     "PRoot binary not found. Go to Settings → Runtime → PRoot to install it."
                         .to_string()
                 } else {
+                    error!(project_name = %project_name, error = %e, "Failed to load configuration");
                     format!("Failed to load configuration: {}", error_msg)
                 };
                 error.set(Some(display_msg));
@@ -354,8 +376,11 @@ fn spawn_fetch_config(
         }
 
         // Try to load previously saved config for this project
-        match crate::server::load_project_config(project_name).await {
+        debug!(project_name = %project_name, "Attempting to load previously saved project config");
+        match crate::server::load_project_config(project_name.clone()).await {
             Ok(loaded_config) => {
+                let env_var_count = loaded_config.environment_variables.len();
+                info!(project_name = %project_name, env_var_count = env_var_count, has_custom_script = !loaded_config.custom_script.is_empty(), "Loaded previously saved project configuration");
                 // Load the environment variables from the saved config
                 let mut values = HashMap::new();
                 for env_var in loaded_config.environment_variables {
@@ -370,6 +395,7 @@ fn spawn_fetch_config(
             }
             Err(_) => {
                 // It's okay if there's no saved config yet (first time opening)
+                debug!(project_name = %project_name, "No previously saved config found (first time or cleared)");
                 // Just continue with empty values
             }
         }

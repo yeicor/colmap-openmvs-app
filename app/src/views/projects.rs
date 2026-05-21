@@ -18,6 +18,7 @@ use dioxus::{document::eval, prelude::*};
 use dioxus_free_icons::icons::bs_icons::{BsCardList, BsGear, BsPencil, BsPlusCircle, BsTrash};
 use dioxus_free_icons::Icon;
 use dioxus_primitives::ContentSide;
+use tracing::{debug, error, info, warn};
 
 #[derive(Clone, Copy, PartialEq)]
 enum DialogType {
@@ -57,12 +58,21 @@ pub fn Projects(
     let mut loading = use_signal(|| true);
 
     let refresh_projects = move || {
+        debug!("Refreshing projects list");
         spawn({
             async move {
                 loading.set(true);
+                debug!("Fetching projects from server");
                 match get_projects().await {
-                    Ok(proj_list) => projects.set(proj_list),
-                    Err(e) => error_message.set(format!("Failed to load projects: {}", e)),
+                    Ok(proj_list) => {
+                        let count = proj_list.len();
+                        info!(project_count = count, "Successfully loaded projects");
+                        projects.set(proj_list);
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Failed to load projects");
+                        error_message.set(format!("Failed to load projects: {}", e));
+                    }
                 }
                 loading.set(false);
             }
@@ -77,36 +87,44 @@ pub fn Projects(
                 if let Some(dialog) = dialog_type() {
                     let name = input_value().trim().to_string();
                     if name.is_empty() && !matches!(dialog, DialogType::Delete(_)) {
+                        warn!("User attempted to create project with empty name");
                         error_message.set("Project name cannot be empty".to_string());
                         return;
                     }
 
                     let result = match dialog {
-                        DialogType::Create => create_project(name).await.map(|_| ()),
-                        DialogType::Rename(idx) => rename_project(
-                            projects()
+                        DialogType::Create => {
+                            info!(project_name = %name, "Creating new project");
+                            create_project(name).await.map(|_| ())
+                        }
+                        DialogType::Rename(idx) => {
+                            let old_name = projects()
                                 .get(idx)
                                 .expect("Invalid project index")
                                 .name
-                                .clone(),
-                            name,
-                        )
-                        .await
-                        .map(|_| ()),
+                                .clone();
+                            info!(old_project_name = %old_name, new_project_name = %name, "Renaming project");
+                            rename_project(old_name, name).await.map(|_| ())
+                        }
                         DialogType::Delete(idx) => {
-                            delete_project(
-                                projects()
-                                    .get(idx)
-                                    .expect("Invalid project index")
-                                    .name
-                                    .clone(),
-                            )
-                            .await
+                            let project_name_to_delete = projects()
+                                .get(idx)
+                                .expect("Invalid project index")
+                                .name
+                                .clone();
+                            info!(project_name = %project_name_to_delete, "Deleting project");
+                            delete_project(project_name_to_delete).await
                         }
                     };
 
                     match result {
                         Ok(_) => {
+                            let operation = match dialog {
+                                DialogType::Create => "created",
+                                DialogType::Rename(_) => "renamed",
+                                DialogType::Delete(_) => "deleted",
+                            };
+                            info!(operation, "Project operation succeeded");
                             dialog_type.set(None);
                             info_message.set(
                                 match dialog {
@@ -118,7 +136,15 @@ pub fn Projects(
                             );
                             refresh_projects();
                         }
-                        Err(e) => error_message.set(e.to_string()),
+                        Err(e) => {
+                            let operation = match dialog {
+                                DialogType::Create => "create",
+                                DialogType::Rename(_) => "rename",
+                                DialogType::Delete(_) => "delete",
+                            };
+                            error!(error = %e, operation, "Project operation failed");
+                            error_message.set(e.to_string());
+                        }
                     }
                 }
             }
@@ -157,6 +183,7 @@ pub fn Projects(
                     extra: rsx! { "New" },
                     extra_tooltip: rsx! { "Create a new project" },
                     onclick: move |_| {
+                        debug!("Opening create new project dialog");
                         input_value.set(String::new());
                         error_message.set(String::new());
                         info_message.set(String::new());
@@ -168,6 +195,7 @@ pub fn Projects(
                     extra: rsx! { "Settings" },
                     extra_tooltip: rsx! { "Configure application settings" },
                     onclick: move |_| {
+                        debug!("Navigating to settings view");
                         dioxus::prelude::navigator().push(Route::SettingsView {});
                         eval("if (window.innerWidth <= 768) { document.querySelector('.dx-sidebar-trigger').click(); }");
                     },
@@ -199,6 +227,7 @@ pub fn Projects(
                                 onclick: move |_| {
                                     if dialog_type().is_none() { // Ignore clicks from the action buttons
                                         if let Some(proj) = projects().get(idx) {
+                                            debug!(project_name = %proj.name, "Navigating to project");
                                             dioxus::prelude::navigator().push(Route::Project { name: proj.name.clone() });
                                             eval("if (window.innerWidth <= 768) { document.querySelector('.dx-sidebar-trigger').click(); }");
                                         }
@@ -217,6 +246,7 @@ pub fn Projects(
                                                 variant: ButtonVariant::Secondary,
                                                 onclick: move |_| {
                                                     if let Some(proj) = projects().get(idx) {
+                                                        debug!(project_name = %proj.name, "Opening rename dialog");
                                                         input_value.set(proj.name.clone());
                                                         error_message.set(String::new());
                                                         info_message.set(String::new());
@@ -236,6 +266,9 @@ pub fn Projects(
                                             Button {
                                                 variant: ButtonVariant::Destructive,
                                                 onclick: move |_| {
+                                                    if let Some(proj) = projects().get(idx) {
+                                                        debug!(project_name = %proj.name, "Opening delete confirmation dialog");
+                                                    }
                                                     error_message.set(String::new());
                                                     info_message.set(String::new());
                                                     dialog_type.set(Some(DialogType::Delete(idx)));

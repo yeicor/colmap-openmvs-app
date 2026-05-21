@@ -1,9 +1,8 @@
 [package]
 name = "colmap-openmvs-api"
-version = "0.1.0"
-authors = ["Yeicor <yeicor+no-reply@github.com>"]
-edition = "2021"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
 
 [dependencies]
-# Core serialization
-serde = { version = "*", features = ["derive"] }
+serde = { workspace = true }

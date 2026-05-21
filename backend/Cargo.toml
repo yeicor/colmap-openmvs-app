@@ -1,29 +1,30 @@
 [package]
 name = "colmap-openmvs-backend"
-version = "0.1.0"
-authors = ["Yeicor <yeicor+no-reply@github.com>"]
-edition = "2021"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
 
 [dependencies]
 colmap-openmvs-api = { path = "../api" }
 
 # Core serialization
-serde = { version = "*", features = ["derive"] }
+serde = { workspace = true }
 serde_json = { version = "1.0" }
 serde-saphyr = { version = "0.0.26" }
 
 # Async runtime
-tokio = { version = "*", features = ["full"] }
+tokio = { version = "1.35", features = ["full"] }
+dioxus = { version = "0.7.9", features = ["fullstack", "server"] }
 
 # Async utilities for streaming
 futures-util = { version = "0.3", features = ["sink", "io"] }
-dioxus = { version = "0.7.9", features = ["fullstack", "server"] }
+futures = { version = "0.3.32" }
 
 # Async trait support
 async-trait = { version = "0.1" }
 
 # Error handling
-anyhow = { version = "1.0" }
+anyhow = { workspace = true }
 
 # Regex for version parsing
 regex = { version = "1.10" }
@@ -49,19 +50,17 @@ reqwest = { version = "0.11", features = ["json", "stream"] }
 # Executable discovery
 which = { version = "5.0" }
 
-futures = "0.3.32"
-
 # Process management
-libc = "0.2"
+libc = { version = "0.2" }
 
-# OCI Distribution client for pulling container images (renamed to oras-project/rust-oci-client)
+# OCI Distribution client for pulling container images
 oci-client = { version = "0.16" }
 
 # Gzip decompression for Docker layers
 flate2 = { version = "1.0" }
 
 # Date and time handling
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { workspace = true }
 
 # Ordered HashMap
 indexmap = { version = "2.0" }
@@ -71,3 +70,8 @@ uuid = { version = "1", features = ["v4"] }
 
 # Unix signal handling
 nix = { version = "0.27", features = ["process"] }
+
+# Structured logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-log = { workspace = true }

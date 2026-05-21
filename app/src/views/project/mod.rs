@@ -5,6 +5,7 @@ use crate::components::{
 use crate::mycomponents::{BackButton, PageHeader, PageHeaderButton};
 use crate::Route;
 use dioxus::prelude::*;
+use tracing::{debug, info};
 
 use dioxus_free_icons::icons::bs_icons::{BsBoxSeam, BsCamera2, BsFileText, BsGear, BsImages};
 use dioxus_free_icons::Icon;
@@ -37,6 +38,7 @@ pub type PipelineCommandCtx = Signal<Option<bool>>;
 
 #[component]
 pub fn Project(name: String) -> Element {
+    info!(project_name = %name, "Initializing project view");
     let mut active_tab = use_signal(|| Some("images".to_string()));
 
     // Provide a shared pipeline-progress signal accessible to LogsTab (write)
@@ -54,14 +56,19 @@ pub fn Project(name: String) -> Element {
 
     let progress_value: Option<f64> = pipeline_progress().map(|p| p as f64);
 
+    let on_run_clicked_name = name.clone();
+    let on_value_changed_name = name.clone();
     let on_run_clicked = move |_| {
         if pipeline_is_running() {
+            info!(project_name = %on_run_clicked_name, "User cancelled pipeline");
             // Cancel the running pipeline.
             pipeline_command.set(Some(false));
         } else {
+            info!(project_name = %on_run_clicked_name, "Starting pipeline run");
             // Navigate to the Logs tab so the user sees what is happening,
             // then issue the start command.
             active_tab.set(Some("logs".to_string()));
+            debug!("Tab switched to logs before starting pipeline");
             pipeline_command.set(Some(true));
         }
     };
@@ -109,6 +116,7 @@ pub fn Project(name: String) -> Element {
                     value: active_tab,
                     default_value: "images".to_string(),
                     on_value_change: move |tab| {
+                        debug!(project_name = %on_value_changed_name, new_tab = %tab, "Switching project tab");
                         active_tab.set(Some(tab));
                     },
                     TabList {
