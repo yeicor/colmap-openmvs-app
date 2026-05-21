@@ -56,7 +56,7 @@ jobs:
             build-type: desktop
           - os: ubuntu-latest
             target: wasm32-unknown-unknown
-            build-type: server
+            build-type: web
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

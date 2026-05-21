@@ -1,4 +1,4 @@
-use crate::server::{get_project_output_for_viewer, list_project_outputs};
+use crate::server::{delete_project_output, get_project_output_for_viewer, list_project_outputs};
 use base64::Engine as _;
 use dioxus::document::eval;
 use dioxus::prelude::*;
@@ -45,6 +45,10 @@ pub fn OutputsTab(project_name: String) -> Element {
     let mut error_msg = use_signal(String::new);
     // relative_path of the file currently being loaded for viewing, if any
     let mut viewing = use_signal(|| Option::<String>::None);
+    // relative_path of the file pending delete confirmation, if any
+    let mut confirming_delete = use_signal(|| Option::<String>::None);
+    // relative_path of the file currently being deleted, if any
+    let mut deleting_path = use_signal(|| Option::<String>::None);
 
     // Data
     let project_name_res = project_name.clone();
@@ -86,12 +90,13 @@ pub fn OutputsTab(project_name: String) -> Element {
                 div { class: "outputs-toolbar-spacer" }
 
                 button {
-                    class: "outputs-refresh-btn",
+                    class: "outputs-btn outputs-refresh-btn",
                     onclick: move |_| {
                         debug!(project_name = %project_name, "User clicked refresh output files");
                         refresh_counter += 1;
                     },
-                    "Refresh"
+                    "↺"
+                    span { class: "btn-label", " Refresh" }
                 }
             }
 
@@ -135,28 +140,39 @@ pub fn OutputsTab(project_name: String) -> Element {
                         for file in file_list.iter() {
                             {
                                 let rel_path = file.relative_path.clone();
-                                let rel_path_dl = rel_path.clone();
-                                let rel_path_view = rel_path.clone();
                                 let fname = file.name.clone();
-                                let fname_dl = fname.clone();
-                                let fname_view = fname.clone();
                                 let size_str = format_size(file.size);
                                 let is_viewable = file.is_viewable;
-                                let pn_dl = project_name.clone();
-                                let pn_view = project_name.clone();
+                                let pn = project_name.clone();
+                                let rel_path_enc = url_encode(&rel_path).to_string();
 
-                                let is_viewing = viewing() == Some(rel_path.clone());
+                                // Per-item view clone captures
+                                let pn_view = pn.clone();
+                                let rp_view = rel_path.clone();
+                                let fn_view = fname.clone();
+
+                                // Per-item delete clone captures
+                                let rp_confirm = rel_path.clone();
+                                let pn_del = pn.clone();
+                                let rp_del = rel_path.clone();
+
+                                // Current reactive states for this item
+                                let is_viewing_this = viewing() == Some(rel_path.clone());
+                                let is_confirming = confirming_delete() == Some(rel_path.clone());
+                                let is_deleting = deleting_path() == Some(rel_path.clone());
 
                                 rsx! {
                                     div {
                                         key: "{rel_path}",
                                         class: "outputs-file-item",
 
-                                        // File icon + name
+                                        // File icon
                                         span {
                                             class: "outputs-file-icon",
                                             "📄"
                                         }
+
+                                        // Name + meta
                                         div {
                                             class: "outputs-file-info-wrapper",
                                             div {
@@ -169,23 +185,24 @@ pub fn OutputsTab(project_name: String) -> Element {
                                             }
                                         }
 
-                                        // Download button (direct URL for streaming)
+                                        // Download button
                                         a {
-                                            href: "/projects/{pn_dl}/outputs/file?relative_path={url_encode(&rel_path_dl)}",
-                                            download: "{fname_dl}",
-                                            class: "outputs-download-link",
-                                            "⬇ Download"
+                                            href: "/projects/{pn}/outputs/file?relative_path={rel_path_enc}",
+                                            download: "{fname}",
+                                            class: "outputs-btn outputs-download-link",
+                                            "⬇"
+                                            span { class: "btn-label", " Download" }
                                         }
 
                                         // 3D View button (only for viewable files)
                                         if is_viewable {
                                             button {
-                                                class: "outputs-view-3d-btn",
-                                                disabled: is_viewing,
+                                                class: "outputs-btn outputs-view-3d-btn",
+                                                disabled: is_viewing_this,
                                                 onclick: move |_| {
                                                     let pn = pn_view.clone();
-                                                    let rp = rel_path_view.clone();
-                                                    let fn_ = fname_view.clone();
+                                                    let rp = rp_view.clone();
+                                                    let fn_ = fn_view.clone();
                                                     debug!(project_name = %pn, file_name = %fn_, "User clicked view 3D");
                                                     viewing.set(Some(rp.clone()));
                                                     let mut err = error_msg;
@@ -196,7 +213,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                 info!(project_name = %pn, file_name = %fn_, bytes_loaded = bytes.len(), "Successfully loaded file for 3D viewer");
                                                                 let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                                                                 let fname_safe = js_escape(&fn_);
-                                                                launch_ply_viewer(&b64, &fname_safe).await;
+                                                                launch_ply_viewer(&b64, &fname_safe, &pn, &rp).await;
                                                             }
                                                             Err(e) => {
                                                                 error!(project_name = %pn, file_name = %fn_, error = %e, "Failed to load file for 3D viewer");
@@ -206,7 +223,60 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                         viewing.set(None);
                                                     });
                                                 },
-                                                if is_viewing { "⏳ Loading…" } else { "🔳 View 3D" }
+                                                if is_viewing_this { "⏳" } else { "🔳" }
+                                                span {
+                                                    class: "btn-label",
+                                                    if is_viewing_this { " Loading…" } else { " View 3D" }
+                                                }
+                                            }
+                                        }
+
+                                        // Delete area
+                                        if is_deleting {
+                                            span {
+                                                class: "outputs-file-icon",
+                                                title: "Deleting…",
+                                                "⏳"
+                                            }
+                                        } else if is_confirming {
+                                            button {
+                                                class: "outputs-btn outputs-confirm-del-btn",
+                                                title: "Confirm delete",
+                                                onclick: move |_| {
+                                                    let pn = pn_del.clone();
+                                                    let rp = rp_del.clone();
+                                                    deleting_path.set(Some(rp.clone()));
+                                                    confirming_delete.set(None);
+                                                    spawn(async move {
+                                                        match delete_project_output(pn.clone(), rp.clone()).await {
+                                                            Ok(()) => {
+                                                                info!(project_name = %pn, file_path = %rp, "Output file deleted");
+                                                                refresh_counter += 1;
+                                                            }
+                                                            Err(e) => {
+                                                                error!(project_name = %pn, file_path = %rp, error = %e, "Failed to delete output file");
+                                                                error_msg.set(format!("Failed to delete: {e}"));
+                                                            }
+                                                        }
+                                                        deleting_path.set(None);
+                                                    });
+                                                },
+                                                "✓"
+                                                span { class: "btn-label", " Sure?" }
+                                            }
+                                            button {
+                                                class: "outputs-btn outputs-cancel-del-btn",
+                                                title: "Cancel delete",
+                                                onclick: move |_| confirming_delete.set(None),
+                                                "✗"
+                                            }
+                                        } else {
+                                            button {
+                                                class: "outputs-btn outputs-del-btn",
+                                                title: "Delete file",
+                                                onclick: move |_| confirming_delete.set(Some(rp_confirm.clone())),
+                                                "🗑"
+                                                span { class: "btn-label", " Delete" }
                                             }
                                         }
                                     }
@@ -220,286 +290,315 @@ pub fn OutputsTab(project_name: String) -> Element {
     }
 }
 
-// Three.js viewer launcher using CDN with dynamic imports and TrackballControls
+// ---------------------------------------------------------------------------
+// 3-D Viewer (launched via eval'd JavaScript)
 // ---------------------------------------------------------------------------
 
-async fn launch_ply_viewer(b64: &str, fname_safe: &str) {
+async fn launch_ply_viewer(b64: &str, fname_safe: &str, project_name: &str, rel_path: &str) {
     info!(file_name = %fname_safe, "Launching 3D PLY viewer");
-    debug!("Encoding and preparing PLY data for viewer");
     let b64_esc = js_escape(b64);
     let fname_esc = js_escape(fname_safe);
+    let project_name_esc = js_escape(project_name);
+    let rel_path_esc = js_escape(rel_path);
 
     let js = format!(
         r#"(async () => {{
     console.log('[3D Viewer] Starting viewer setup...');
-
     try {{
         console.log('[3D Viewer] Loading libraries from esm.sh CDN...');
         const THREE = await import('https://esm.sh/three@0.169.0');
         const PLYLoaderMod = await import('https://esm.sh/three@0.169.0/examples/jsm/loaders/PLYLoader.js');
         const TrackballControlsMod = await import('https://esm.sh/three@0.169.0/examples/jsm/controls/TrackballControls.js');
-
         const PLYLoader = PLYLoaderMod.PLYLoader;
         const TrackballControls = TrackballControlsMod.TrackballControls;
-
         console.log('[3D Viewer] Three.js, PLYLoader and TrackballControls loaded');
 
         const b64 = '{}';
         const fname = '{}';
+        const projectName = '{}';
+        const relPath = '{}';
 
+        // Decode PLY bytes
         const binary = atob(b64);
         const arr = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
         const blob = new Blob([arr], {{type: 'application/octet-stream'}});
         const blobUrl = URL.createObjectURL(blob);
 
+        // Parse PLY header for companion texture file
+        const hdrBytes = arr.slice(0, Math.min(4096, arr.length));
+        const hdrText = new TextDecoder('latin1').decode(hdrBytes);
+        const endHdrIdx = hdrText.indexOf('end_header');
+        const hdrPart = endHdrIdx >= 0 ? hdrText.substring(0, endHdrIdx) : hdrText;
+        const texMatch = hdrPart.match(/comment TextureFile (.+)/);
+        const texFile = texMatch ? texMatch[1].trim() : null;
+        const relDir = relPath.includes('/') ? relPath.substring(0, relPath.lastIndexOf('/') + 1) : '';
+        const texUrl = texFile
+            ? '/projects/' + encodeURIComponent(projectName) + '/outputs/file?relative_path=' + encodeURIComponent(relDir + texFile)
+            : null;
+        if (texUrl) console.log('[3D Viewer] Companion texture URL:', texUrl);
+
+        // Remove any existing overlay
         const existing = document.getElementById('ply-viewer-overlay');
         if (existing) existing.remove();
 
+        // Overlay container
         const overlay = document.createElement('div');
         overlay.id = 'ply-viewer-overlay';
         overlay.style.cssText = 'position:fixed;inset:0;background:#0d1117;z-index:9999;display:flex;flex-direction:column;align-items:stretch;';
         document.body.appendChild(overlay);
 
-        const header = document.createElement('div');
-        header.style.cssText = 'display:flex;align-items:center;padding:8px 16px;background:#161b22;border-bottom:1px solid #30363d;gap:12px;flex-shrink:0;';
-        const title = document.createElement('span');
-        title.style.cssText = 'color:#e6edf3;font-family:monospace;font-size:14px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-        title.textContent = '3D Viewer — ' + fname;
+        // Header bar
+        const headerDiv = document.createElement('div');
+        headerDiv.style.cssText = 'display:flex;align-items:center;padding:8px 16px;background:#161b22;border-bottom:1px solid #30363d;gap:12px;flex-shrink:0;';
+        const titleSpan = document.createElement('span');
+        titleSpan.style.cssText = 'color:#e6edf3;font-family:monospace;font-size:14px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        titleSpan.textContent = '3D Viewer — ' + fname;
         const closeBtn = document.createElement('button');
         closeBtn.textContent = '✕ Close';
         closeBtn.style.cssText = 'padding:6px 14px;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;cursor:pointer;font-size:13px;flex-shrink:0;';
         closeBtn.onclick = () => {{ URL.revokeObjectURL(blobUrl); overlay.remove(); }};
-        header.appendChild(title);
-        header.appendChild(closeBtn);
-        overlay.appendChild(header);
+        headerDiv.appendChild(titleSpan);
+        headerDiv.appendChild(closeBtn);
+        overlay.appendChild(headerDiv);
 
+        // Controls bar — reset button always present; dynamic slider added after PLY loads
         const controlsDiv = document.createElement('div');
         controlsDiv.style.cssText = 'display:flex;align-items:center;gap:12px;padding:8px 16px;background:#161b22;border-bottom:1px solid #30363d;flex-wrap:wrap;flex-shrink:0;';
-
-        const scaleLabel = document.createElement('label');
-        scaleLabel.style.cssText = 'color:#e6edf3;font-family:monospace;font-size:12px;display:flex;align-items:center;gap:8px;';
-        scaleLabel.textContent = 'Point Scale:';
-
-        const scaleSlider = document.createElement('input');
-        scaleSlider.type = 'range';
-        scaleSlider.min = '0.1';
-        scaleSlider.max = '5';
-        scaleSlider.step = '0.1';
-        scaleSlider.value = '1';
-        scaleSlider.style.cssText = 'width:120px;cursor:pointer;';
-
-        const scaleValue = document.createElement('span');
-        scaleValue.style.cssText = 'color:#8b949e;font-family:monospace;font-size:12px;min-width:30px;';
-        scaleValue.textContent = '1.0x';
-
-        scaleLabel.appendChild(scaleSlider);
-        scaleLabel.appendChild(scaleValue);
-        controlsDiv.appendChild(scaleLabel);
-
         const resetBtn = document.createElement('button');
         resetBtn.textContent = 'Reset View';
         resetBtn.style.cssText = 'padding:4px 12px;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:4px;cursor:pointer;font-size:12px;';
         controlsDiv.appendChild(resetBtn);
-
         overlay.appendChild(controlsDiv);
 
-        const loading = document.createElement('div');
-        loading.id = 'ply-viewer-overlay-loading';
-        loading.style.cssText = 'color:#8b949e;font-family:monospace;font-size:13px;padding:24px;text-align:center;flex-shrink:0;';
-        loading.textContent = 'Initializing 3D viewer...';
-        overlay.appendChild(loading);
+        // Loading message
+        const loadingDiv = document.createElement('div');
+        loadingDiv.id = 'ply-viewer-overlay-loading';
+        loadingDiv.style.cssText = 'color:#8b949e;font-family:monospace;font-size:13px;padding:24px;text-align:center;flex-shrink:0;';
+        loadingDiv.textContent = 'Initializing 3D viewer...';
+        overlay.appendChild(loadingDiv);
 
+        // Canvas
         const canvas = document.createElement('canvas');
         canvas.id = 'ply-viewer-canvas';
         canvas.style.cssText = 'flex:1;display:block;min-height:0;width:100%;height:100%;';
         overlay.appendChild(canvas);
 
-        console.log('[3D Viewer] Canvas dimensions:', canvas.clientWidth, 'x', canvas.clientHeight);
+        await new Promise(r => setTimeout(r, 0));
+        let w = canvas.clientWidth || window.innerWidth;
+        let h = canvas.clientHeight || (window.innerHeight - 100);
+        console.log('[3D Viewer] Canvas dimensions:', w, 'x', h);
 
-        await new Promise(resolve => setTimeout(resolve, 0));
-
-        let w = canvas.clientWidth;
-        let h = canvas.clientHeight;
-        console.log('[3D Viewer] After reflow - Canvas dimensions:', w, 'x', h);
-
-        if (w === 0) w = window.innerWidth;
-        if (h === 0) h = window.innerHeight - 100;
-
-        console.log('[3D Viewer] Using dimensions:', w, 'x', h);
-        console.log('[3D Viewer] Initializing Three.js scene...');
-
+        // Scene
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x0d1117);
 
         const camera = new THREE.PerspectiveCamera(60, w / h, 0.001, 10000);
         camera.position.set(0, 0, 5);
+        // Add camera to scene so its children (lights) are updated properly
+        scene.add(camera);
 
         const renderer = new THREE.WebGLRenderer({{ canvas, antialias: true, preserveDrawingBuffer: true }});
         renderer.setSize(w, h, false);
         renderer.setPixelRatio(window.devicePixelRatio || 1);
         renderer.setClearColor(0x0d1117);
-        console.log('[3D Viewer] Renderer initialized with size:', w, 'x', h);
+        if (THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
+        console.log('[3D Viewer] Renderer ready');
 
         const controls = new TrackballControls(camera, renderer.domElement);
         controls.rotateSpeed = 2.5;
         controls.zoomSpeed = 1.2;
         controls.panSpeed = 0.8;
 
-        // Inertia parameters
-        let rotationVelocity = new THREE.Vector3();
+        // Inertia state
+        let rotVel = new THREE.Vector3();
         let isRotating = false;
         let lastX = 0, lastY = 0;
-        const inertiaFriction = 0.95;
-        const inertiaThreshold = 0.001;
+        const friction = 0.95;
+        const velThreshold = 0.001;
 
-        renderer.domElement.addEventListener('mousedown', () => {{
-            isRotating = true;
-            rotationVelocity.set(0, 0, 0);
-        }});
-
-        renderer.domElement.addEventListener('mouseup', () => {{
-            isRotating = false;
-        }});
-
-        renderer.domElement.addEventListener('mousemove', (e) => {{
+        renderer.domElement.addEventListener('mousedown', () => {{ isRotating = true; rotVel.set(0,0,0); }});
+        renderer.domElement.addEventListener('mouseup',   () => {{ isRotating = false; }});
+        renderer.domElement.addEventListener('mousemove', e => {{
             if (isRotating) {{
-                const deltaX = e.clientX - lastX;
-                const deltaY = e.clientY - lastY;
-                rotationVelocity.x = deltaY * 0.001;
-                rotationVelocity.y = deltaX * 0.001;
+                rotVel.x = (e.clientY - lastY) * 0.001;
+                rotVel.y = (e.clientX - lastX) * 0.001;
             }}
-            lastX = e.clientX;
-            lastY = e.clientY;
+            lastX = e.clientX; lastY = e.clientY;
         }});
 
-        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-        const dl = new THREE.DirectionalLight(0xffffff, 0.8);
-        dl.position.set(1, 2, 3);
-        scene.add(dl);
+        // ── Lighting ─────────────────────────────────────────────────────
+        // Ambient + a directional light attached to the camera hierarchy so
+        // it always illuminates what the camera sees, regardless of rotation.
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+        // Position in camera-local space: behind-and-above the camera initially
+        dl.position.set(0, 0.5, 1);
+        camera.add(dl);
+        // Target in camera-local space: slightly in front of the camera
+        const dlTarget = new THREE.Object3D();
+        dlTarget.position.set(0, 0, -1);
+        camera.add(dlTarget);
+        dl.target = dlTarget;
 
-        loading.textContent = 'Loading PLY file...';
+        loadingDiv.textContent = 'Loading PLY file...';
         const loader = new PLYLoader();
-        console.log('[3D Viewer] Loading PLY geometry...');
-
         let mesh = null;
-        let originalGeometry = null;
-        const initialCameraPos = new THREE.Vector3();
+        const initialCamPos = new THREE.Vector3();
 
-        loader.load(blobUrl, (geometry) => {{
-            console.log('[3D Viewer] PLY loaded, rendering geometry...');
-            console.log('[3D Viewer] Geometry vertices:', geometry.attributes.position?.count || 0);
+        loader.load(blobUrl, async (geometry) => {{
+            try {{
+                geometry.computeVertexNormals();
+                loadingDiv.remove();
 
-            geometry.computeVertexNormals();
-            originalGeometry = geometry.clone();
-            loading.remove();
+                const hasIndex = geometry.index !== null;
+                const hasColor = !!geometry.attributes.color;
+                const hasUV   = !!geometry.attributes.uv;
+                console.log('[3D Viewer] hasIndex:', hasIndex, 'hasColor:', hasColor, 'hasUV:', hasUV);
 
-            const hasIndex = geometry.index !== null;
-            const hasColor = !!geometry.attributes.color;
-            console.log('[3D Viewer] Has index:', hasIndex, 'Has color:', hasColor);
+                let material;
 
-            if (hasIndex) {{
-                const mat = hasColor ? new THREE.MeshPhongMaterial({{ vertexColors: true, side: THREE.DoubleSide }}) : new THREE.MeshPhongMaterial({{ color: 0x7a8fa6, side: THREE.DoubleSide }});
-                mesh = new THREE.Mesh(geometry, mat);
-            }} else {{
-                const mat = hasColor ? new THREE.PointsMaterial({{ vertexColors: true, size: 0.1 }}) : new THREE.PointsMaterial({{ color: 0x4fc3f7, size: 0.1 }});
-                mesh = new THREE.Points(geometry, mat);
-            }}
-            scene.add(mesh);
-            console.log('[3D Viewer] Mesh added to scene');
+                if (hasIndex) {{
+                    // ── Trimesh: light-angle (yaw) slider ─────────────────
+                    const yawLabel = document.createElement('label');
+                    yawLabel.style.cssText = 'color:#e6edf3;font-family:monospace;font-size:12px;display:flex;align-items:center;gap:8px;';
+                    yawLabel.textContent = 'Light Angle:';
+                    const yawSlider = document.createElement('input');
+                    yawSlider.type = 'range'; yawSlider.min = '-180'; yawSlider.max = '180';
+                    yawSlider.step = '5'; yawSlider.value = '0';
+                    yawSlider.style.cssText = 'width:120px;cursor:pointer;';
+                    const yawValSpan = document.createElement('span');
+                    yawValSpan.style.cssText = 'color:#8b949e;font-family:monospace;font-size:12px;min-width:36px;';
+                    yawValSpan.textContent = '0\u00b0';
+                    yawSlider.oninput = e => {{
+                        const yaw = parseFloat(e.target.value) * Math.PI / 180;
+                        yawValSpan.textContent = e.target.value + '\u00b0';
+                        // Rotate light position around camera's view axis
+                        dl.position.set(Math.sin(yaw), 0.5, Math.cos(yaw));
+                    }};
+                    yawLabel.appendChild(yawSlider);
+                    yawLabel.appendChild(yawValSpan);
+                    controlsDiv.insertBefore(yawLabel, resetBtn);
 
-            const box = new THREE.Box3().setFromObject(mesh);
-            const center = box.getCenter(new THREE.Vector3());
-            const size = box.getSize(new THREE.Vector3());
-            const maxDim = Math.max(size.x, size.y, size.z) || 1;
-            console.log('[3D Viewer] Geometry bounds - center:', center, 'size:', size, 'maxDim:', maxDim);
-
-            mesh.position.sub(center);
-            camera.position.set(0, 0, maxDim * 2.5);
-            initialCameraPos.copy(camera.position);
-            camera.near = maxDim * 0.0005;
-            camera.far = maxDim * 200;
-            camera.updateProjectionMatrix();
-
-            console.log('[3D Viewer] Camera position:', camera.position);
-
-            scaleSlider.oninput = (e) => {{
-                const scale = parseFloat(e.target.value);
-                scaleValue.textContent = scale.toFixed(1) + 'x';
-
-                if (mesh) {{
-                    if (mesh instanceof THREE.Points) {{
-                        mesh.material.size = 0.1 * scale;
+                    // ── Material: textured > vertex-color > flat ──────────
+                    if (texUrl && hasUV) {{
+                        try {{
+                            const texLoader = new THREE.TextureLoader();
+                            const map = await new Promise((res, rej) => texLoader.load(texUrl, res, undefined, rej));
+                            map.flipY = false;
+                            if (THREE.SRGBColorSpace) map.colorSpace = THREE.SRGBColorSpace;
+                            material = new THREE.MeshPhongMaterial({{ map, side: THREE.DoubleSide }});
+                            console.log('[3D Viewer] Texture applied');
+                        }} catch (texErr) {{
+                            console.warn('[3D Viewer] Texture load failed, using fallback:', texErr);
+                            material = new THREE.MeshPhongMaterial({{ color: 0x7a8fa6, side: THREE.DoubleSide }});
+                        }}
+                    }} else if (hasColor) {{
+                        material = new THREE.MeshPhongMaterial({{ vertexColors: true, side: THREE.DoubleSide }});
+                    }} else {{
+                        material = new THREE.MeshPhongMaterial({{ color: 0x7a8fa6, side: THREE.DoubleSide }});
                     }}
-                }}
-            }};
+                    mesh = new THREE.Mesh(geometry, material);
 
-            resetBtn.onclick = () => {{
-                camera.position.copy(initialCameraPos);
-                controls.reset();
-                rotationVelocity.set(0, 0, 0);
-            }};
+                }} else {{
+                    // ── Point cloud: point-scale slider ───────────────────
+                    const scaleLabel = document.createElement('label');
+                    scaleLabel.style.cssText = 'color:#e6edf3;font-family:monospace;font-size:12px;display:flex;align-items:center;gap:8px;';
+                    scaleLabel.textContent = 'Point Scale:';
+                    const scaleSlider = document.createElement('input');
+                    scaleSlider.type = 'range'; scaleSlider.min = '0.1'; scaleSlider.max = '5';
+                    scaleSlider.step = '0.1'; scaleSlider.value = '1';
+                    scaleSlider.style.cssText = 'width:120px;cursor:pointer;';
+                    const scaleValSpan = document.createElement('span');
+                    scaleValSpan.style.cssText = 'color:#8b949e;font-family:monospace;font-size:12px;min-width:30px;';
+                    scaleValSpan.textContent = '1.0x';
+                    scaleSlider.oninput = e => {{
+                        const s = parseFloat(e.target.value);
+                        scaleValSpan.textContent = s.toFixed(1) + 'x';
+                        if (mesh) mesh.material.size = 0.1 * s;
+                    }};
+                    scaleLabel.appendChild(scaleSlider);
+                    scaleLabel.appendChild(scaleValSpan);
+                    controlsDiv.insertBefore(scaleLabel, resetBtn);
 
-            const ro = new ResizeObserver(() => {{
-                const nw = canvas.clientWidth;
-                const nh = canvas.clientHeight;
-                if (nw > 0 && nh > 0) {{
-                    camera.aspect = nw / nh;
-                    camera.updateProjectionMatrix();
-                    renderer.setSize(nw, nh, false);
-                }}
-            }});
-            ro.observe(canvas);
-
-            const origClose = closeBtn.onclick;
-            closeBtn.onclick = () => {{ ro.disconnect(); renderer.dispose(); origClose(); }};
-
-            const animate = () => {{
-                if (!document.contains(overlay)) {{ ro.disconnect(); renderer.dispose(); return; }}
-                requestAnimationFrame(animate);
-
-                // Apply inertia rotation when not actively rotating
-                if (!isRotating && (Math.abs(rotationVelocity.x) > inertiaThreshold || Math.abs(rotationVelocity.y) > inertiaThreshold)) {{
-                    // Apply rotation using quaternions for smooth momentum
-                    const qx = new THREE.Quaternion();
-                    const qy = new THREE.Quaternion();
-                    const axis = new THREE.Vector3(0, 1, 0);
-                    const perpAxis = new THREE.Vector3(1, 0, 0);
-
-                    qy.setFromAxisAngle(axis, rotationVelocity.y);
-                    qx.setFromAxisAngle(perpAxis, rotationVelocity.x);
-
-                    const combinedQ = new THREE.Quaternion();
-                    combinedQ.multiplyQuaternions(qy, qx);
-
-                    // Apply rotation to camera position
-                    const camPos = camera.position;
-                    camPos.applyQuaternion(combinedQ);
-
-                    // Decay velocity
-                    rotationVelocity.multiplyScalar(inertiaFriction);
+                    material = hasColor
+                        ? new THREE.PointsMaterial({{ vertexColors: true, size: 0.1 }})
+                        : new THREE.PointsMaterial({{ color: 0x4fc3f7, size: 0.1 }});
+                    mesh = new THREE.Points(geometry, material);
                 }}
 
-                controls.update();
-                renderer.render(scene, camera);
-            }};
-            console.log('[3D Viewer] Starting animation loop...');
-            animate();
-        }}, undefined, (err) => {{
+                scene.add(mesh);
+                console.log('[3D Viewer] Mesh added to scene');
+
+                // Fit camera to bounding box
+                const box = new THREE.Box3().setFromObject(mesh);
+                const center = box.getCenter(new THREE.Vector3());
+                const size = box.getSize(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z) || 1;
+                console.log('[3D Viewer] Bounds — center:', center, 'maxDim:', maxDim);
+
+                mesh.position.sub(center);
+                camera.position.set(0, 0, maxDim * 2.5);
+                initialCamPos.copy(camera.position);
+                camera.near = maxDim * 0.0005;
+                camera.far = maxDim * 200;
+                camera.updateProjectionMatrix();
+
+                resetBtn.onclick = () => {{
+                    camera.position.copy(initialCamPos);
+                    controls.reset();
+                    rotVel.set(0, 0, 0);
+                }};
+
+                const ro = new ResizeObserver(() => {{
+                    const nw = canvas.clientWidth, nh = canvas.clientHeight;
+                    if (nw > 0 && nh > 0) {{
+                        camera.aspect = nw / nh;
+                        camera.updateProjectionMatrix();
+                        renderer.setSize(nw, nh, false);
+                    }}
+                }});
+                ro.observe(canvas);
+
+                const origClose = closeBtn.onclick;
+                closeBtn.onclick = () => {{ ro.disconnect(); renderer.dispose(); origClose(); }};
+
+                const animate = () => {{
+                    if (!document.contains(overlay)) {{ ro.disconnect(); renderer.dispose(); return; }}
+                    requestAnimationFrame(animate);
+
+                    // Apply inertia rotation
+                    if (!isRotating && (Math.abs(rotVel.x) > velThreshold || Math.abs(rotVel.y) > velThreshold)) {{
+                        const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rotVel.y);
+                        const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), rotVel.x);
+                        camera.position.applyQuaternion(new THREE.Quaternion().multiplyQuaternions(qy, qx));
+                        rotVel.multiplyScalar(friction);
+                    }}
+
+                    controls.update();
+                    renderer.render(scene, camera);
+                }};
+                console.log('[3D Viewer] Starting animation loop...');
+                animate();
+
+            }} catch (innerErr) {{
+                console.error('[3D Viewer] Error processing PLY:', innerErr);
+                const ld = document.getElementById('ply-viewer-overlay-loading');
+                if (ld) {{ ld.style.color = '#f85149'; ld.textContent = 'Error: ' + (innerErr.message || 'Failed to process PLY'); }}
+            }}
+        }}, undefined, err => {{
             console.error('[3D Viewer] Error loading PLY:', err);
-            loading.style.color = '#f85149';
-            loading.textContent = 'Error: ' + (err.message || 'Failed to load PLY');
+            const ld = document.getElementById('ply-viewer-overlay-loading');
+            if (ld) {{ ld.style.color = '#f85149'; ld.textContent = 'Error: ' + (err.message || 'Failed to load PLY'); }}
         }});
+
     }} catch (err) {{
-        console.error('[3D Viewer] Error:', err.stack || err);
-        const loading = document.getElementById('ply-viewer-overlay-loading');
-        if (loading) {{
-            loading.style.color = '#f85149';
-            loading.textContent = 'Error: ' + (err.message || 'Failed to initialize');
-        }}
+        console.error('[3D Viewer] Fatal error:', err.stack || err);
+        const ld = document.getElementById('ply-viewer-overlay-loading');
+        if (ld) {{ ld.style.color = '#f85149'; ld.textContent = 'Error: ' + (err.message || 'Failed to initialize'); }}
     }}
 }})();"#,
-        b64_esc, fname_esc
+        b64_esc, fname_esc, project_name_esc, rel_path_esc
     );
 
     if let Err(e) = eval(&js).await {
