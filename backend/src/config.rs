@@ -49,12 +49,12 @@ pub async fn get_image_config(image_tag: String) -> anyhow::Result<ConfigSchema>
 
     // Get help output from colmap
     let colmap_help = get_tool_help(&rt, &image_tag, "colmap").await?;
-    let colmap_schema: HelpSchema = serde_saphyr::from_str(&colmap_help)
+    let colmap_schema: HelpSchema = serde_saphyr::from_str::<HelpSchema>(&colmap_help)
         .map_err(|e| anyhow::anyhow!("Failed to parse colmap help output: {}", e))?;
 
     // Get help output from openmvs
     let openmvs_help = get_tool_help(&rt, &image_tag, "openmvs").await?;
-    let openmvs_schema: HelpSchema = serde_saphyr::from_str(&openmvs_help)
+    let openmvs_schema: HelpSchema = serde_saphyr::from_str::<HelpSchema>(&openmvs_help)
         .map_err(|e| anyhow::anyhow!("Failed to parse openmvs help output: {}", e))?;
 
     // Extract tools and build help text map

@@ -3,9 +3,18 @@
 # Stage 1: Builder
 FROM rust:1 AS builder
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
+# Install dependencies (https://dioxuslabs.com/learn/0.7/getting_started/)
+RUN apt-get update && apt install -y \
+    libwebkit2gtk-4.1-dev \
+    build-essential \
     curl \
+    wget \
+    file \
+    libxdo-dev \
+    libssl-dev \
+    libayatana-appindicator3-dev \
+    librsvg2-dev \
+    lld \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy workspace files
@@ -22,9 +31,18 @@ RUN dx build --server --release
 # Stage 2: Runtime
 FROM debian:sid-slim
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    libssl3 \
+# Install runtime dependencies (https://dioxuslabs.com/learn/0.7/getting_started/)
+RUN apt-get update && apt install -y \
+    libwebkit2gtk-4.1-dev \
+    build-essential \
+    curl \
+    wget \
+    file \
+    libxdo-dev \
+    libssl-dev \
+    libayatana-appindicator3-dev \
+    librsvg2-dev \
+    lld \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -39,5 +57,7 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD test -f /proc/1/stat || exit 1
 
+
+    
 # Run the application
 CMD ["/app/server"]

@@ -8,7 +8,7 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  download-ci-artifacts:
+  find-ci-artifacts:
     runs-on: ubuntu-latest
     outputs:
       ci-run-id: ${{ steps.get-run-id.outputs.run-id }}
@@ -47,135 +47,27 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  package:
-    needs: download-ci-artifacts
+  release:
+    needs: find-ci-artifacts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ needs.download-ci-artifacts.outputs.ci-run-id }}
+          run-id: ${{ needs.find-ci-artifacts.outputs.ci-run-id }}
           pattern: build-*
           path: artifacts
 
-      - run: |
-          mkdir -p release-artifacts
-          find artifacts -type f -exec cp {} release-artifacts/ \;
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: packaged-all-build-artifacts
-          path: release-artifacts/
-          retention-days: 1
-
-  package-web:
-    needs: download-ci-artifacts
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ needs.download-ci-artifacts.outputs.ci-run-id }}
-          name: build-wasm32-unknown-unknown-server
-          path: artifacts
-
-      - run: |
-          mkdir -p release-artifacts/web
-          cp -r artifacts/dist/* release-artifacts/web/ 2>/dev/null || cp -r artifacts/* release-artifacts/web/
-
-      - run: |
-          cd release-artifacts
-          tar czf colmap-openmvs-app-web.tar.gz web/
-          zip -r colmap-openmvs-app-web.zip web/
-          cd ..
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: packaged-web
-          path: release-artifacts/
-          retention-days: 1
-
-  package-server:
-    needs: download-ci-artifacts
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ needs.download-ci-artifacts.outputs.ci-run-id }}
-          name: build-server
-          path: artifacts
-
-      - run: |
-          mkdir -p release-artifacts
-          cp "artifacts/colmap-openmvs-app" "release-artifacts/colmap-openmvs-app-server"
-
-      - run: |
-          cd release-artifacts
-          tar czf colmap-openmvs-app-server-linux-x64.tar.gz colmap-openmvs-app-server
-          zip colmap-openmvs-app-server-linux-x64.zip colmap-openmvs-app-server
-          cd ..
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: packaged-server
-          path: release-artifacts/
-          retention-days: 1
-
-  release:
-    needs: [package, package-web, package-server]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: all-artifacts
-
-      - run: |
-          mkdir -p final-artifacts
-          find all-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} final-artifacts/ \;
-
       - uses: softprops/action-gh-release@v1
         with:
-          files: final-artifacts/*
+          files: artifacts/*
           draft: false
           prerelease: false
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  deploy-web:
-    needs: package-web
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: packaged-web
-          path: web-output
-
-      - run: |
-          mkdir -p web-dist
-          cd web-output
-          tar xzf colmap-openmvs-app-web.tar.gz -C ../web-dist/
-          cd ..
-
-      - uses: actions/upload-pages-artifact@v2
-        with:
-          path: web-dist/web
-
-      - id: deployment
-        uses: actions/deploy-pages@v2
-
   docker:
-    needs: download-ci-artifacts
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -187,9 +79,8 @@ jobs:
 
       - uses: docker/login-action@v2
         with:
-          registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - id: meta
         uses: docker/metadata-action@v4
@@ -207,5 +98,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ github.repository }}:buildcache
+          cache-to: type=registry,ref=${{ github.repository }}:buildcache,mode=max

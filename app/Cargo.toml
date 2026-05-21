@@ -31,4 +31,5 @@ web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]
 
+# Server support
 server = ["dioxus/server", "colmap-openmvs-backend"]
