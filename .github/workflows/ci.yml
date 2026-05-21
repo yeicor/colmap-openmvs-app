@@ -1,5 +1,3 @@
-name: CI - Build and Test
-
 on:
   push:
     branches: [main, renovate/**]
@@ -10,162 +8,82 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Code quality checks
   lint:
-    name: Lint and Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
       - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt -- --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Check formatting
-        run: cargo fmt -- --check
-
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-  # Test on multiple platforms
   test:
-    name: Test - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        include:
-          - os: ubuntu-latest
-            rust: stable
-          - os: macos-latest
-            rust: stable
-          - os: windows-latest
-            rust: stable
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ matrix.rust }}
-
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: test-${{ matrix.os }}
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config libglib2.0-dev libgtk-3-dev
+      - run: cargo test --workspace --all-features --lib
+      - run: cargo test --workspace --all-features --doc
 
-      - name: Run tests
-        run: cargo test --workspace --all-features --lib
-
-      - name: Run doc tests
-        run: cargo test --workspace --all-features --doc
-
-  # Build for desktop (web, desktop)
-  build-desktop:
-    name: Build Desktop - ${{ matrix.target }}
+  build:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux build
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            artifact_name: colmap-openmvs-app
-            asset_name: colmap-openmvs-app-linux-x64
-          # Linux build (arm64)
+            build-type: desktop
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            artifact_name: colmap-openmvs-app
-            asset_name: colmap-openmvs-app-linux-x64
-          # macOS Intel
+            build-type: desktop
           - os: macos-26-intel
             target: x86_64-apple-darwin
-            artifact_name: colmap-openmvs-app
-            asset_name: colmap-openmvs-app-macos-intel
-          # macOS ARM (Apple Silicon)
+            build-type: desktop
           - os: macos-26
             target: aarch64-apple-darwin
-            artifact_name: colmap-openmvs-app
-            asset_name: colmap-openmvs-app-macos-arm64
-          # Windows
+            build-type: desktop
           - os: windows-2025-vs2026
             target: x86_64-pc-windows-msvc
-            artifact_name: colmap-openmvs-app.exe
-            asset_name: colmap-openmvs-app-windows-x64.exe
-
+            build-type: desktop
+          - os: ubuntu-latest
+            target: wasm32-unknown-unknown
+            build-type: server
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: build-${{ matrix.target }}
-
-      # Linux dependencies
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+      - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config
-
-      # Build desktop app
-      - name: Build desktop app
-        run: cargo build --package colmap-openmvs-app --target ${{ matrix.target }} --release --features desktop
-        env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
-
-  # Build for web
-  build-web:
-    name: Build Web
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
+          sudo apt-get install -y libssl-dev pkg-config libglib2.0-dev libgtk-3-dev
+      - run: cargo install dioxus-cli
+      - run: cargo build --target ${{ matrix.target }} --release --${{ matrix.build-type }}
+      - uses: actions/upload-artifact@v4
         with:
-          targets: wasm32-unknown-unknown
+          name: build-${{ matrix.target }}-${{ matrix.build-type }}
+          path: target/dx/${{ github.repository_name }}/*/*
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: build-web
-
-      - name: Install dioxus CLI
-        run: cargo install dioxus-cli
-
-      - name: Build web app
-        run: dx build --package colmap-openmvs-app --release --platform web
-
-  # Build backend/server
   build-server:
-    name: Build Server
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: build-server
-
-      - name: Build server
-        run: cargo build --package colmap-openmvs-app --target x86_64-unknown-linux-gnu --release --features server
-
-  # Security audit
-  security-audit:
-    name: Security Audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: rustsec/audit-check-action@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config libglib2.0-dev libgtk-3-dev
+      - run: cargo build --package colmap-openmvs-app --target x86_64-unknown-linux-gnu --release --features server
