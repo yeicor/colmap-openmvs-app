@@ -69,6 +69,7 @@ pub fn OutputsTab(project_name: String) -> Element {
 
     // ── Render ───────────────────────────────────────────────────────────
     rsx! {
+        document::Link { rel: "stylesheet", href: asset!("/assets/views/project/outputs.css") }
         div {
             class: "tab-content outputs-tab",
 
