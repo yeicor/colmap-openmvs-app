@@ -64,11 +64,14 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - if: runner.os == 'Linux'
+        shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config libglib2.0-dev libgtk-3-dev
-      - run: curl -sSL https://dioxus.dev/install.sh | bash
-      - run: $HOME/.dx/bin/dx build --release --target ${{ matrix.target }} --${{ matrix.build-type }}
+      - shell: bash
+        run: curl -sSL https://dioxus.dev/install.sh | bash
+      - shell: bash
+        run: $HOME/.dx/bin/dx build --verbose --release --target ${{ matrix.target }} --${{ matrix.build-type }}
       - uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.build-type }}-${{ matrix.target }}

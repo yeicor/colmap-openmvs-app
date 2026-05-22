@@ -39,6 +39,8 @@ pub use process::kill_process_tree;
 pub use output_viewer::get_project_output_for_viewer;
 mod output_viewer;
 
+pub mod ply_to_glb;
+
 use colmap_openmvs_api::OutputFile;
 use dioxus::Result as DioxusResult;
 use tracing::debug;

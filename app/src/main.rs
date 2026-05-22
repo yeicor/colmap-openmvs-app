@@ -28,12 +28,12 @@ pub enum Route {
 
 #[component]
 pub fn App() -> Element {
-    // Inject Eruda console for debugging
+    #[cfg(debug_assertions)] // Inject Eruda console for debugging
     let _ = dioxus::document::eval(
         r#"
         if (typeof eruda === 'undefined') {
             const script = document.createElement('script');
-            script.src = 'https://cdn.jsdelivr.net/npm/eruda@3.0.1';
+            script.src = 'https://cdn.jsdelivr.net/npm/eruda';
             script.onload = () => {
                 eruda.init();
             };

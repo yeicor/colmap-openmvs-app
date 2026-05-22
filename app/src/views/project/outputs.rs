@@ -213,7 +213,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                 info!(project_name = %pn, file_name = %fn_, bytes_loaded = bytes.len(), "Successfully loaded file for 3D viewer");
                                                                 let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                                                                 let fname_safe = js_escape(&fn_);
-                                                                launch_ply_viewer(&b64, &fname_safe, &pn, &rp).await;
+                                                                launch_glb_viewer(&b64, &fname_safe).await;
                                                             }
                                                             Err(e) => {
                                                                 error!(project_name = %pn, file_name = %fn_, error = %e, "Failed to load file for 3D viewer");
@@ -294,49 +294,29 @@ pub fn OutputsTab(project_name: String) -> Element {
 // 3-D Viewer (launched via eval'd JavaScript)
 // ---------------------------------------------------------------------------
 
-async fn launch_ply_viewer(b64: &str, fname_safe: &str, project_name: &str, rel_path: &str) {
-    info!(file_name = %fname_safe, "Launching 3D PLY viewer");
+async fn launch_glb_viewer(b64: &str, fname_safe: &str) {
+    info!(file_name = %fname_safe, "Launching 3D GLB viewer");
     let b64_esc = js_escape(b64);
     let fname_esc = js_escape(fname_safe);
-    let project_name_esc = js_escape(project_name);
-    let rel_path_esc = js_escape(rel_path);
 
     let js = format!(
         r#"(async () => {{
     console.log('[3D Viewer] Starting viewer setup...');
     try {{
-        console.log('[3D Viewer] Loading libraries from esm.sh CDN...');
         const THREE = await import('https://esm.sh/three@0.169.0');
-        const PLYLoaderMod = await import('https://esm.sh/three@0.169.0/examples/jsm/loaders/PLYLoader.js');
-        const TrackballControlsMod = await import('https://esm.sh/three@0.169.0/examples/jsm/controls/TrackballControls.js');
-        const PLYLoader = PLYLoaderMod.PLYLoader;
-        const TrackballControls = TrackballControlsMod.TrackballControls;
-        console.log('[3D Viewer] Three.js, PLYLoader and TrackballControls loaded');
+        const {{ GLTFLoader }} = await import('https://esm.sh/three@0.169.0/examples/jsm/loaders/GLTFLoader.js');
+        const {{ TrackballControls }} = await import('https://esm.sh/three@0.169.0/examples/jsm/controls/TrackballControls.js');
+        console.log('[3D Viewer] Libraries loaded');
 
         const b64 = '{}';
         const fname = '{}';
-        const projectName = '{}';
-        const relPath = '{}';
 
-        // Decode PLY bytes
+        // Decode GLB bytes and create a blob URL
         const binary = atob(b64);
         const arr = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
-        const blob = new Blob([arr], {{type: 'application/octet-stream'}});
+        const blob = new Blob([arr], {{type: 'model/gltf-binary'}});
         const blobUrl = URL.createObjectURL(blob);
-
-        // Parse PLY header for companion texture file
-        const hdrBytes = arr.slice(0, Math.min(4096, arr.length));
-        const hdrText = new TextDecoder('latin1').decode(hdrBytes);
-        const endHdrIdx = hdrText.indexOf('end_header');
-        const hdrPart = endHdrIdx >= 0 ? hdrText.substring(0, endHdrIdx) : hdrText;
-        const texMatch = hdrPart.match(/comment TextureFile (.+)/);
-        const texFile = texMatch ? texMatch[1].trim() : null;
-        const relDir = relPath.includes('/') ? relPath.substring(0, relPath.lastIndexOf('/') + 1) : '';
-        const texUrl = texFile
-            ? '/projects/' + encodeURIComponent(projectName) + '/outputs/file?relative_path=' + encodeURIComponent(relDir + texFile)
-            : null;
-        if (texUrl) console.log('[3D Viewer] Companion texture URL:', texUrl);
 
         // Remove any existing overlay
         const existing = document.getElementById('ply-viewer-overlay');
@@ -387,15 +367,12 @@ async fn launch_ply_viewer(b64: &str, fname_safe: &str, project_name: &str, rel_
         await new Promise(r => setTimeout(r, 0));
         let w = canvas.clientWidth || window.innerWidth;
         let h = canvas.clientHeight || (window.innerHeight - 100);
-        console.log('[3D Viewer] Canvas dimensions:', w, 'x', h);
 
         // Scene
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x0d1117);
-
         const camera = new THREE.PerspectiveCamera(60, w / h, 0.001, 10000);
         camera.position.set(0, 0, 5);
-        // Add camera to scene so its children (lights) are updated properly
         scene.add(camera);
 
         const renderer = new THREE.WebGLRenderer({{ canvas, antialias: true, preserveDrawingBuffer: true }});
@@ -403,151 +380,118 @@ async fn launch_ply_viewer(b64: &str, fname_safe: &str, project_name: &str, rel_
         renderer.setPixelRatio(window.devicePixelRatio || 1);
         renderer.setClearColor(0x0d1117);
         if (THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
-        console.log('[3D Viewer] Renderer ready');
 
         const controls = new TrackballControls(camera, renderer.domElement);
-        controls.rotateSpeed = 2.5;
-        controls.zoomSpeed = 1.2;
-        controls.panSpeed = 0.8;
+        controls.rotateSpeed = 2.5; controls.zoomSpeed = 1.2; controls.panSpeed = 0.8;
 
-        // Inertia state
+        // Inertia
         let rotVel = new THREE.Vector3();
-        let isRotating = false;
-        let lastX = 0, lastY = 0;
-        const friction = 0.95;
-        const velThreshold = 0.001;
-
+        let isRotating = false, lastX = 0, lastY = 0;
         renderer.domElement.addEventListener('mousedown', () => {{ isRotating = true; rotVel.set(0,0,0); }});
         renderer.domElement.addEventListener('mouseup',   () => {{ isRotating = false; }});
         renderer.domElement.addEventListener('mousemove', e => {{
-            if (isRotating) {{
-                rotVel.x = (e.clientY - lastY) * 0.001;
-                rotVel.y = (e.clientX - lastX) * 0.001;
-            }}
+            if (isRotating) {{ rotVel.x = (e.clientY-lastY)*0.001; rotVel.y = (e.clientX-lastX)*0.001; }}
             lastX = e.clientX; lastY = e.clientY;
         }});
 
-        // ── Lighting ─────────────────────────────────────────────────────
-        // Ambient + a directional light attached to the camera hierarchy so
-        // it always illuminates what the camera sees, regardless of rotation.
+        // Lighting: ambient + directional attached to camera
         scene.add(new THREE.AmbientLight(0xffffff, 0.4));
         const dl = new THREE.DirectionalLight(0xffffff, 1.0);
-        // Position in camera-local space: behind-and-above the camera initially
         dl.position.set(0, 0.5, 1);
         camera.add(dl);
-        // Target in camera-local space: slightly in front of the camera
         const dlTarget = new THREE.Object3D();
         dlTarget.position.set(0, 0, -1);
         camera.add(dlTarget);
         dl.target = dlTarget;
 
-        loadingDiv.textContent = 'Loading PLY file...';
-        const loader = new PLYLoader();
-        let mesh = null;
+        loadingDiv.textContent = 'Loading 3D model...';
+        const loader = new GLTFLoader();
         const initialCamPos = new THREE.Vector3();
 
-        loader.load(blobUrl, async (geometry) => {{
+        loader.load(blobUrl, (gltf) => {{
             try {{
-                geometry.computeVertexNormals();
                 loadingDiv.remove();
+                const model = gltf.scene;
 
-                const hasIndex = geometry.index !== null;
-                const hasColor = !!geometry.attributes.color;
-                const hasUV   = !!geometry.attributes.uv;
-                console.log('[3D Viewer] hasIndex:', hasIndex, 'hasColor:', hasColor, 'hasUV:', hasUV);
-
-                let material;
-
-                if (hasIndex) {{
-                    // ── Trimesh: light-angle (yaw) slider ─────────────────
-                    const yawLabel = document.createElement('label');
-                    yawLabel.style.cssText = 'color:#e6edf3;font-family:monospace;font-size:12px;display:flex;align-items:center;gap:8px;';
-                    yawLabel.textContent = 'Light Angle:';
-                    const yawSlider = document.createElement('input');
-                    yawSlider.type = 'range'; yawSlider.min = '-180'; yawSlider.max = '180';
-                    yawSlider.step = '5'; yawSlider.value = '0';
-                    yawSlider.style.cssText = 'width:120px;cursor:pointer;';
-                    const yawValSpan = document.createElement('span');
-                    yawValSpan.style.cssText = 'color:#8b949e;font-family:monospace;font-size:12px;min-width:36px;';
-                    yawValSpan.textContent = '0\u00b0';
-                    yawSlider.oninput = e => {{
-                        const yaw = parseFloat(e.target.value) * Math.PI / 180;
-                        yawValSpan.textContent = e.target.value + '\u00b0';
-                        // Rotate light position around camera's view axis
-                        dl.position.set(Math.sin(yaw), 0.5, Math.cos(yaw));
-                    }};
-                    yawLabel.appendChild(yawSlider);
-                    yawLabel.appendChild(yawValSpan);
-                    controlsDiv.insertBefore(yawLabel, resetBtn);
-
-                    // ── Material: textured > vertex-color > flat ──────────
-                    if (texUrl && hasUV) {{
-                        try {{
-                            const texLoader = new THREE.TextureLoader();
-                            const map = await new Promise((res, rej) => texLoader.load(texUrl, res, undefined, rej));
-                            map.flipY = false;
-                            if (THREE.SRGBColorSpace) map.colorSpace = THREE.SRGBColorSpace;
-                            material = new THREE.MeshPhongMaterial({{ map, side: THREE.DoubleSide }});
-                            console.log('[3D Viewer] Texture applied');
-                        }} catch (texErr) {{
-                            console.warn('[3D Viewer] Texture load failed, using fallback:', texErr);
-                            material = new THREE.MeshPhongMaterial({{ color: 0x7a8fa6, side: THREE.DoubleSide }});
-                        }}
-                    }} else if (hasColor) {{
-                        material = new THREE.MeshPhongMaterial({{ vertexColors: true, side: THREE.DoubleSide }});
-                    }} else {{
-                        material = new THREE.MeshPhongMaterial({{ color: 0x7a8fa6, side: THREE.DoubleSide }});
+                // Post-process meshes and detect point clouds
+                let hasPoints = false;
+                let hasMesh = false;
+                model.traverse(child => {{
+                    if (child.isPoints) {{
+                        hasPoints = true;
+                        // Override with a PointsMaterial that respects vertex colors
+                        const hasVCol = !!child.geometry.attributes.color;
+                        child.material = new THREE.PointsMaterial({{
+                            vertexColors: hasVCol,
+                            color: hasVCol ? 0xffffff : 0x4fc3f7,
+                            size: 0.1,
+                            sizeAttenuation: true,
+                        }});
                     }}
-                    mesh = new THREE.Mesh(geometry, material);
+                    if (child.isMesh) {{
+                        hasMesh = true;
+                        child.material.side = THREE.DoubleSide;
+                    }}
+                }});
 
-                }} else {{
-                    // ── Point cloud: point-scale slider ───────────────────
+                scene.add(model);
+                console.log('[3D Viewer] Model added — hasPoints:', hasPoints, 'hasMesh:', hasMesh);
+
+                // Fit camera to bounding box
+                const box = new THREE.Box3().setFromObject(model);
+                const center = box.getCenter(new THREE.Vector3());
+                const size = box.getSize(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z) || 1;
+                model.position.sub(center);
+                camera.position.set(0, 0, maxDim * 2.5);
+                initialCamPos.copy(camera.position);
+                camera.near = maxDim * 0.0005;
+                camera.far  = maxDim * 200;
+                camera.updateProjectionMatrix();
+
+                // Dynamic slider
+                if (hasPoints) {{
                     const scaleLabel = document.createElement('label');
                     scaleLabel.style.cssText = 'color:#e6edf3;font-family:monospace;font-size:12px;display:flex;align-items:center;gap:8px;';
                     scaleLabel.textContent = 'Point Scale:';
                     const scaleSlider = document.createElement('input');
-                    scaleSlider.type = 'range'; scaleSlider.min = '0.1'; scaleSlider.max = '5';
-                    scaleSlider.step = '0.1'; scaleSlider.value = '1';
+                    scaleSlider.type='range'; scaleSlider.min='0.1'; scaleSlider.max='5'; scaleSlider.step='0.1'; scaleSlider.value='1';
                     scaleSlider.style.cssText = 'width:120px;cursor:pointer;';
-                    const scaleValSpan = document.createElement('span');
-                    scaleValSpan.style.cssText = 'color:#8b949e;font-family:monospace;font-size:12px;min-width:30px;';
-                    scaleValSpan.textContent = '1.0x';
+                    const scaleVal = document.createElement('span');
+                    scaleVal.style.cssText = 'color:#8b949e;font-family:monospace;font-size:12px;min-width:30px;';
+                    scaleVal.textContent = '1.0x';
                     scaleSlider.oninput = e => {{
                         const s = parseFloat(e.target.value);
-                        scaleValSpan.textContent = s.toFixed(1) + 'x';
-                        if (mesh) mesh.material.size = 0.1 * s;
+                        scaleVal.textContent = s.toFixed(1)+'x';
+                        model.traverse(c => {{ if (c.isPoints) c.material.size = 0.1 * s; }});
                     }};
                     scaleLabel.appendChild(scaleSlider);
-                    scaleLabel.appendChild(scaleValSpan);
+                    scaleLabel.appendChild(scaleVal);
                     controlsDiv.insertBefore(scaleLabel, resetBtn);
-
-                    material = hasColor
-                        ? new THREE.PointsMaterial({{ vertexColors: true, size: 0.1 }})
-                        : new THREE.PointsMaterial({{ color: 0x4fc3f7, size: 0.1 }});
-                    mesh = new THREE.Points(geometry, material);
+                }} else {{
+                    const yawLabel = document.createElement('label');
+                    yawLabel.style.cssText = 'color:#e6edf3;font-family:monospace;font-size:12px;display:flex;align-items:center;gap:8px;';
+                    yawLabel.textContent = 'Light Angle:';
+                    const yawSlider = document.createElement('input');
+                    yawSlider.type='range'; yawSlider.min='-180'; yawSlider.max='180'; yawSlider.step='5'; yawSlider.value='0';
+                    yawSlider.style.cssText = 'width:120px;cursor:pointer;';
+                    const yawVal = document.createElement('span');
+                    yawVal.style.cssText = 'color:#8b949e;font-family:monospace;font-size:12px;min-width:36px;';
+                    yawVal.textContent = '0\u00b0';
+                    yawSlider.oninput = e => {{
+                        const yaw = parseFloat(e.target.value) * Math.PI / 180;
+                        yawVal.textContent = e.target.value + '\u00b0';
+                        dl.position.set(Math.sin(yaw), 0.5, Math.cos(yaw));
+                    }};
+                    yawLabel.appendChild(yawSlider);
+                    yawLabel.appendChild(yawVal);
+                    controlsDiv.insertBefore(yawLabel, resetBtn);
                 }}
-
-                scene.add(mesh);
-                console.log('[3D Viewer] Mesh added to scene');
-
-                // Fit camera to bounding box
-                const box = new THREE.Box3().setFromObject(mesh);
-                const center = box.getCenter(new THREE.Vector3());
-                const size = box.getSize(new THREE.Vector3());
-                const maxDim = Math.max(size.x, size.y, size.z) || 1;
-                console.log('[3D Viewer] Bounds — center:', center, 'maxDim:', maxDim);
-
-                mesh.position.sub(center);
-                camera.position.set(0, 0, maxDim * 2.5);
-                initialCamPos.copy(camera.position);
-                camera.near = maxDim * 0.0005;
-                camera.far = maxDim * 200;
-                camera.updateProjectionMatrix();
 
                 resetBtn.onclick = () => {{
                     camera.position.copy(initialCamPos);
                     controls.reset();
-                    rotVel.set(0, 0, 0);
+                    rotVel.set(0,0,0);
                 }};
 
                 const ro = new ResizeObserver(() => {{
@@ -561,44 +505,39 @@ async fn launch_ply_viewer(b64: &str, fname_safe: &str, project_name: &str, rel_
                 ro.observe(canvas);
 
                 const origClose = closeBtn.onclick;
-                closeBtn.onclick = () => {{ ro.disconnect(); renderer.dispose(); origClose(); }};
+                closeBtn.onclick = () => {{ URL.revokeObjectURL(blobUrl); ro.disconnect(); renderer.dispose(); origClose(); }};
 
                 const animate = () => {{
-                    if (!document.contains(overlay)) {{ ro.disconnect(); renderer.dispose(); return; }}
+                    if (!document.contains(overlay)) {{ URL.revokeObjectURL(blobUrl); ro.disconnect(); renderer.dispose(); return; }}
                     requestAnimationFrame(animate);
-
-                    // Apply inertia rotation
-                    if (!isRotating && (Math.abs(rotVel.x) > velThreshold || Math.abs(rotVel.y) > velThreshold)) {{
-                        const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rotVel.y);
-                        const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), rotVel.x);
+                    if (!isRotating && (Math.abs(rotVel.x) > 0.001 || Math.abs(rotVel.y) > 0.001)) {{
+                        const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), rotVel.y);
+                        const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), rotVel.x);
                         camera.position.applyQuaternion(new THREE.Quaternion().multiplyQuaternions(qy, qx));
-                        rotVel.multiplyScalar(friction);
+                        rotVel.multiplyScalar(0.95);
                     }}
-
                     controls.update();
                     renderer.render(scene, camera);
                 }};
-                console.log('[3D Viewer] Starting animation loop...');
                 animate();
-
             }} catch (innerErr) {{
-                console.error('[3D Viewer] Error processing PLY:', innerErr);
+                console.error('[3D Viewer] Error processing model:', innerErr);
                 const ld = document.getElementById('ply-viewer-overlay-loading');
-                if (ld) {{ ld.style.color = '#f85149'; ld.textContent = 'Error: ' + (innerErr.message || 'Failed to process PLY'); }}
+                if (ld) {{ ld.style.color='#f85149'; ld.textContent='Error: '+(innerErr.message||'Failed to process model'); }}
             }}
         }}, undefined, err => {{
-            console.error('[3D Viewer] Error loading PLY:', err);
+            console.error('[3D Viewer] Error loading GLB:', err);
             const ld = document.getElementById('ply-viewer-overlay-loading');
-            if (ld) {{ ld.style.color = '#f85149'; ld.textContent = 'Error: ' + (err.message || 'Failed to load PLY'); }}
+            if (ld) {{ ld.style.color='#f85149'; ld.textContent='Error: '+(err.message||'Failed to load model'); }}
         }});
 
     }} catch (err) {{
         console.error('[3D Viewer] Fatal error:', err.stack || err);
         const ld = document.getElementById('ply-viewer-overlay-loading');
-        if (ld) {{ ld.style.color = '#f85149'; ld.textContent = 'Error: ' + (err.message || 'Failed to initialize'); }}
+        if (ld) {{ ld.style.color='#f85149'; ld.textContent='Error: '+(err.message||'Failed to initialize'); }}
     }}
 }})();"#,
-        b64_esc, fname_esc, project_name_esc, rel_path_esc
+        b64_esc, fname_esc
     );
 
     if let Err(e) = eval(&js).await {
