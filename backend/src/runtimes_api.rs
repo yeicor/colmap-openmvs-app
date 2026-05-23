@@ -231,6 +231,15 @@ pub async fn get_task_info(task_id: String) -> Result<Option<TaskInfo>> {
     Ok(registry.get_task_info(&task_id))
 }
 
+/// Delete the PRoot binary if it's installed in the custom location.
+/// Returns an error if the binary is from the system PATH (not deletable).
+pub async fn delete_runtime_binary() -> Result<()> {
+    let rt = RuntimeFactory::proot();
+    rt.delete_binary()
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e).into())
+}
+
 /// Cancel a running task.
 pub async fn cancel_task(task_id: String) -> Result<()> {
     TASK_REGISTRY.lock().unwrap().cancel_task(&task_id);

@@ -128,6 +128,7 @@ struct ParsedPly {
     colors: Vec<[u8; 3]>,
     face_indices: Vec<u32>,  // multiple of 3
     face_uvs: Vec<[f32; 2]>, // same length as face_indices when present
+    #[allow(dead_code)]
     texture_file: Option<String>,
 }
 
@@ -746,15 +747,15 @@ fn build_glb(parsed: ParsedPly, companion_png: Option<Vec<u8>>) -> anyhow::Resul
     let mut tex_bv_idx: Option<usize> = None;
 
     // Helper: add bufferView + accessor, return accessor index
-    let mut add_accessor = |buf_views: &mut Vec<serde_json::Value>,
-                            accessors: &mut Vec<serde_json::Value>,
-                            sec: BufSection,
-                            comp_type: u32,
-                            gltf_type: &str,
-                            count: usize,
-                            target: Option<u32>,
-                            normalized: bool,
-                            min_max: Option<([f64; 3], [f64; 3])>| {
+    let add_accessor = |buf_views: &mut Vec<serde_json::Value>,
+                        accessors: &mut Vec<serde_json::Value>,
+                        sec: BufSection,
+                        comp_type: u32,
+                        gltf_type: &str,
+                        count: usize,
+                        target: Option<u32>,
+                        normalized: bool,
+                        min_max: Option<([f64; 3], [f64; 3])>| {
         let bv_idx = buf_views.len();
         let mut bv = serde_json::json!({
             "buffer": 0,

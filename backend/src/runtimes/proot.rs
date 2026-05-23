@@ -219,9 +219,25 @@ impl PRoot {
         let latest_versions = self.fetch_linux_versions().await?;
         let latest = latest_versions
             .first()
-            .ok_or_else(|| anyhow::anyhow!("No versions available"))?;
+            .ok_or_else(|| anyhow::anyhow!("No versions available"))?
+            .clone();
 
-        if version != latest {
+        // Extract the base version number from the requested version
+        // (handles both "5.3.1", "v5.3.1", and "5.3.1-99a84175" formats)
+        let version_cleaned = version.trim_start_matches('v');
+        let base_version = version_cleaned.split('-').next().unwrap_or(version_cleaned);
+
+        // Extract base from latest and remove 'v' prefix
+        let latest_cleaned = latest.trim_start_matches('v');
+        let latest_base = latest_cleaned.split('-').next().unwrap_or(latest_cleaned);
+
+        eprintln!(
+            "[DEBUG] download_linux: Requested: {}, base: {}, latest: {}, latest_base: {}",
+            version, base_version, latest, latest_base
+        );
+
+        // Allow download if the base version matches (ignoring 'v' prefix and suffixes)
+        if base_version != latest_base {
             return Err(anyhow::anyhow!(
                 "Only the latest version ({}) is available for download, requested: {}",
                 latest,
@@ -369,17 +385,37 @@ impl Runtime for PRoot {
 
     async fn version(&self) -> RuntimeResult<String> {
         let proot_bin = find_proot_binary(&self.runtime_dir).await?;
-        let output = Command::new(&proot_bin)
-            .arg("--version")
-            .output()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to execute proot: {}", e))?;
+        eprintln!("[DEBUG] version: Found proot at: {}", proot_bin);
+
+        let output = Command::new(&proot_bin).arg("--version").output().await;
+
+        let output = match output {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("[DEBUG] version: Direct execution failed: {}", e);
+                if cfg!(target_os = "android") {
+                    eprintln!("[DEBUG] version: On Android, trying workaround via /system/bin/sh");
+                    Command::new("/system/bin/sh")
+                        .arg("-c")
+                        .arg(format!("{} --version", proot_bin))
+                        .output()
+                        .await
+                        .map_err(|e| {
+                            eprintln!("[DEBUG] version: Shell workaround also failed: {}", e);
+                            anyhow::anyhow!("Failed to execute proot: {}", e)
+                        })?
+                } else {
+                    return Err(anyhow::anyhow!("Failed to execute proot: {}", e));
+                }
+            }
+        };
 
         let combined = format!(
             "{}{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        eprintln!("[DEBUG] version: proot output: {}", combined);
         Self::parse_proot_version(&combined)
     }
 
@@ -387,19 +423,29 @@ impl Runtime for PRoot {
         // Try to use the installed proot version if available
         match find_proot_binary(&self.runtime_dir).await {
             Ok(proot_bin) => {
-                let output = Command::new(&proot_bin)
-                    .arg("--version")
-                    .output()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to execute proot: {}", e))?;
+                let output = Command::new(&proot_bin).arg("--version").output().await;
 
-                let combined = format!(
-                    "{}{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                );
-                let v = Self::parse_proot_version(&combined)?;
-                return Ok(vec![v]);
+                let output = match output {
+                    Ok(o) => Some(o),
+                    Err(_) if cfg!(target_os = "android") => Command::new("/system/bin/sh")
+                        .arg("-c")
+                        .arg(format!("{} --version", proot_bin))
+                        .output()
+                        .await
+                        .ok(),
+                    Err(_) => None,
+                };
+
+                if let Some(output) = output {
+                    let combined = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    if let Ok(v) = Self::parse_proot_version(&combined) {
+                        return Ok(vec![v]);
+                    }
+                }
             }
             Err(_) => {
                 // PRoot not found, try to fetch available versions from repositories
@@ -422,7 +468,7 @@ impl Runtime for PRoot {
         }
 
         match (std::env::consts::ARCH, std::env::consts::OS) {
-            ("x86_64", "linux") => self.download_linux(version).await,
+            ("x86_64", "linux") => self.download_android(version).await, // self.download_linux(version).await,
             ("aarch64", "android") | ("x86_64", "android") => self.download_android(version).await,
             _ => Err(anyhow::anyhow!("Unsupported platform for download")),
         }
@@ -636,6 +682,29 @@ impl Runtime for PRoot {
         }
 
         Ok(images)
+    }
+
+    async fn delete_binary(&self) -> RuntimeResult<()> {
+        let proot_bin = find_proot_binary(&self.runtime_dir).await?;
+
+        // Only allow deletion if it's in the custom runtime directory
+        // (not from system PATH)
+        let custom = self.runtime_dir.join("proot");
+        if proot_bin == custom.to_string_lossy().into_owned() {
+            tokio::fs::remove_file(&custom)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to delete proot binary: {}", e))?;
+            eprintln!(
+                "[DEBUG] delete_binary: Successfully deleted proot from {}",
+                custom.display()
+            );
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "Cannot delete system proot binary at {}. Only custom installed binaries can be deleted.",
+                proot_bin
+            ))
+        }
     }
 }
 

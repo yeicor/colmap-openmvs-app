@@ -5,9 +5,10 @@ use crate::components::{
 use crate::mycomponents::BackButton;
 use crate::mycomponents::{Banner, BannerType, PageHeader};
 use crate::server::{
-    download_runtime_version, get_available_runtime_versions, get_runtime_info, get_settings,
-    get_task_info, list_available_image_tags, list_runtime_images, list_tasks,
-    prepare_runtime_image, remove_runtime_image, subscribe_task_events, update_settings,
+    delete_runtime_binary, download_runtime_version, get_available_runtime_versions,
+    get_runtime_info, get_settings, get_task_info, list_available_image_tags,
+    list_runtime_images, list_tasks, prepare_runtime_image, remove_runtime_image,
+    subscribe_task_events, update_settings,
 };
 use crate::Route;
 use chrono::{DateTime, Duration, Utc};
@@ -440,6 +441,25 @@ fn runtime_proot_tab() -> Element {
         });
     };
 
+    let mut deleting = use_signal(|| false);
+    let handle_delete = move |_| {
+        deleting.set(true);
+        error.set(String::new());
+        success.set(String::new());
+        spawn(async move {
+            match delete_runtime_binary().await {
+                Ok(_) => {
+                    success.set("PRoot binary deleted successfully!".to_string());
+                    if let Ok(info) = get_runtime_info().await {
+                        runtime_info.set(Some(info));
+                    }
+                }
+                Err(e) => error.set(format!("Failed to delete PRoot binary: {}", e)),
+            }
+            deleting.set(false);
+        });
+    };
+
     rsx! {
         Banner {
             message: error(),
@@ -528,6 +548,21 @@ fn runtime_proot_tab() -> Element {
                                 } else {
                                     Icon { icon: BsDownload }
                                     " Install"
+                                }
+                            }
+
+                            if info.installed {
+                                Button {
+                                    variant: ButtonVariant::Ghost,
+                                    title: "Delete PRoot binary (only custom installations)",
+                                    disabled: deleting(),
+                                    onclick: handle_delete,
+                                    if deleting() {
+                                        "Deleting…"
+                                    } else {
+                                        Icon { icon: BsTrash3 }
+                                        " Delete"
+                                    }
                                 }
                             }
                         }

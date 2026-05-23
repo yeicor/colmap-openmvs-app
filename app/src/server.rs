@@ -102,6 +102,11 @@ pub async fn download_runtime_version(version: String) -> Result<()> {
     backend::download_runtime_version(version).await
 }
 
+#[delete("/runtimes/proot/binary")]
+pub async fn delete_runtime_binary() -> Result<()> {
+    backend::delete_runtime_binary().await
+}
+
 #[get("/runtimes/proot/images")]
 pub async fn list_runtime_images() -> Result<Vec<PreparedImageInfo>> {
     backend::list_runtime_images().await

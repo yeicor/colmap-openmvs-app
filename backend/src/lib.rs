@@ -20,8 +20,8 @@ pub use settings::{get_settings, update_settings};
 
 mod runtimes_api;
 pub use runtimes_api::{
-    cancel_task, download_runtime_version, get_available_runtime_versions, get_runtime_info,
-    get_task_info, list_available_image_tags, list_runtime_images, list_tasks,
+    cancel_task, delete_runtime_binary, download_runtime_version, get_available_runtime_versions,
+    get_runtime_info, get_task_info, list_available_image_tags, list_runtime_images, list_tasks,
     prepare_runtime_image, remove_runtime_image, subscribe_task_events,
 };
 

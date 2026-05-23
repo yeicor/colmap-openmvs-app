@@ -53,9 +53,6 @@ which = { version = "5.0" }
 # Process management
 libc = { version = "0.2" }
 
-# OCI Distribution client for pulling container images
-oci-client = { version = "0.16" }
-
 # Gzip decompression for Docker layers
 flate2 = { version = "1.0" }
 

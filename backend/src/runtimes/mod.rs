@@ -276,6 +276,10 @@ pub trait Runtime: Send + Sync {
 
     /// List all images that have been prepared and are ready to run.
     async fn list_images(&self) -> RuntimeResult<Vec<PreparedImage>>;
+
+    /// Delete the runtime binary if it's in the custom location.
+    /// Returns an error if the binary is from the system PATH.
+    async fn delete_binary(&self) -> RuntimeResult<()>;
 }
 
 // ---------------------------------------------------------------------------

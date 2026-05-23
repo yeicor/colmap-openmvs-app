@@ -1,4 +1,4 @@
-//! OCI image pulling and extraction using oras-project/oci-client.
+//! OCI image pulling and extraction using reqwest for HTTP operations.
 //!
 //! This module handles:
 //! - Pulling container images from OCI registries (Docker Hub, etc.)
@@ -8,10 +8,6 @@
 
 use anyhow::{anyhow, Result};
 use colmap_openmvs_api::PrepareProgress;
-use oci_client::config::ConfigFile;
-use oci_client::manifest::OciManifest;
-use oci_client::secrets::RegistryAuth;
-use oci_client::{Client, Reference};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::sync::mpsc;
@@ -25,23 +21,88 @@ pub struct ImageConfig {
     pub working_dir: Option<String>,
 }
 
-/// Docker image manager using OCI Distribution client
-pub struct ImageManager {
-    client: Client,
+/// OCI image manifest v2 schema
+#[derive(Debug, Deserialize)]
+pub struct OciImageManifest {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    #[serde(rename = "mediaType")]
+    pub media_type: Option<String>,
+    pub config: Descriptor,
+    pub layers: Vec<Descriptor>,
 }
 
+/// OCI image index for multi-platform images
+#[derive(Debug, Deserialize)]
+pub struct OciImageIndex {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    #[serde(rename = "mediaType")]
+    pub media_type: Option<String>,
+    pub manifests: Vec<IndexEntry>,
+}
+
+/// Entry in an OCI image index
+#[derive(Debug, Deserialize)]
+pub struct IndexEntry {
+    pub digest: String,
+    #[serde(rename = "mediaType")]
+    pub media_type: Option<String>,
+    pub size: Option<i64>,
+    pub platform: Option<Platform>,
+}
+
+/// Platform specification
+#[derive(Debug, Deserialize)]
+pub struct Platform {
+    pub os: String,
+    pub architecture: String,
+    #[serde(default)]
+    pub variant: Option<String>,
+}
+
+/// Descriptor for an OCI object (layer, config, etc.)
+#[derive(Debug, Deserialize, Clone)]
+pub struct Descriptor {
+    #[serde(rename = "mediaType")]
+    pub media_type: String,
+    pub size: i64,
+    pub digest: String,
+}
+
+/// Docker image configuration file
+#[derive(Debug, Deserialize, Default)]
+pub struct ConfigFile {
+    #[serde(default)]
+    pub config: Option<Config>,
+}
+
+/// Docker container config
+#[derive(Debug, Deserialize, Default)]
+pub struct Config {
+    #[serde(default)]
+    pub env: Option<Vec<String>>,
+    #[serde(default)]
+    pub entrypoint: Option<Vec<String>>,
+    #[serde(default)]
+    pub cmd: Option<Vec<String>>,
+    #[serde(rename = "WorkingDir", default)]
+    pub working_dir: Option<String>,
+}
+
+/// Docker image manager using reqwest for HTTP operations
+pub struct ImageManager;
+
 impl ImageManager {
-    /// Create a new image manager with anonymous registry authentication
+    /// Create a new image manager
     pub fn new() -> Self {
-        Self {
-            client: Client::default(),
-        }
+        Self
     }
 
     /// Pull a Docker image and extract to a rootfs directory
     ///
     /// # Arguments
-    /// * `image_ref` - Image reference (e.g., "docker.io/library/alpine:latest")
+    /// * `image_ref` - Image reference (e.g., "docker.io/library/alpine:latest" or "yeicor/colmap-openmvs:latest")
     /// * `target_dir` - Directory where rootfs will be extracted
     /// * `progress_tx` - Channel to send progress events
     ///
@@ -54,31 +115,89 @@ impl ImageManager {
         progress_tx: &mpsc::Sender<PrepareProgress>,
     ) -> Result<ImageConfig> {
         // Parse image reference
-        let reference: Reference = image_ref
-            .parse()
-            .map_err(|e| anyhow!("Invalid image reference '{}': {}", image_ref, e))?;
+        let (registry, image_name, tag) = parse_image_ref(image_ref)?;
+
+        // Construct registry API URL
+        let registry_url = format!("https://{}", registry);
+        let api_path = format!("/v2/{}/manifests/{}", image_name, tag);
 
         // Pull manifest to get image config and layers
-        let (manifest, _digest) = self
-            .client
-            .pull_manifest(&reference, &RegistryAuth::Anonymous)
-            .await
-            .map_err(|e| anyhow!("Failed to pull manifest for {}: {}", image_ref, e))?;
+        let client = reqwest::Client::new();
+        let manifest_url = format!("{}{}", registry_url, api_path);
 
-        // Handle both single-platform and multi-platform images
-        let (config_descriptor, layers) = match manifest {
-            OciManifest::Image(img) => (img.config.clone(), img.layers.clone()),
-            OciManifest::ImageIndex(index) => {
-                // Auto-select platform matching the host
-                let (host_os, host_arch) = get_host_platform();
-                let selected_manifest = self
-                    .select_platform_manifest(&reference, &index, host_os, host_arch)
-                    .await?;
-                (
-                    selected_manifest.config.clone(),
-                    selected_manifest.layers.clone(),
-                )
-            }
+        let manifest_response = client
+            .get(&manifest_url)
+            .header("Accept", "application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json")
+            .header("User-Agent", "colmap-openmvs-app")
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to fetch manifest for {}: {}", image_ref, e))?;
+
+        if !manifest_response.status().is_success() {
+            return Err(anyhow!(
+                "Failed to fetch manifest: {} - {}",
+                manifest_response.status(),
+                manifest_response.text().await.unwrap_or_default()
+            ));
+        }
+
+        let manifest_text = manifest_response
+            .text()
+            .await
+            .map_err(|e| anyhow!("Failed to read manifest: {}", e))?;
+
+        // Try to parse as image manifest first
+        let (config_descriptor, layers) = if let Ok(manifest) =
+            serde_json::from_str::<OciImageManifest>(&manifest_text)
+        {
+            (manifest.config, manifest.layers)
+        } else if let Ok(index) = serde_json::from_str::<OciImageIndex>(&manifest_text) {
+            // Multi-platform image - select for this platform
+            let (host_os, host_arch) = get_host_platform();
+            let selected_entry = index
+                .manifests
+                .iter()
+                .find(|entry| {
+                    if let Some(platform) = &entry.platform {
+                        platform.os.to_lowercase() == host_os
+                            && platform.architecture.to_lowercase() == host_arch
+                    } else {
+                        false
+                    }
+                })
+                .ok_or_else(|| {
+                    anyhow!(
+                        "No image available for platform {}/{} in multi-arch image",
+                        host_os,
+                        host_arch
+                    )
+                })?;
+
+            // Fetch the specific manifest for this platform
+            let platform_manifest_url = format!(
+                "{}{}",
+                registry_url,
+                api_path.replace(&tag, &selected_entry.digest)
+            );
+            let platform_response = client
+                .get(&platform_manifest_url)
+                .header("Accept", "application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json")
+                .header("User-Agent", "colmap-openmvs-app")
+                .send()
+                .await
+                .map_err(|e| anyhow!("Failed to fetch platform-specific manifest: {}", e))?;
+
+            let platform_text = platform_response
+                .text()
+                .await
+                .map_err(|e| anyhow!("Failed to read platform manifest: {}", e))?;
+
+            let manifest: OciImageManifest = serde_json::from_str(&platform_text)
+                .map_err(|e| anyhow!("Failed to parse platform manifest: {}", e))?;
+
+            (manifest.config, manifest.layers)
+        } else {
+            return Err(anyhow!("Failed to parse manifest - unknown format"));
         };
 
         // Calculate total download size
@@ -108,15 +227,20 @@ impl ImageManager {
                 .await;
 
             // Download layer blob
-            let mut layer_data = Vec::new();
-            self.client
-                .pull_blob(
-                    &reference,
-                    layer_descriptor.digest.as_str(),
-                    &mut layer_data,
-                )
+            let blob_url = format!(
+                "{}/v2/{}/blobs/{}",
+                registry_url, image_name, layer_descriptor.digest
+            );
+
+            let layer_data = client
+                .get(&blob_url)
+                .header("User-Agent", "colmap-openmvs-app")
+                .send()
                 .await
-                .map_err(|e| anyhow!("Failed to download layer {}: {}", index, e))?;
+                .map_err(|e| anyhow!("Failed to download layer {}: {}", index, e))?
+                .bytes()
+                .await
+                .map_err(|e| anyhow!("Failed to read layer {}: {}", index, e))?;
 
             // Extract layer (gzip tar archive)
             self.extract_layer(target_dir, &layer_data).await?;
@@ -130,18 +254,26 @@ impl ImageManager {
                 .await;
         }
 
-        let mut config_bytes: Vec<u8> = Vec::new();
-        self.client
-            .pull_blob(
-                &reference,
-                config_descriptor.digest.as_str(),
-                &mut config_bytes,
-            )
+        // Download and parse config blob
+        let config_url = format!(
+            "{}/v2/{}/blobs/{}",
+            registry_url, image_name, config_descriptor.digest
+        );
+
+        let config_bytes = client
+            .get(&config_url)
+            .header("User-Agent", "colmap-openmvs-app")
+            .send()
             .await
-            .map_err(|e| anyhow!("Failed to download image config blob: {}", e))?;
-        let config: ConfigFile = serde_json::from_slice(config_bytes.as_slice())
+            .map_err(|e| anyhow!("Failed to download image config blob: {}", e))?
+            .bytes()
+            .await
+            .map_err(|e| anyhow!("Failed to read config blob: {}", e))?;
+
+        let config: ConfigFile = serde_json::from_slice(&config_bytes)
             .map_err(|e| anyhow!("Failed to parse image config JSON: {}", e))?;
         let config_ref = config.config.as_ref();
+
         Ok(ImageConfig {
             env: config_ref
                 .and_then(|c| c.env.as_ref())
@@ -183,51 +315,56 @@ impl ImageManager {
     }
 }
 
-impl ImageManager {
-    /// Select the appropriate manifest from an image index based on host platform
-    async fn select_platform_manifest(
-        &self,
-        reference: &Reference,
-        index: &oci_client::manifest::OciImageIndex,
-        host_os: &str,
-        host_arch: &str,
-    ) -> Result<oci_client::manifest::OciImageManifest> {
-        // Find a matching platform in the index
-        let _matching_entry = index
-            .manifests
-            .iter()
-            .find(|entry| {
-                if let Some(platform) = &entry.platform {
-                    let os_str = platform.os.to_string().to_lowercase();
-                    let arch_str = platform.architecture.to_string().to_lowercase();
-                    os_str == host_os && arch_str == host_arch
-                } else {
-                    false
-                }
-            })
-            .ok_or_else(|| {
-                anyhow!(
-                    "No image available for platform {}/{} in multi-arch image",
-                    host_os,
-                    host_arch
-                )
-            })?;
-
-        // Pull the specific manifest for this platform
-        let (manifest, _, _) = self
-            .client
-            .pull_manifest_and_config(reference, &RegistryAuth::Anonymous)
-            .await
-            .map_err(|e| anyhow!("Failed to pull platform-specific manifest: {}", e))?;
-
-        Ok(manifest)
-    }
-}
-
 impl Default for ImageManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Parse image reference in the form: [registry/]image[:tag]
+/// Returns (registry, image_name, tag)
+fn parse_image_ref(image_ref: &str) -> Result<(String, String, String)> {
+    let mut parts = image_ref.split('/');
+
+    let first = parts
+        .next()
+        .ok_or_else(|| anyhow!("Invalid image reference"))?;
+
+    // Check if first part is registry (contains . or :)
+    let (registry, remaining) = if first.contains('.') || first.contains(':') {
+        // First part is registry
+        (
+            first.to_string(),
+            parts
+                .next()
+                .ok_or_else(|| anyhow!("Invalid image reference: no image name after registry"))?,
+        )
+    } else {
+        // Use Docker Hub as default registry
+        ("docker.io".to_string(), first)
+    };
+
+    // Collect remaining parts as image name
+    let mut image_parts = vec![remaining];
+    image_parts.extend(parts);
+    let image_and_tag = image_parts.join("/");
+
+    // Split image name and tag
+    let (image_name, tag) = if let Some(tag_pos) = image_and_tag.rfind(':') {
+        let (name, tag_part) = image_and_tag.split_at(tag_pos);
+        (name.to_string(), tag_part[1..].to_string())
+    } else {
+        (image_and_tag.to_string(), "latest".to_string())
+    };
+
+    // Ensure full image name for Docker Hub (library prefix)
+    let full_image_name = if registry == "docker.io" && !image_name.contains('/') {
+        format!("library/{}", image_name)
+    } else {
+        image_name
+    };
+
+    Ok((registry.to_string(), full_image_name, tag))
 }
 
 /// Get the current host's OS and architecture
