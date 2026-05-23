@@ -276,7 +276,7 @@ else
 fi
 
 # =============================================================================
-# STEP 4 — Copy assets into jniLibs
+# STEP 4 — Copy assets into jniLibs + ensure all native dependencies are present
 # =============================================================================
 echo ""
 echo "─── Step 4: Copying assets into jniLibs ────────────────────────────"
@@ -298,9 +298,6 @@ for f in "$CACHE_DIR/rootfs_files"/*; do
 done
 # manifest → librootfs-manifest.so (auto-included by AGP)
 cp "$CACHE_DIR/embedded_rootfs_manifest.json" "$JNILIB_DIR/librootfs-manifest.so"
-
-echo "jniLibs contents:"
-ls -lh "$JNILIB_DIR/"
 
 fi  # end SKIP_EMBED==0
 

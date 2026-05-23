@@ -33,7 +33,7 @@ regex = { version = "1.10" }
 image = { version = "0.25.10" }
 
 # 7z archive extraction for demo images
-sevenz-rust2 = { version = "0.21" }
+sevenz-rust2 = { version = "0.21", default-features = false, features = ["util"] }
 
 # XZ compression for proot
 xz2 = { version = "0.1" }
@@ -45,7 +45,7 @@ tar = { version = "0.4" }
 once_cell = { version = "1.21.4" }
 
 # HTTP requests for downloading runtimes and demo data
-reqwest = { version = "0.11", features = ["json", "stream"] }
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "json", "stream"] }
 
 # Executable discovery
 which = { version = "5.0" }
