@@ -118,16 +118,18 @@ pub fn get_android_native_lib_dir() -> Option<String> {
     }
 }
 
-/// Read the embedded image tag from `libembedded_metadata.so` bundled in the APK's jniLibs.
+/// Read the embedded image tag from `librootfs-manifest.so` bundled in the APK's jniLibs.
 ///
-/// The file is a JSON object with at least a `"tag"` field, e.g.:
+/// Despite the `.so` extension, the file is a JSON document with at least a `"tag"` field, e.g.:
 /// ```json
 /// { "tag": "mirror.gcr.io/yeicor/colmap-openmvs:20240101-abc123" }
 /// ```
+/// The `.so` extension is used so Android's AGP packaging includes it automatically
+/// without needing a custom Gradle merge task.
 #[cfg(target_os = "android")]
 pub fn read_embedded_image_tag() -> Option<String> {
     let jnilib_dir = get_android_native_lib_dir()?;
-    let metadata_path = format!("{}/embedded_rootfs_manifest.json", jnilib_dir);
+    let metadata_path = format!("{}/librootfs-manifest.so", jnilib_dir);
 
     match std::fs::read_to_string(&metadata_path) {
         Ok(contents) => match serde_json::from_str::<serde_json::Value>(&contents) {
@@ -225,14 +227,13 @@ pub(crate) fn default_proot_images_dir() -> String {
 /// Get the default PRoot invocation command for the current platform.
 ///
 /// On Android the binary is `libproot.so` inside the native-lib dir. `libtalloc.so.2` is
-/// provided via a compatibility symlink that must be created at runtime in
-/// `{files_dir}/talloc_compat/libtalloc.so.2 -> {jnilib_dir}/libtalloc.so`.
-/// Both directories are therefore prepended to `LD_LIBRARY_PATH`.
+/// provided alongside it. Both the native-lib dir is prepended to `LD_LIBRARY_PATH` so
+/// the dynamic linker can find it when executing `libproot.so`.
 pub(crate) fn default_proot_custom_command() -> String {
     #[cfg(target_os = "android")]
     {
         if let Some(jnilib_dir) = get_android_native_lib_dir() {
-            format!("LD_LIBRARY_PATH={} {}/proot", jnilib_dir, jnilib_dir)
+            format!("LD_LIBRARY_PATH={} {}/libproot.so", jnilib_dir, jnilib_dir)
         } else {
             warn!("Could not detect Android JNI lib path for default_proot_custom_command");
             String::new()

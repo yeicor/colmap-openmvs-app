@@ -17,10 +17,14 @@
 #   1. Run `dx build --android` (compiles Rust + generates gradle project).
 #   2. Download proot and libtalloc for aarch64 from Termux APT repos.
 #   3. Pull the Docker image for linux/arm64, export & compress its rootfs.
-#   4. Embed all assets as *.so files in the gradle project's jniLibs dir.
-#   5. Patch the generated build.gradle.kts (app module) to:
-#        a) set useLegacyPackaging = true  (extractNativeLibs=true)
-#        b) include any-extension files from jniLibs via a custom Gradle task
+#   4. Embed all assets as *.so files in the gradle project's jniLibs dir:
+#        - proot binary         → libproot.so
+#        - rootfs content files → librootfs-<hash>.so
+#        - rootfs manifest JSON → librootfs-manifest.so
+#        - libtalloc            → libtalloc.so.2 (already *.so, unchanged)
+#      All *.so files are auto-included by AGP — no custom merge task needed.
+#   5. Patch the generated build.gradle.kts (app module) to set
+#        useLegacyPackaging = true  (so *.so files are extracted to disk).
 #   6. Patch AndroidManifest.xml for extractNativeLibs=true.
 #   7. Re-run `./gradlew assemble<Mode>` to produce the final APK.
 # =============================================================================
@@ -278,18 +282,22 @@ echo ""
 echo "─── Step 4: Copying assets into jniLibs ────────────────────────────"
 mkdir -p "$JNILIB_DIR"
 
-# proot executable - keep original name
-cp "$CACHE_DIR/proot" "$JNILIB_DIR/proot"
-chmod +x "$JNILIB_DIR/proot"
-# libtalloc - copy all libtalloc.so* files with original names
+# proot executable → libproot.so (auto-included by AGP as a native lib)
+cp "$CACHE_DIR/proot" "$JNILIB_DIR/libproot.so"
+chmod +x "$JNILIB_DIR/libproot.so"
+# libtalloc - copy all libtalloc.so* files with original names (already *.so)
 for f in "$CACHE_DIR"/libtalloc.so*; do
     [ -f "$f" ] && cp "$f" "$JNILIB_DIR/$(basename "$f")"
 done
-# rootfs files (hash-named individual files from Docker image)
-echo "Copying rootfs files to jniLibs (this may take a while)..."
-cp -r "$CACHE_DIR/rootfs_files/." "$JNILIB_DIR/"
-# manifest (used at runtime to reconstruct rootfs skeleton)
-cp "$CACHE_DIR/embedded_rootfs_manifest.json" "$JNILIB_DIR/embedded_rootfs_manifest.json"
+# rootfs content files → librootfs-<hash>.so (auto-included by AGP)
+echo "Copying rootfs files to jniLibs as librootfs-*.so (this may take a while)..."
+for f in "$CACHE_DIR/rootfs_files"/*; do
+    [ -f "$f" ] || continue
+    hash="$(basename "$f")"
+    cp "$f" "$JNILIB_DIR/librootfs-${hash}.so"
+done
+# manifest → librootfs-manifest.so (auto-included by AGP)
+cp "$CACHE_DIR/embedded_rootfs_manifest.json" "$JNILIB_DIR/librootfs-manifest.so"
 
 echo "jniLibs contents:"
 ls -lh "$JNILIB_DIR/"
@@ -316,87 +324,48 @@ path = "${APP_BUILD_GRADLE}"
 with open(path, "r") as f:
     content = f.read()
 
-# ── Patch 1: add packaging block with useLegacyPackaging = true ──────────
-# Also add a custom Gradle task that copies non-.so files from jniLibs into
-# the merge output so they are included in the APK regardless of extension.
-packaging_block = """
-    packaging {
+# Add packaging block with useLegacyPackaging = true.
+# All rootfs payload files are now named *.so (librootfs-*.so, libproot.so)
+# so AGP picks them up automatically — no custom merge task is needed.
+packaging_block = """    packaging {
         jniLibs {
             // Extract native libs to disk (extractNativeLibs = true).
-            // This is required so proot is accessible as a real executable
-            // path, and so large data files (embedded_rootfs.tar.xz,
-            // embedded_metadata.json, libtalloc.so*) are on disk where
-            // Rust code can open them directly.
+            // Required so libproot.so is executable and all librootfs-*.so
+            // payload files are accessible as real paths by the Rust runtime.
             useLegacyPackaging = true
         }
     }
 """
 
-# Insert just before the closing brace of the android {} block.
-# We do a simple heuristic: find the last '}' that closes 'android {'.
-android_block_re = re.compile(r'(android\s*\{)', re.DOTALL)
-if android_block_re.search(content):
-    # Insert before the final closing brace of the file
-    # (works for typical single-android-block files)
-    last_brace = content.rfind("}")
-    if last_brace != -1:
-        content = content[:last_brace] + packaging_block + content[last_brace:]
+# Find the android {} block and insert packaging inside it (before the closing }).
+# We use a regex to find the android { line, then locate its matching closing brace.
+def find_matching_brace(s, start_pos):
+    """Find the position of the closing brace that matches the opening one at start_pos."""
+    count = 0
+    for i in range(start_pos, len(s)):
+        if s[i] == '{':
+            count += 1
+        elif s[i] == '}':
+            count -= 1
+            if count == 0:
+                return i
+    return -1
+
+# Find 'android {'
+android_match = re.search(r'\bandroid\s*\{', content)
+if android_match:
+    android_open = android_match.start() + len(android_match.group()) - 1  # Position of '{'
+    android_close = find_matching_brace(content, android_open)
+
+    if android_close != -1:
+        # Insert the packaging block just before the closing brace
+        content = content[:android_close] + packaging_block + content[android_close:]
+        print(f"Inserted packaging block at position {android_close}", file=sys.stderr)
     else:
-        print("WARNING: could not locate closing brace of android block", file=sys.stderr)
+        print("ERROR: could not find matching closing brace for android block", file=sys.stderr)
 else:
-    print("WARNING: android {} block not found in build.gradle.kts", file=sys.stderr)
-
-# ── Patch 2: custom Gradle task to package any-extension jniLibs files ───
-# AGP's MergeJniLibsTask only picks up *.so by default.  The task below
-# copies everything else (e.g. proot, *.tar.xz, *.json) into the merge
-# output directory, making them part of the final APK.
-extra_task = """
-
-// Include all files (not just *.so) from jniLibs in the APK.
-// AGP filters jniLibs on *.so; we hook into the merge task to copy the rest.
-tasks.whenTaskAdded {
-    if (name.startsWith("merge") && name.endsWith("NativeLibs")) {
-        doLast {
-            val jniLibsDir = File(projectDir, "src/main/jniLibs")
-            if (!jniLibsDir.isDirectory) return@doLast
-
-            // Derive variant name (e.g. "debug", "release") from the task name
-            val variantDirName = name
-                .removePrefix("merge")
-                .removeSuffix("NativeLibs")
-                .replaceFirstChar { it.lowercaseChar() }
-
-            // Try AGP 7.x, 8.x (with task name), and 8.x (with full merge task name)
-            val candidateBases = listOf(
-                File(buildDir, "intermediates/merged_native_libs/\$variantDirName/out"),
-                File(buildDir, "intermediates/merged_native_libs/\$variantDirName/\$name/out"),
-                File(buildDir, "intermediates/merged_native_libs/\$variantDirName/merge\${variantDirName.replaceFirstChar{it.uppercaseChar()}}NativeLibs/out")
-            )
-
-            fileTree(jniLibsDir) {
-                exclude("**/*.so")
-            }.forEach { file ->
-                val abi = file.parentFile.name  // e.g. "arm64-v8a"
-                for (base in candidateBases) {
-                    val destDir = File(base, abi)
-                    if (destDir.exists()) {
-                        file.copyTo(File(destDir, file.name), overwrite = true)
-                        break
-                    } else {
-                        // Create the first candidate and copy there
-                        if (base == candidateBases.first()) {
-                            destDir.mkdirs()
-                            file.copyTo(File(destDir, file.name), overwrite = true)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-"""
-
-content = content + extra_task
+    print("ERROR: android {} block not found in build.gradle.kts", file=sys.stderr)
+    sys.exit(1)
 
 with open(path, "w") as f:
     f.write(content)

@@ -66,8 +66,8 @@ fn get_proot_env_and_args(custom_command: &str) -> (Vec<(String, String)>, Strin
 ///
 /// Strategy order:
 /// 0. Binary specified in `custom_command` (if the path exists on disk)
-/// 1. `libproot.so` in `runtime_dir` (Android embedded asset)
-/// 2. Plain `proot` in `runtime_dir` (downloaded binary)
+/// 1. `libproot.so` in `runtime_dir` (Android APK embedded asset, *.so naming)
+/// 2. Plain `proot` in `runtime_dir` (runtime-downloaded binary)
 /// 3. Direct execution attempt (`proot --version`)
 /// 4. `which::which("proot")` (system PATH search)
 async fn find_proot_binary(runtime_dir: &Path, custom_command: &str) -> RuntimeResult<String> {
@@ -83,14 +83,19 @@ async fn find_proot_binary(runtime_dir: &Path, custom_command: &str) -> RuntimeR
         info!(bin = %bin, "find_proot_binary: custom_command binary does not exist on disk, continuing search");
     }
 
-    // Strategy 1: Look for embedded 'proot' in runtime_dir (Android APK asset, original name)
-    let embedded_proot = runtime_dir.join("proot");
+    // Strategy 1: Look for 'libproot.so' in runtime_dir (Android APK asset, *.so naming)
+    let embedded_proot = runtime_dir.join("libproot.so");
     if embedded_proot.exists() {
-        info!(path = %embedded_proot.display(), "find_proot_binary: found embedded proot");
+        info!(path = %embedded_proot.display(), "find_proot_binary: found embedded libproot.so");
         return Ok(embedded_proot.to_string_lossy().into_owned());
     }
 
-    // Strategy 2 is now merged with Strategy 1 (both look for 'proot' in runtime_dir).
+    // Strategy 2: Look for plain 'proot' in runtime_dir (runtime-downloaded binary)
+    let downloaded_proot = runtime_dir.join("proot");
+    if downloaded_proot.exists() {
+        info!(path = %downloaded_proot.display(), "find_proot_binary: found downloaded proot");
+        return Ok(downloaded_proot.to_string_lossy().into_owned());
+    }
 
     // Strategy 3: Try direct execution (proot might be in system PATH)
     info!("[DEBUG]find_proot_binary: attempting direct execution of 'proot --version'");
@@ -649,10 +654,12 @@ impl PRoot {
     // Embedded asset helpers (Android jniLibs)
     // -----------------------------------------------------------------------
 
-    /// Path to the embedded rootfs manifest (`embedded_rootfs_manifest.json`).
+    /// Path to the embedded rootfs manifest (`librootfs-manifest.so`).
     /// Present when the APK was built with the embedded rootfs approach.
+    /// The file is a JSON document despite the `.so` extension (required so
+    /// Android's AGP packaging includes it automatically without a custom task).
     pub fn embedded_rootfs_manifest_path(&self) -> Option<PathBuf> {
-        let p = self.runtime_dir.join("embedded_rootfs_manifest.json");
+        let p = self.runtime_dir.join("librootfs-manifest.so");
         if p.exists() {
             Some(p)
         } else {
@@ -664,7 +671,7 @@ impl PRoot {
     pub(crate) async fn read_embedded_manifest(&self) -> RuntimeResult<RootfsManifest> {
         let path = self.embedded_rootfs_manifest_path().ok_or_else(|| {
             anyhow::anyhow!(
-                "No embedded rootfs manifest found (embedded_rootfs_manifest.json missing from {})",
+                "No embedded rootfs manifest found (librootfs-manifest.so missing from {})",
                 self.runtime_dir.display()
             )
         })?;
@@ -732,14 +739,14 @@ impl PRoot {
             }
         }
 
-        // ── Create per-file symlinks: <rootfs>/<path> → /mnt/jni/<hash> ──
+        // ── Create per-file symlinks: <rootfs>/<path> → /mnt/jni/librootfs-<hash>.so ──
         for (hash, file_info) in &manifest.files {
             let dest = rootfs_dir.join(file_info.path.trim_start_matches('/'));
             if let Some(parent) = dest.parent() {
                 tokio::fs::create_dir_all(parent).await.ok();
             }
             let _ = tokio::fs::remove_file(&dest).await;
-            let symlink_target = format!("/mnt/jni/{}", hash);
+            let symlink_target = format!("/mnt/jni/librootfs-{}.so", hash);
             #[cfg(unix)]
             if let Err(e) = tokio::fs::symlink(&symlink_target, &dest).await {
                 warn!(
@@ -828,7 +835,8 @@ impl Runtime for PRoot {
         // On Android, if the embedded proot asset is present that is always
         // sufficient — no need for a system-wide installation.
         #[cfg(target_os = "android")]
-        if self.runtime_dir.join("proot").exists() && self.embedded_rootfs_manifest_path().is_some()
+        if self.runtime_dir.join("libproot.so").exists()
+            && self.embedded_rootfs_manifest_path().is_some()
         {
             return Ok(());
         }
@@ -931,7 +939,8 @@ impl Runtime for PRoot {
 
         // On Android, if the embedded proot asset is present, skip download.
         #[cfg(target_os = "android")]
-        if self.runtime_dir.join("proot").exists() && self.embedded_rootfs_manifest_path().is_some()
+        if self.runtime_dir.join("libproot.so").exists()
+            && self.embedded_rootfs_manifest_path().is_some()
         {
             info!(
                 runtime_dir = %self.runtime_dir.display(),
