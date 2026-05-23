@@ -100,6 +100,132 @@ impl StageData {
             pipeline_stage_num: None,
         }
     }
+
+    /// Process a log line that may contain carriage returns (\r).
+    /// Carriage returns indicate progress updates that should replace the previous line.
+    /// If the line contains \r, the part after the last \r replaces the previous line.
+    /// If there's no previous line and the line starts with \r, it's added as a new line.
+    fn add_log_line(&mut self, line: String) {
+        if line.contains('\r') {
+            // Split by \r and process each part
+            let parts: Vec<&str> = line.split('\r').collect();
+
+            for (idx, part) in parts.iter().enumerate() {
+                let len = self.lines.len();
+                match idx {
+                    0 => {
+                        // First part: if there's a previous line, update it; otherwise add new line
+                        if !part.is_empty() {
+                            if len > 0 {
+                                self.lines[len - 1] = part.to_string();
+                            } else {
+                                self.lines.push(part.to_string());
+                            }
+                        }
+                    }
+                    _ if idx == parts.len() - 1 => {
+                        // Last part: replace previous line if non-empty, otherwise add new
+                        if !part.is_empty() {
+                            let len = self.lines.len();
+                            if len > 0 {
+                                self.lines[len - 1] = part.to_string();
+                            } else {
+                                self.lines.push(part.to_string());
+                            }
+                        }
+                        // If part is empty, line ends with \r and we just replaced the previous line
+                    }
+                    _ => {
+                        // Middle parts: always replace the previous line
+                        if !part.is_empty() {
+                            let len = self.lines.len();
+                            if len > 0 {
+                                self.lines[len - 1] = part.to_string();
+                            } else {
+                                self.lines.push(part.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // No carriage return, just add the line normally
+            self.lines.push(line);
+        }
+    }
+}
+
+#[cfg(test)]
+mod stage_data_tests {
+    use super::StageData;
+
+    #[test]
+    fn test_add_log_line_without_carriage_return() {
+        let mut stage = StageData::new(0, "test".to_string(), 1);
+        stage.add_log_line("Line 1".to_string());
+        stage.add_log_line("Line 2".to_string());
+        assert_eq!(stage.lines, vec!["Line 1", "Line 2"]);
+    }
+
+    #[test]
+    fn test_add_log_line_with_carriage_return_replaces_last_line() {
+        let mut stage = StageData::new(0, "test".to_string(), 1);
+        stage.add_log_line("Progress: 0%".to_string());
+        stage.add_log_line("Progress: 50%\r".to_string()); // \r at end replaces last line
+        stage.add_log_line("Progress: 100%\r".to_string()); // Again replaces
+
+        // Should have one line from first add, then last progress update
+        assert_eq!(stage.lines.len(), 1);
+        assert_eq!(stage.lines[0], "Progress: 100%");
+    }
+
+    #[test]
+    fn test_add_log_line_with_multiple_carriage_returns() {
+        let mut stage = StageData::new(0, "test".to_string(), 1);
+        stage.add_log_line("First line".to_string());
+        // Three parts separated by \r: "Progress A" -> "Progress B" -> "Progress C"
+        stage.add_log_line("Progress A\rProgress B\rProgress C".to_string());
+
+        // Should have only the last progress update
+        assert_eq!(stage.lines.len(), 1);
+        assert_eq!(stage.lines[0], "Progress C");
+    }
+
+    #[test]
+    fn test_add_log_line_carriage_return_at_start() {
+        let mut stage = StageData::new(0, "test".to_string(), 1);
+        stage.add_log_line("Initial line".to_string());
+        stage.add_log_line("\rReplaced line".to_string()); // \r at start
+
+        assert_eq!(stage.lines.len(), 1);
+        assert_eq!(stage.lines[0], "Replaced line");
+    }
+
+    #[test]
+    fn test_add_log_line_progress_bar_simulation() {
+        // Simulate a typical progress bar: "[===>    ]" updates
+        let mut stage = StageData::new(0, "test".to_string(), 1);
+        stage.add_log_line("Starting task...".to_string());
+        stage.add_log_line("Progress [=>       ]\r".to_string());
+        stage.add_log_line("Progress [==>      ]\r".to_string());
+        stage.add_log_line("Progress [===>     ]\r".to_string());
+        stage.add_log_line("Progress [====>    ]\r".to_string());
+        stage.add_log_line("Task completed!".to_string()); // New line without \r
+
+        assert_eq!(stage.lines.len(), 2);
+        assert_eq!(stage.lines[0], "Progress [====>    ]"); // Last progress bar state
+        assert_eq!(stage.lines[1], "Task completed!");
+    }
+
+    #[test]
+    fn test_add_log_line_empty_parts_between_carriage_returns() {
+        let mut stage = StageData::new(0, "test".to_string(), 1);
+        stage.add_log_line("First".to_string());
+        stage.add_log_line("A\r\rC".to_string()); // Empty part between \r characters
+
+        assert_eq!(stage.lines.len(), 1);
+        assert_eq!(stage.lines[0], "C");
+    }
 }
 
 /// High-level pipeline state driven by TaskEvents.
@@ -272,7 +398,7 @@ fn spawn_pipeline_stream(
                                 let total = s.last().map(|x| x.total_stages).unwrap_or(1);
                                 s.push(StageData::new(idx, stage_name.clone(), total));
                             }
-                            s[stage_index as usize].lines.push(line);
+                            s[stage_index as usize].add_log_line(line);
                             drop(s);
                             if auto_scroll() {
                                 let _ = eval(

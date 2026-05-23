@@ -290,16 +290,44 @@ pub trait Runtime: Send + Sync {
 pub struct RuntimeFactory;
 
 impl RuntimeFactory {
-    /// Create a [`PRoot`] runtime using the configured install directory from settings.
-    pub fn proot() -> PRoot {
-        let default_dir: PathBuf = crate::settings::default_proot_dir().into();
-        debug!(runtime_dir = %default_dir.display(), "Creating PRoot runtime with default directory");
-        PRoot::new(default_dir)
+    /// Create a [`PRoot`] runtime using the configured install directories from settings.
+    pub async fn proot() -> PRoot {
+        let settings = match crate::settings::get_settings().await {
+            Ok(s) => s,
+            Err(_) => {
+                // Fallback to defaults if settings retrieval fails
+                let binary_dir: PathBuf = crate::settings::default_proot_binary_dir().into();
+                let images_dir: PathBuf = crate::settings::default_proot_images_dir().into();
+                debug!(
+                    binary_dir = %binary_dir.display(),
+                    images_dir = %images_dir.display(),
+                    "Failed to load settings, using default PRoot directories"
+                );
+                return PRoot::new(
+                    binary_dir,
+                    images_dir,
+                    crate::settings::default_proot_custom_command(),
+                );
+            }
+        };
+        let binary_dir: PathBuf = settings.proot_binary_dir.into();
+        let images_dir: PathBuf = settings.proot_images_dir.into();
+        debug!(
+            binary_dir = %binary_dir.display(),
+            images_dir = %images_dir.display(),
+            "Creating PRoot runtime with configured directories"
+        );
+        PRoot::new(
+            binary_dir,
+            images_dir,
+            settings.proot_custom_command.clone(),
+        )
     }
 
-    /// Create a [`PRoot`] runtime with a custom install directory.
+    /// Create a [`PRoot`] runtime with a custom binary directory.
+    /// The images directory defaults to a subdirectory of the runtime directory.
     pub fn proot_with_dir(runtime_dir: PathBuf) -> PRoot {
         debug!(runtime_dir = %runtime_dir.display(), "Creating PRoot runtime with custom directory");
-        PRoot::new(runtime_dir)
+        PRoot::new_default_images(runtime_dir, crate::settings::default_proot_custom_command())
     }
 }

@@ -14,8 +14,16 @@ pub struct Project {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
     pub projects_folder: String,
+    /// Directory containing the PRoot binary and supporting libraries
+    pub proot_binary_dir: String,
+    /// Directory containing large PRoot runtime images
+    pub proot_images_dir: String,
+    /// Custom PRoot command (with arguments if needed). If empty, defaults to "<proot_binary_dir>/proot"
+    #[serde(default)]
+    pub proot_custom_command: String,
     /// The default container image tag to use for all runtime commands (e.g. running --help in Config tab).
     /// Example: "mirror.gcr.io/yeicor/colmap-openmvs:latest"
+    #[serde(default)]
     pub default_image_tag: Option<String>,
 }
 

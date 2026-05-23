@@ -19,6 +19,7 @@ pub struct ImageConfig {
     pub entrypoint: Option<Vec<String>>,
     pub cmd: Option<Vec<String>>,
     pub working_dir: Option<String>,
+    pub created: Option<String>,
 }
 
 /// OCI image manifest v2 schema
@@ -75,16 +76,18 @@ pub struct Descriptor {
 pub struct ConfigFile {
     #[serde(default)]
     pub config: Option<Config>,
+    #[serde(default)]
+    pub created: Option<String>,
 }
 
 /// Docker container config
 #[derive(Debug, Deserialize, Default)]
 pub struct Config {
-    #[serde(default)]
+    #[serde(rename = "Env", default)]
     pub env: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(rename = "Entrypoint", default)]
     pub entrypoint: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(rename = "Cmd", default)]
     pub cmd: Option<Vec<String>>,
     #[serde(rename = "WorkingDir", default)]
     pub working_dir: Option<String>,
@@ -282,6 +285,7 @@ impl ImageManager {
             entrypoint: config_ref.and_then(|c| c.entrypoint.as_ref()).cloned(),
             cmd: config_ref.and_then(|c| c.cmd.as_ref()).cloned(),
             working_dir: config_ref.and_then(|c| c.working_dir.as_ref()).cloned(),
+            created: config.created,
         })
     }
 
@@ -389,4 +393,98 @@ fn get_host_platform() -> (&'static str, &'static str) {
     };
 
     (os, arch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_image_config_with_metadata() {
+        let json_str = r#"{
+            "architecture": "amd64",
+            "config": {
+                "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
+                "Entrypoint": ["/bin/sh"],
+                "Cmd": ["-c", "echo hello"],
+                "WorkingDir": "/home/user"
+            },
+            "created": "2026-05-23T18:31:41.577243600+00:00"
+        }"#;
+
+        let config: ConfigFile = serde_json::from_str(json_str).expect("Failed to parse JSON");
+
+        assert_eq!(
+            config.created,
+            Some("2026-05-23T18:31:41.577243600+00:00".to_string())
+        );
+        assert!(config.config.is_some());
+
+        let cfg = config.config.unwrap();
+        assert_eq!(
+            cfg.env,
+            Some(vec![
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string()
+            ])
+        );
+        assert_eq!(cfg.entrypoint, Some(vec!["/bin/sh".to_string()]));
+        assert_eq!(
+            cfg.cmd,
+            Some(vec!["-c".to_string(), "echo hello".to_string()])
+        );
+        assert_eq!(cfg.working_dir, Some("/home/user".to_string()));
+    }
+
+    #[test]
+    fn test_parse_image_config_empty_values() {
+        let json_str = r#"{
+            "architecture": "amd64",
+            "config": {
+                "Env": [],
+                "Entrypoint": null,
+                "Cmd": null,
+                "WorkingDir": "/home/user"
+            },
+            "created": "2026-05-23T18:31:41.577243600+00:00"
+        }"#;
+
+        let config: ConfigFile = serde_json::from_str(json_str).expect("Failed to parse JSON");
+
+        assert_eq!(
+            config.created,
+            Some("2026-05-23T18:31:41.577243600+00:00".to_string())
+        );
+        assert!(config.config.is_some());
+
+        let cfg = config.config.unwrap();
+        assert_eq!(cfg.env, Some(vec![]));
+        assert_eq!(cfg.entrypoint, None);
+        assert_eq!(cfg.cmd, None);
+        assert_eq!(cfg.working_dir, Some("/home/user".to_string()));
+    }
+
+    #[test]
+    fn test_parse_image_config_missing_fields() {
+        let json_str = r#"{
+            "architecture": "amd64",
+            "config": {
+                "WorkingDir": "/"
+            },
+            "created": "2026-05-23T18:31:41.577243600+00:00"
+        }"#;
+
+        let config: ConfigFile = serde_json::from_str(json_str).expect("Failed to parse JSON");
+
+        assert_eq!(
+            config.created,
+            Some("2026-05-23T18:31:41.577243600+00:00".to_string())
+        );
+        assert!(config.config.is_some());
+
+        let cfg = config.config.unwrap();
+        assert_eq!(cfg.env, None);
+        assert_eq!(cfg.entrypoint, None);
+        assert_eq!(cfg.cmd, None);
+        assert_eq!(cfg.working_dir, Some("/".to_string()));
+    }
 }

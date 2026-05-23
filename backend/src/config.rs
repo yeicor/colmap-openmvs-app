@@ -36,7 +36,7 @@ struct CommandHelp {
 
 /// Parse configuration from a prepared container image by running help commands.
 pub async fn get_image_config(image_tag: String) -> anyhow::Result<ConfigSchema> {
-    let rt = RuntimeFactory::proot();
+    let rt = RuntimeFactory::proot().await;
 
     // First, try to get the image build date from the list of prepared images
     let build_date = match rt.list_images().await {

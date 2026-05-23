@@ -127,6 +127,11 @@ pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
     backend::list_available_image_tags().await
 }
 
+#[get("/runtimes/proot/images/embedded-tag")]
+pub async fn get_embedded_image_tag() -> Result<Option<String>> {
+    backend::get_embedded_image_tag().await
+}
+
 // ---------------------------------------------------------------------------
 // Configuration schema
 // ---------------------------------------------------------------------------

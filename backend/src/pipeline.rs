@@ -5,10 +5,10 @@ use colmap_openmvs_api::{PipelineStageStatus, TaskEvent, TaskKind};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, error, info, span, Level};
 
 use crate::{
+    line_reader::LineReader,
     process::kill_process_tree,
     runtimes::{Mount, Runtime, RuntimeFactory},
     settings::get_settings,
@@ -97,7 +97,7 @@ async fn run_pipeline_task(
     let _enter = span.enter();
 
     info!("Starting pipeline container");
-    let rt = RuntimeFactory::proot();
+    let rt = RuntimeFactory::proot().await;
 
     // Mount the project directory at /work inside the container.
     let mounts = vec![Mount {
@@ -136,8 +136,8 @@ async fn run_pipeline_task(
     }
 
     // Take stdout/stderr before spawning the log reader task.
-    let stdout = handle.take_stdout().map(BufReader::new);
-    let stderr = handle.take_stderr().map(BufReader::new);
+    let mut stdout = handle.take_stdout();
+    let mut stderr = handle.take_stderr();
 
     let task_id_log = task_id.clone();
 
@@ -146,8 +146,8 @@ async fn run_pipeline_task(
     // with `pending()` so the other stream continues to be drained normally.
     let log_handle = tokio::spawn(async move {
         debug!("Log reader task started");
-        let mut stdout_lines = stdout.map(|r| r.lines());
-        let mut stderr_lines = stderr.map(|r| r.lines());
+        let mut stdout_reader = stdout.is_some().then(LineReader::new);
+        let mut stderr_reader = stderr.is_some().then(LineReader::new);
 
         // Mutable group-tracking state shared across both stream arms.
         // group_seq: next sequential index to assign on the next ::group marker.
@@ -160,14 +160,14 @@ async fn run_pipeline_task(
             tokio::select! {
                 // ── stdout arm ───────────────────────────────────────────
                 line = async {
-                    if let Some(lines) = stdout_lines.as_mut() {
-                        lines.next_line().await
+                    if stdout_reader.is_some() && stdout.is_some() {
+                        stdout_reader.as_mut().unwrap().read_line(stdout.as_mut().unwrap()).await
                     } else {
-                        std::future::pending::<std::io::Result<Option<String>>>().await
+                        std::future::pending::<std::io::Result<(Option<String>, bool)>>().await
                     }
                 } => {
                     match line {
-                        Ok(Some(l)) => {
+                        Ok((Some(l), has_more)) => {
                             process_line(
                                 &task_id_log,
                                 &l,
@@ -175,23 +175,29 @@ async fn run_pipeline_task(
                                 &mut current_group_idx,
                                 &mut current_stage_name,
                             );
+                            if !has_more {
+                                stdout_reader = None;
+                            }
                         }
-                        _ => {
-                            stdout_lines = None;
+                        Ok((None, _)) => {
+                            stdout_reader = None;
+                        }
+                        Err(_) => {
+                            stdout_reader = None;
                         }
                     }
                 }
 
                 // ── stderr arm ───────────────────────────────────────────
                 line = async {
-                    if let Some(lines) = stderr_lines.as_mut() {
-                        lines.next_line().await
+                    if stderr_reader.is_some() && stderr.is_some() {
+                        stderr_reader.as_mut().unwrap().read_line(stderr.as_mut().unwrap()).await
                     } else {
-                        std::future::pending::<std::io::Result<Option<String>>>().await
+                        std::future::pending::<std::io::Result<(Option<String>, bool)>>().await
                     }
                 } => {
                     match line {
-                        Ok(Some(l)) => {
+                        Ok((Some(l), has_more)) => {
                             process_line(
                                 &task_id_log,
                                 &l,
@@ -199,15 +205,21 @@ async fn run_pipeline_task(
                                 &mut current_group_idx,
                                 &mut current_stage_name,
                             );
+                            if !has_more {
+                                stderr_reader = None;
+                            }
                         }
-                        _ => {
-                            stderr_lines = None;
+                        Ok((None, _)) => {
+                            stderr_reader = None;
+                        }
+                        Err(_) => {
+                            stderr_reader = None;
                         }
                     }
                 }
             }
 
-            if stdout_lines.is_none() && stderr_lines.is_none() {
+            if stdout_reader.is_none() && stderr_reader.is_none() {
                 break;
             }
         }

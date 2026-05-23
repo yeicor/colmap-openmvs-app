@@ -6,9 +6,9 @@ use crate::mycomponents::BackButton;
 use crate::mycomponents::{Banner, BannerType, PageHeader};
 use crate::server::{
     delete_runtime_binary, download_runtime_version, get_available_runtime_versions,
-    get_runtime_info, get_settings, get_task_info, list_available_image_tags,
-    list_runtime_images, list_tasks, prepare_runtime_image, remove_runtime_image,
-    subscribe_task_events, update_settings,
+    get_runtime_info, get_settings, get_task_info, list_available_image_tags, list_runtime_images,
+    list_tasks, prepare_runtime_image, remove_runtime_image, subscribe_task_events,
+    update_settings,
 };
 use crate::Route;
 use chrono::{DateTime, Duration, Utc};
@@ -225,22 +225,23 @@ fn GeneralTab() -> Element {
         spawn(async move {
             error.set(String::new());
             success.set(String::new());
-            let folder = projects_folder().trim().to_string();
-            if folder.is_empty() {
+            let projects = projects_folder().trim().to_string();
+            if projects.is_empty() {
                 error.set("Projects folder path cannot be empty".to_string());
                 return;
             }
-            match update_settings(Settings {
-                projects_folder: folder,
-                default_image_tag: None,
-            })
-            .await
-            {
-                Ok(_) => {
-                    success.set("Settings saved successfully!".to_string());
-                    has_changed.set(false);
+            match get_settings().await {
+                Ok(mut settings) => {
+                    settings.projects_folder = projects;
+                    match update_settings(settings).await {
+                        Ok(_) => {
+                            success.set("Settings saved successfully!".to_string());
+                            has_changed.set(false);
+                        }
+                        Err(e) => error.set(format!("Failed to save settings: {}", e)),
+                    }
                 }
-                Err(e) => error.set(format!("Failed to save settings: {}", e)),
+                Err(e) => error.set(format!("Failed to load current settings: {}", e)),
             }
         });
     };
@@ -318,8 +319,6 @@ fn GeneralTab() -> Element {
                     }
                 }
 
-
-
                 if has_changed() {
                     div {
                         class: "form-actions",
@@ -347,6 +346,7 @@ fn GeneralTab() -> Element {
 #[component]
 fn RuntimeTab() -> Element {
     let mut active_runtime_tab = use_signal(|| Some("proot".to_string()));
+    let mut active_proot_subtab = use_signal(|| Some("settings".to_string()));
 
     rsx! {
         div {
@@ -368,7 +368,28 @@ fn RuntimeTab() -> Element {
             }
 
             if active_runtime_tab() == Some("proot".to_string()) {
-                runtime_proot_tab {}
+                div {
+                    class: "proot-sub-tabs",
+                    div {
+                        class: "proot-subtab-triggers",
+                        button {
+                            class: if active_proot_subtab() == Some("settings".to_string()) { "proot-subtrigger active" } else { "proot-subtrigger" },
+                            onclick: move |_| active_proot_subtab.set(Some("settings".to_string())),
+                            "Settings"
+                        }
+                        button {
+                            class: if active_proot_subtab() == Some("management".to_string()) { "proot-subtrigger active" } else { "proot-subtrigger" },
+                            onclick: move |_| active_proot_subtab.set(Some("management".to_string())),
+                            "Management"
+                        }
+                    }
+                    if active_proot_subtab() == Some("settings".to_string()) {
+                        runtime_proot_settings_tab {}
+                    }
+                    if active_proot_subtab() == Some("management".to_string()) {
+                        runtime_proot_tab {}
+                    }
+                }
             }
         }
     }
@@ -574,6 +595,172 @@ fn runtime_proot_tab() -> Element {
 }
 
 // ---------------------------------------------------------------------------
+// PRoot Settings tab  (Configure PRoot directory)
+// ---------------------------------------------------------------------------
+
+#[component]
+fn runtime_proot_settings_tab() -> Element {
+    let mut proot_images_dir = use_signal(String::new);
+    let mut proot_custom_command = use_signal(String::new);
+    let mut loading = use_signal(|| true);
+    let mut error = use_signal(String::new);
+    let mut success = use_signal(String::new);
+    let mut has_changed = use_signal(|| false);
+
+    use_effect(move || {
+        spawn(async move {
+            loading.set(true);
+            error.set(String::new());
+            match get_settings().await {
+                Ok(s) => {
+                    proot_images_dir.set(s.proot_images_dir);
+                    proot_custom_command.set(s.proot_custom_command);
+                }
+                Err(e) => error.set(format!("Failed to load settings: {}", e)),
+            }
+            loading.set(false);
+        });
+    });
+
+    let handle_save = move |_| {
+        spawn(async move {
+            error.set(String::new());
+            success.set(String::new());
+            let folder = proot_images_dir().trim().to_string();
+            if folder.is_empty() {
+                error.set("PRoot folder path cannot be empty".to_string());
+                return;
+            }
+            match get_settings().await {
+                Ok(mut settings) => {
+                    settings.proot_images_dir = folder;
+                    match update_settings(settings).await {
+                        Ok(_) => {
+                            success.set("PRoot folder updated successfully!".to_string());
+                            has_changed.set(false);
+                        }
+                        Err(e) => error.set(format!("Failed to save settings: {}", e)),
+                    }
+                }
+                Err(e) => error.set(format!("Failed to load current settings: {}", e)),
+            }
+        });
+    };
+
+    let handle_cancel = move |_| {
+        spawn(async move {
+            match get_settings().await {
+                Ok(s) => {
+                    proot_images_dir.set(s.proot_images_dir);
+                    proot_custom_command.set(s.proot_custom_command);
+                    has_changed.set(false);
+                    error.set(String::new());
+                }
+                Err(e) => error.set(format!("Failed to reload settings: {}", e)),
+            }
+        });
+    };
+
+    rsx! {
+        Banner {
+            message: error(),
+            banner_type: BannerType::Error,
+            on_close: move |_| error.set(String::new()),
+        }
+        Banner {
+            message: success(),
+            banner_type: BannerType::Info,
+            on_close: move |_| success.set(String::new()),
+        }
+
+        if loading() {
+            p { class: "loading", "Loading settings…" }
+        } else {
+            div {
+                class: "settings-form",
+                div {
+                    class: "form-group",
+                    label { "PRoot Runtime Directory" }
+                    p { class: "form-help", "Location where PRoot binary and container environments are stored." }
+                    div {
+                        class: "folder-row",
+                        input {
+                            r#type: "text",
+                            value: "{proot_images_dir}",
+                            placeholder: "./runtimes/proot",
+                            class: "folder-input",
+                            oninput: move |evt| {
+                                proot_images_dir.set(evt.value());
+                                has_changed.set(true);
+                                error.set(String::new());
+                                success.set(String::new());
+                            },
+                        }
+                        input {
+                            r#type: "file",
+                            directory: true,
+                            style: "display: none;",
+                            id: "proot-folder-input",
+                            onchange: move |evt| {
+                                if let Some(file) = evt.files().into_iter().next() {
+                                    proot_images_dir.set(
+                                        file.path().to_str().expect("Invalid path").to_string(),
+                                    );
+                                    has_changed.set(true);
+                                    error.set(String::new());
+                                    success.set(String::new());
+                                }
+                            }
+                        }
+                        Button {
+                            variant: ButtonVariant::Secondary,
+                            onclick: move |_| {
+                                eval("document.querySelector('#proot-folder-input').click()");
+                            },
+                            Icon { icon: BsFolder }
+                        }
+                    }
+                }
+
+
+                div {
+                    class: "form-group",
+                    label { "PRoot Custom Command (Advanced)" }
+                    p { class: "form-help", "Optional: Command to execute PRoot. Leave empty for auto-detect. Example: LD_LIBRARY_PATH=/path /path/proot" }
+                    input {
+                        r#type: "text",
+                        value: "{proot_custom_command}",
+                        placeholder: "Leave empty for auto-detect",
+                        class: "folder-input",
+                        oninput: move |evt| {
+                            proot_custom_command.set(evt.value());
+                            has_changed.set(true);
+                            error.set(String::new());
+                            success.set(String::new());
+                        },
+                    }
+                }
+                if has_changed() {
+                    div {
+                        class: "form-actions",
+                        Button {
+                            variant: ButtonVariant::Primary,
+                            onclick: handle_save,
+                            "Save"
+                        }
+                        Button {
+                            variant: ButtonVariant::Secondary,
+                            onclick: handle_cancel,
+                            "Cancel"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Images tab  (container image management)
 // ---------------------------------------------------------------------------
 
@@ -589,6 +776,9 @@ fn RuntimeImagesTab() -> Element {
     let mut success = use_signal(String::new);
     let mut default_image_tag = use_signal(String::new);
     let mut projects_folder = use_signal(String::new);
+    let mut proot_binary_dir = use_signal(String::new);
+    let mut proot_images_dir = use_signal(String::new);
+    let mut proot_custom_command = use_signal(String::new);
     // Task being prepared – tag name only (for the "already preparing" guard)
     let mut preparing_tag = use_signal(String::new);
 
@@ -686,9 +876,13 @@ fn RuntimeImagesTab() -> Element {
                             if settings.default_image_tag.is_none() {
                                 let tag = imgs[0].tag.clone();
                                 let folder = settings.projects_folder.clone();
+                                let proot = settings.proot_images_dir.clone();
                                 projects_folder.set(folder.clone());
                                 if let Err(e) = update_settings(Settings {
                                     projects_folder: folder,
+                                    proot_binary_dir: settings.proot_binary_dir.clone(),
+                                    proot_images_dir: proot,
+                                    proot_custom_command: settings.proot_custom_command.clone(),
                                     default_image_tag: Some(tag.clone()),
                                 })
                                 .await
@@ -701,11 +895,17 @@ fn RuntimeImagesTab() -> Element {
                                 default_image_tag
                                     .set(settings.default_image_tag.unwrap_or_default());
                                 projects_folder.set(settings.projects_folder);
+                                proot_binary_dir.set(settings.proot_binary_dir);
+                                proot_images_dir.set(settings.proot_images_dir);
+                        proot_custom_command.set(settings.proot_custom_command);
                             }
                         }
                     } else if let Ok(settings) = get_settings().await {
                         default_image_tag.set(settings.default_image_tag.unwrap_or_default());
                         projects_folder.set(settings.projects_folder);
+                        proot_binary_dir.set(settings.proot_binary_dir);
+                        proot_images_dir.set(settings.proot_images_dir);
+                        proot_custom_command.set(settings.proot_custom_command);
                     }
                     ready_tags.set(imgs);
                 }
@@ -802,11 +1002,17 @@ fn RuntimeImagesTab() -> Element {
 
     let handle_set_default = move |tag: String| {
         let folder = projects_folder().clone();
+        let binary_dir = proot_binary_dir().clone();
+        let proot = proot_images_dir().clone();
+        let custom_cmd = proot_custom_command().clone();
         spawn(async move {
             error.set(String::new());
             success.set(String::new());
             match update_settings(Settings {
                 projects_folder: folder,
+                proot_binary_dir: binary_dir,
+                proot_images_dir: proot,
+                proot_custom_command: custom_cmd.clone(),
                 default_image_tag: Some(tag.clone()),
             })
             .await
@@ -822,11 +1028,17 @@ fn RuntimeImagesTab() -> Element {
 
     let handle_unset_default = move |_| {
         let folder = projects_folder().clone();
+        let binary_dir = proot_binary_dir().clone();
+        let proot = proot_images_dir().clone();
+        let custom_cmd = proot_custom_command().clone();
         spawn(async move {
             error.set(String::new());
             success.set(String::new());
             match update_settings(Settings {
                 projects_folder: folder,
+                proot_binary_dir: binary_dir,
+                proot_images_dir: proot,
+                proot_custom_command: custom_cmd.clone(),
                 default_image_tag: None,
             })
             .await

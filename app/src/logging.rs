@@ -48,7 +48,7 @@ pub fn init() {
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .pretty()
-        .with_writer(std::io::stdout)
+        .with_writer(std::io::stdout) // TODO: console.log
         .with_target(true)
         .with_thread_ids(true)
         .with_thread_names(true)

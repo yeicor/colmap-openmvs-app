@@ -6,6 +6,9 @@ pub use config::{get_image_config, load_project_config, save_project_config};
 
 pub mod logging;
 
+mod line_reader;
+pub use line_reader::LineReader;
+
 mod project;
 pub use project::{
     add_project_image, batch_resize_images, clear_project_images, delete_project_image,
@@ -21,8 +24,9 @@ pub use settings::{get_settings, update_settings};
 mod runtimes_api;
 pub use runtimes_api::{
     cancel_task, delete_runtime_binary, download_runtime_version, get_available_runtime_versions,
-    get_runtime_info, get_task_info, list_available_image_tags, list_runtime_images, list_tasks,
-    prepare_runtime_image, remove_runtime_image, subscribe_task_events,
+    get_embedded_image_tag, get_runtime_info, get_task_info, list_available_image_tags,
+    list_runtime_images, list_tasks, prepare_runtime_image, remove_runtime_image,
+    subscribe_task_events,
 };
 
 pub mod runtimes;
