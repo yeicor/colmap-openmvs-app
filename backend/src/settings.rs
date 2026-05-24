@@ -224,28 +224,6 @@ pub(crate) fn default_proot_images_dir() -> String {
     }
 }
 
-/// Get the default PRoot invocation command for the current platform.
-///
-/// On Android the binary is `libproot.so` inside the native-lib dir. `libtalloc.so.2` is
-/// provided alongside it. Both the native-lib dir is prepended to `LD_LIBRARY_PATH` so
-/// the dynamic linker can find it when executing `libproot.so`.
-pub(crate) fn default_proot_custom_command() -> String {
-    #[cfg(target_os = "android")]
-    {
-        if let Some(jnilib_dir) = get_android_native_lib_dir() {
-            format!("LD_LIBRARY_PATH={} {}/libproot.so", jnilib_dir, jnilib_dir)
-        } else {
-            warn!("Could not detect Android JNI lib path for default_proot_custom_command");
-            String::new()
-        }
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        // On other platforms the binary is simply <binary_dir>/proot
-        format!("{}/proot", default_proot_binary_dir())
-    }
-}
-
 fn default_settings() -> Settings {
     // On Android, try to auto-detect the embedded image tag from jniLibs metadata.
     #[cfg(target_os = "android")]
@@ -257,7 +235,6 @@ fn default_settings() -> Settings {
         projects_folder: default_projects_folder(),
         proot_binary_dir: default_proot_binary_dir(),
         proot_images_dir: default_proot_images_dir(),
-        proot_custom_command: default_proot_custom_command(),
         default_image_tag,
     }
 }
@@ -308,11 +285,9 @@ fn load_settings_from_disk() -> Settings {
                             serde_json::Value::String(default_proot_images_dir());
                     }
                 }
-                // Always add proot_custom_command if missing (new field)
-                if value.get("proot_custom_command").is_none() {
-                    info!(path = %path.display(), "Adding missing proot_custom_command to settings");
-                    value["proot_custom_command"] =
-                        serde_json::Value::String(default_proot_custom_command());
+                // Remove proot_custom_command if it exists (migrating away from it)
+                if let Some(obj) = value.as_object_mut() {
+                    obj.remove("proot_custom_command");
                 }
                 match serde_json::from_value::<Settings>(value) {
                     Ok(settings) => {

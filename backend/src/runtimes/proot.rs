@@ -12,76 +12,15 @@ use tracing::{debug, error, info, warn};
 // PRoot binary detection
 // ---------------------------------------------------------------------------
 
-/// Get the PRoot command to use from `custom_command`.
-/// If `custom_command` is empty, returns `"proot"` (auto-detect).
-#[allow(dead_code)]
-fn get_proot_command(custom_command: &str) -> String {
-    if custom_command.is_empty() {
-        "proot".to_string()
-    } else {
-        custom_command
-            .split_whitespace()
-            .next()
-            .unwrap_or("proot")
-            .to_string()
-    }
-}
-
-/// Get environment variables and the binary path from a custom proot command string.
-///
-/// Tokens of the form `KEY=VALUE` where `KEY` consists entirely of ASCII
-/// alphanumeric characters and underscores are treated as environment-variable
-/// assignments.  The first token that does not match that pattern is taken as
-/// the binary path.
-///
-/// # Examples
-/// ```
-/// // "LD_LIBRARY_PATH=/a:/b /a/libproot.so"
-/// //   -> env = [("LD_LIBRARY_PATH", "/a:/b")], bin = "/a/libproot.so"
-/// ```
-fn get_proot_env_and_args(custom_command: &str) -> (Vec<(String, String)>, String) {
-    if custom_command.is_empty() {
-        return (vec![], "proot".to_string());
-    }
-
-    let mut env_vars: Vec<(String, String)> = vec![];
-    let mut proot_cmd = "proot".to_string();
-
-    for part in custom_command.split_whitespace() {
-        // If it looks like KEY=VALUE (key is all alnum+underscore), treat as env var
-        if let Some((key, value)) = part.split_once('=') {
-            if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                env_vars.push((key.to_string(), value.to_string()));
-                continue;
-            }
-        }
-        // Otherwise it's the binary path
-        proot_cmd = part.to_string();
-    }
-
-    (env_vars, proot_cmd)
-}
-
 /// Locate the proot binary using multiple fallback strategies.
 ///
 /// Strategy order:
-/// 0. Binary specified in `custom_command` (if the path exists on disk)
 /// 1. `libproot.so` in `runtime_dir` (Android APK embedded asset, *.so naming)
 /// 2. Plain `proot` in `runtime_dir` (runtime-downloaded binary)
 /// 3. Direct execution attempt (`proot --version`)
 /// 4. `which::which("proot")` (system PATH search)
-async fn find_proot_binary(runtime_dir: &Path, custom_command: &str) -> RuntimeResult<String> {
-    info!(runtime_dir = %runtime_dir.display(), "[debug]find_proot_binary: starting search");
-
-    // Strategy 0: Use the binary path from custom_command if it exists on disk
-    if !custom_command.is_empty() {
-        let (_, bin) = get_proot_env_and_args(custom_command);
-        if std::path::Path::new(&bin).exists() {
-            info!(bin = %bin, "find_proot_binary: using binary from custom_command");
-            return Ok(bin);
-        }
-        info!(bin = %bin, "find_proot_binary: custom_command binary does not exist on disk, continuing search");
-    }
+async fn find_proot_binary(runtime_dir: &Path) -> RuntimeResult<String> {
+    info!(runtime_dir = %runtime_dir.display(), "find_proot_binary: starting search");
 
     // Strategy 1: Look for 'libproot.so' in runtime_dir (Android APK asset, *.so naming)
     let embedded_proot = runtime_dir.join("libproot.so");
@@ -98,21 +37,21 @@ async fn find_proot_binary(runtime_dir: &Path, custom_command: &str) -> RuntimeR
     }
 
     // Strategy 3: Try direct execution (proot might be in system PATH)
-    info!("[DEBUG]find_proot_binary: attempting direct execution of 'proot --version'");
+    info!("find_proot_binary: attempting direct execution of 'proot --version'");
     if Command::new("proot")
         .arg("--version")
         .output()
         .await
         .is_ok()
     {
-        info!("[DEBUG]find_proot_binary: direct execution succeeded, 'proot' is in system PATH");
+        info!("find_proot_binary: direct execution succeeded, 'proot' is in system PATH");
         return Ok("proot".to_string());
     }
 
     // Strategy 4: Fall back to which (may be cached, least reliable)
-    info!("[DEBUG]find_proot_binary: attempting lookup via which::which()");
+    info!("find_proot_binary: attempting lookup via which::which()");
     if which::which("proot").is_ok() {
-        info!("[DEBUG]find_proot_binary: which::which() found proot");
+        info!("find_proot_binary: which::which() found proot");
         return Ok("proot".to_string());
     }
 
@@ -124,40 +63,21 @@ async fn find_proot_binary(runtime_dir: &Path, custom_command: &str) -> RuntimeR
         "find_proot_binary: all strategies failed to locate proot binary"
     );
     Err(anyhow::anyhow!(
-        "PRoot binary not found. Checked: custom_command={:?}, runtime_dir={}, system PATH. \
+        "PRoot binary not found. Checked: runtime_dir={}, system PATH. \
          Current PATH: {}. \
          Ensure PRoot is installed and accessible.",
-        custom_command,
         runtime_dir.display(),
         path_info
     ))
 }
 
-/// Set up a proot [`Command`] with the correct environment variables.
+/// Set up a proot [`Command`] with no special environment variables.
 ///
-/// When `custom_command` is non-empty its `KEY=VALUE` tokens are applied
-/// directly (they already encode `LD_LIBRARY_PATH` etc. on Android).
-/// Otherwise `LD_LIBRARY_PATH` is set to `runtime_dir` so that a downloaded
-/// `libtalloc.so` can be found at runtime.
-fn setup_proot_command(proot_bin: &str, runtime_dir: &Path, custom_command: &str) -> Command {
-    let mut cmd = Command::new(proot_bin);
-    info!(proot_bin = %proot_bin, runtime_dir = ?runtime_dir, "setup_proot_command: initializing");
-
-    if !custom_command.is_empty() {
-        // Apply env vars from custom_command (which already has LD_LIBRARY_PATH etc.)
-        let (env_vars, _) = get_proot_env_and_args(custom_command);
-        for (key, value) in env_vars {
-            info!(key = %key, value = %value, "setup_proot_command: applying env var from custom_command");
-            cmd.env(&key, &value);
-        }
-    } else {
-        // Default: set LD_LIBRARY_PATH to runtime_dir for libtalloc discovery
-        if let Some(lib_path_str) = runtime_dir.to_str() {
-            info!(lib_path = %lib_path_str, "setup_proot_command: setting LD_LIBRARY_PATH");
-            cmd.env("LD_LIBRARY_PATH", lib_path_str);
-        }
-    }
-
+/// With patchelf setting RPATH=$ORIGIN, libproot.so will automatically find
+/// libtalloc.so in the same directory. No special LD_LIBRARY_PATH setup needed.
+fn setup_proot_command(proot_bin: &str) -> Command {
+    let cmd = Command::new(proot_bin);
+    info!(proot_bin = %proot_bin, "setup_proot_command: initializing");
     cmd
 }
 
@@ -212,9 +132,6 @@ struct RootfsManifest {
     cmd: Option<Vec<String>>,
     #[serde(default)]
     working_dir: Option<String>,
-    /// Absolute directory paths that must exist in the skeleton.
-    #[serde(default)]
-    dirs: Vec<String>,
     /// Map from hash key (jniLibs filename) → file info.
     #[serde(default)]
     files: std::collections::HashMap<String, RootfsFileInfo>,
@@ -257,33 +174,26 @@ impl RootfsManifest {
 pub struct PRoot {
     pub runtime_dir: PathBuf,
     pub images_dir: PathBuf,
-    /// Custom PRoot command (e.g., `"proot"` or
-    /// `"LD_LIBRARY_PATH=/path /path/libproot.so"`).  When empty, the binary
-    /// is auto-detected.
-    pub custom_command: String,
 }
 
 impl PRoot {
-    /// Create a PRoot runtime with separate directories and custom command.
-    pub fn new(runtime_dir: PathBuf, images_dir: PathBuf, custom_command: String) -> Self {
+    /// Create a PRoot runtime with separate directories.
+    pub fn new(runtime_dir: PathBuf, images_dir: PathBuf) -> Self {
         PRoot {
             runtime_dir,
             images_dir,
-            custom_command,
         }
     }
-    pub fn new_default_images(runtime_dir: PathBuf, custom_command: String) -> Self {
+    pub fn new_default_images(runtime_dir: PathBuf) -> Self {
         Self::new(
             runtime_dir.clone(),
             runtime_dir.join("images"),
-            custom_command,
         )
     }
     pub fn new_simple(runtime_dir: PathBuf) -> Self {
         Self::new(
             runtime_dir.clone(),
             runtime_dir.join("images"),
-            String::new(),
         )
     }
 
@@ -716,30 +626,16 @@ impl PRoot {
             })
             .await;
 
-        let total = (manifest.dirs.len() + manifest.files.len() + manifest.symlinks.len()).max(1);
+        let total = (manifest.files.len() + manifest.symlinks.len()).max(1);
         let mut done = 0usize;
 
-        // ── Create /mnt/jni mount point ──────────────────────────────────
+        // ── Create /mnt/jni mount point ──────────────────
         tokio::fs::create_dir_all(rootfs_dir.join("mnt/jni"))
             .await
             .ok();
 
-        // ── Recreate directory tree ──────────────────────────────────────
-        for dir in &manifest.dirs {
-            let dest = rootfs_dir.join(dir.trim_start_matches('/'));
-            tokio::fs::create_dir_all(&dest).await.ok();
-            done += 1;
-            if done % 200 == 0 {
-                let _ = tx
-                    .send(colmap_openmvs_api::PrepareProgress::ExtractingLayer {
-                        layer: "Building rootfs skeleton".to_string(),
-                        progress: done as f32 / total as f32 * 0.4,
-                    })
-                    .await;
-            }
-        }
-
         // ── Create per-file symlinks: <rootfs>/<path> → /mnt/jni/librootfs-<hash>.so ──
+        // Directories are created on-demand as parent dirs of each file path.
         for (hash, file_info) in &manifest.files {
             let dest = rootfs_dir.join(file_info.path.trim_start_matches('/'));
             if let Some(parent) = dest.parent() {
@@ -761,7 +657,7 @@ impl PRoot {
                 let _ = tx
                     .send(colmap_openmvs_api::PrepareProgress::ExtractingLayer {
                         layer: "Building rootfs skeleton".to_string(),
-                        progress: 0.4 + done as f32 / total as f32 * 0.45,
+                        progress: done as f32 / total as f32 * 0.5,
                     })
                     .await;
             }
@@ -861,10 +757,10 @@ impl Runtime for PRoot {
 
     async fn version(&self) -> RuntimeResult<String> {
         info!("version: starting");
-        let proot_bin = find_proot_binary(&self.runtime_dir, &self.custom_command).await?;
-        info!(proot_bin = %proot_bin, "[debug]version: found proot binary");
+        let proot_bin = find_proot_binary(&self.runtime_dir).await?;
+        info!(proot_bin = %proot_bin, "version: found proot binary");
 
-        let mut cmd = setup_proot_command(&proot_bin, &self.runtime_dir, &self.custom_command);
+        let mut cmd = setup_proot_command(&proot_bin);
         info!(cmd = ?cmd, "[trace]version: executing proot --version");
         let output = cmd.arg("--version").output().await.map_err(|e| {
             error!(cmd = ?cmd, error = %e, "version: failed to execute proot --version");
@@ -884,11 +780,11 @@ impl Runtime for PRoot {
     async fn available_versions(&self) -> RuntimeResult<Vec<String>> {
         info!("available_versions: starting");
         // Try to use the installed proot version if available
-        match find_proot_binary(&self.runtime_dir, &self.custom_command).await {
+        match find_proot_binary(&self.runtime_dir).await {
             Ok(proot_bin) => {
                 info!(proot_bin = %proot_bin, "[debug]available_versions: found proot binary");
                 let mut cmd =
-                    setup_proot_command(&proot_bin, &self.runtime_dir, &self.custom_command);
+                    setup_proot_command(&proot_bin);
                 info!("[trace]available_versions: executing proot --version");
                 let output = cmd.arg("--version").output().await;
 
@@ -950,7 +846,7 @@ impl Runtime for PRoot {
         }
 
         // Check if proot is already available via any other strategy
-        if find_proot_binary(&self.runtime_dir, &self.custom_command)
+        if find_proot_binary(&self.runtime_dir, )
             .await
             .is_ok()
         {
@@ -1104,11 +1000,11 @@ impl Runtime for PRoot {
         info!(metadata = ?metadata, "[trace]run: metadata loaded");
 
         // Locate the proot binary
-        let proot_bin = find_proot_binary(&self.runtime_dir, &self.custom_command).await?;
+        let proot_bin = find_proot_binary(&self.runtime_dir).await?;
         info!(proot_bin = %proot_bin, "[debug]run: found proot binary");
 
         // Build the tokio async Command with proper environment setup
-        let mut cmd = setup_proot_command(&proot_bin, &self.runtime_dir, &self.custom_command);
+        let mut cmd = setup_proot_command(&proot_bin);
 
         for env_var in &metadata.env {
             if let Some((key, value)) = env_var.split_once('=') {
@@ -1285,7 +1181,7 @@ impl Runtime for PRoot {
 
         #[cfg(not(target_os = "android"))]
         {
-            let proot_bin = find_proot_binary(&self.runtime_dir, &self.custom_command).await?;
+            let proot_bin = find_proot_binary(&self.runtime_dir).await?;
             let runtime_proot = self.runtime_dir.join("proot");
 
             if proot_bin == runtime_proot.to_string_lossy().as_ref() {

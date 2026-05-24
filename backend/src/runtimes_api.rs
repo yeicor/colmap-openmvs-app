@@ -12,6 +12,13 @@ use tracing::warn;
 
 /// Return the current status of the PRoot runtime.
 pub async fn get_runtime_info() -> Result<RuntimeInfo> {
+    // On Android, ensure the embedded runtime environment is set up first.
+    // This is idempotent and safe to call multiple times.
+    #[cfg(target_os = "android")]
+    if let Err(e) = crate::android_startup::setup_android_runtime().await {
+        tracing::warn!(error = %e, "get_runtime_info: Android setup failed, continuing anyway");
+    }
+
     let rt = RuntimeFactory::proot().await;
 
     let (supported, unsupported_reason) = match rt.is_supported() {
@@ -55,6 +62,13 @@ pub async fn download_runtime_version(version: String) -> Result<()> {
 
 /// List all prepared container images stored on disk.
 pub async fn list_runtime_images() -> Result<Vec<PreparedImageInfo>> {
+    // On Android, ensure the embedded runtime environment is set up first.
+    // This is idempotent and safe to call multiple times.
+    #[cfg(target_os = "android")]
+    if let Err(e) = crate::android_startup::setup_android_runtime().await {
+        tracing::warn!(error = %e, "list_runtime_images: Android setup failed, continuing anyway");
+    }
+
     let rt = RuntimeFactory::proot().await;
     let images = rt
         .list_images()
@@ -214,6 +228,13 @@ async fn fetch_hub_image_tags() -> anyhow::Result<Vec<ImageTagInfo>> {
 /// entirely but an embedded tag is available, only the embedded tag is returned instead of
 /// propagating the error.
 pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
+    // On Android, ensure the embedded runtime environment is set up first.
+    // This is idempotent and safe to call multiple times.
+    #[cfg(target_os = "android")]
+    if let Err(e) = crate::android_startup::setup_android_runtime().await {
+        tracing::warn!(error = %e, "list_available_image_tags: Android setup failed, continuing anyway");
+    }
+
     // Probe for the embedded tag first (no-op on non-Android targets).
     let embedded_tag = crate::settings::read_embedded_image_tag_public().map(|name| ImageTagInfo {
         name,

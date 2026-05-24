@@ -648,6 +648,7 @@ dependencies = [
  "dioxus",
  "dioxus-free-icons",
  "dioxus-primitives",
+ "tokio",
  "tracing",
  "tracing-log",
  "tracing-subscriber",

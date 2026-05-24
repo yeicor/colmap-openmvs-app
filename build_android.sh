@@ -225,13 +225,12 @@ manifest = {
     "entrypoint": config.get("Entrypoint"),
     "cmd": config.get("Cmd"),
     "working_dir": "/",
-    "dirs": [],
     "files": {},
     "symlinks": {}
 }
 
 for dirpath, dirnames, filenames in os.walk(source, followlinks=False):
-    # Handle directories (and symlinks-to-dirs)
+    # Handle symlinks-to-dirs only (actual dirs are redundant; derived from file paths)
     for dname in list(dirnames):
         dir_full = os.path.join(dirpath, dname)
         rel = os.path.relpath(dir_full, source)
@@ -239,8 +238,6 @@ for dirpath, dirnames, filenames in os.walk(source, followlinks=False):
         if os.path.islink(dir_full):
             manifest["symlinks"][container_path] = os.readlink(dir_full)
             dirnames.remove(dname)
-        else:
-            manifest["dirs"].append(container_path)
 
     # Handle files (and symlinks-to-files)
     for filename in filenames:
@@ -299,6 +296,26 @@ done
 # manifest → librootfs-manifest.so (auto-included by AGP)
 cp "$CACHE_DIR/embedded_rootfs_manifest.json" "$JNILIB_DIR/librootfs-manifest.so"
 
+# ===== Patch libproot.so with patchelf =======================================
+echo ""
+echo "Patching libproot.so with patchelf to use local rpath"
+
+if ! command -v patchelf &>/dev/null; then
+    echo "ERROR: patchelf is required but not found in PATH" >&2
+    exit 1
+fi
+
+PROOT_SO="$JNILIB_DIR/libproot.so"
+if [ -f "$PROOT_SO" ]; then
+    echo "Setting RPATH in $PROOT_SO to look for dependencies in same directory"
+    patchelf --set-rpath '$ORIGIN' "$PROOT_SO"
+    echo "Changing the name of the $PROOT_SO dependency on libtalloc to just 'libtalloc.so'"
+    patchelf --replace-needed libtalloc.so.2 libtalloc.so "$PROOT_SO"
+    echo "Successfully patched libproot.so"
+else
+    echo "WARNING: $PROOT_SO not found, skipping patchelf"
+fi
+
 fi  # end SKIP_EMBED==0
 
 # =============================================================================
@@ -329,7 +346,7 @@ packaging_block = """    packaging {
             // Extract native libs to disk (extractNativeLibs = true).
             // Required so libproot.so is executable and all librootfs-*.so
             // payload files are accessible as real paths by the Rust runtime.
-            useLegacyPackaging = true
+            //useLegacyPackaging = true
         }
     }
 """

@@ -306,7 +306,6 @@ impl RuntimeFactory {
                 return PRoot::new(
                     binary_dir,
                     images_dir,
-                    crate::settings::default_proot_custom_command(),
                 );
             }
         };
@@ -320,7 +319,6 @@ impl RuntimeFactory {
         PRoot::new(
             binary_dir,
             images_dir,
-            settings.proot_custom_command.clone(),
         )
     }
 
@@ -328,6 +326,6 @@ impl RuntimeFactory {
     /// The images directory defaults to a subdirectory of the runtime directory.
     pub fn proot_with_dir(runtime_dir: PathBuf) -> PRoot {
         debug!(runtime_dir = %runtime_dir.display(), "Creating PRoot runtime with custom directory");
-        PRoot::new_default_images(runtime_dir, crate::settings::default_proot_custom_command())
+        PRoot::new_default_images(runtime_dir)
     }
 }

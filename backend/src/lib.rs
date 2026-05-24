@@ -9,6 +9,9 @@ pub mod logging;
 mod line_reader;
 pub use line_reader::LineReader;
 
+mod android_startup;
+pub use android_startup::setup_android_runtime;
+
 mod project;
 pub use project::{
     add_project_image, batch_resize_images, clear_project_images, delete_project_image,

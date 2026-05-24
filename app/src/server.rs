@@ -12,10 +12,35 @@ use colmap_openmvs_api::{
 };
 
 #[cfg(feature = "server")]
+use tracing::{info, warn};
+
+#[cfg(feature = "server")]
 use colmap_openmvs_backend as backend;
+
+// Initialize Android runtime environment on first server startup
+#[cfg(feature = "server")]
+static ANDROID_STARTUP: std::sync::OnceLock<std::sync::Arc<tokio::sync::Mutex<bool>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(feature = "server")]
+async fn ensure_android_startup() {
+    let started =
+        ANDROID_STARTUP.get_or_init(|| std::sync::Arc::new(tokio::sync::Mutex::new(false)));
+
+    let mut done = started.lock().await;
+    if !*done {
+        match backend::setup_android_runtime().await {
+            Ok(()) => info!("Android startup: completed successfully"),
+            Err(e) => warn!(error = %e, "Android startup: failed or skipped"),
+        }
+        *done = true;
+    }
+}
 
 #[get("/projects")]
 pub async fn get_projects() -> Result<Vec<Project>> {
+    #[cfg(feature = "server")]
+    ensure_android_startup().await;
     backend::get_projects().await
 }
 
@@ -89,6 +114,8 @@ pub async fn download_demo_images(project_name: String) -> Result<String> {
 
 #[get("/runtimes/proot/info")]
 pub async fn get_runtime_info() -> Result<RuntimeInfo> {
+    #[cfg(feature = "server")]
+    ensure_android_startup().await;
     backend::get_runtime_info().await
 }
 
@@ -109,6 +136,8 @@ pub async fn delete_runtime_binary() -> Result<()> {
 
 #[get("/runtimes/proot/images")]
 pub async fn list_runtime_images() -> Result<Vec<PreparedImageInfo>> {
+    #[cfg(feature = "server")]
+    ensure_android_startup().await;
     backend::list_runtime_images().await
 }
 
@@ -124,6 +153,8 @@ pub async fn remove_runtime_image(image_tag: String) -> Result<()> {
 
 #[get("/runtimes/proot/images/available-tags")]
 pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
+    #[cfg(feature = "server")]
+    ensure_android_startup().await;
     backend::list_available_image_tags().await
 }
 
