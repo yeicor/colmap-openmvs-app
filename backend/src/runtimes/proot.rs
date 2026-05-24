@@ -1020,16 +1020,9 @@ impl Runtime for PRoot {
         // Build the tokio async Command with proper environment setup
         let mut cmd = setup_proot_command(&proot_bin);
 
-        for env_var in &metadata.env {
-            if let Some((key, value)) = env_var.split_once('=') {
-                cmd.env(key, value);
-            }
-        }
-        cmd.env(
-            "PATH",
-            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        );
-        cmd.env("HOME", "/root");
+        // Clear all inherited environment variables from the parent process
+        // Only the container's environment will be used
+        cmd.env_clear();
 
         // On Android, bind the jniLibs directory for symlink resolution.
         // Symlinks now point directly to jniLibs, so we bind the parent directory.
@@ -1044,12 +1037,13 @@ impl Runtime for PRoot {
             }
         }
 
-        // Set PROOT_TMP_DIR for Android
+        // Set PROOT_TMP_DIR for Android (proot needs this)
         #[cfg(target_os = "android")]
         {
             let tmp_dir = self.images_dir.join(".proot-tmp");
             let _ = std::fs::create_dir_all(&tmp_dir);
             if let Some(tmp_str) = tmp_dir.to_str() {
+                // Only set this minimal env for proot itself, not the container
                 cmd.env("PROOT_TMP_DIR", tmp_str);
             }
         }
@@ -1088,20 +1082,17 @@ impl Runtime for PRoot {
         }
 
         info!(full_cmd = ?full_cmd, "[trace]run: full command");
-        // Wrap command with environment variable exports
-        if !metadata.env.is_empty() {
-            let mut env_exports = String::new();
-            for env_var in &metadata.env {
-                env_exports.push_str(&format!("export {}; ", env_var));
+
+        // Set environment variables directly on the command
+        for env_var in &metadata.env {
+            if let Some((key, value)) = env_var.split_once('=') {
+                cmd.env(key, value);
             }
-            let cmd_str = full_cmd.join(" ");
-            cmd.arg("/bin/sh")
-                .arg("-c")
-                .arg(format!("{}exec {}", env_exports, cmd_str));
-        } else {
-            for arg in &full_cmd {
-                cmd.arg(arg);
-            }
+        }
+
+        // Add the actual command to execute
+        for arg in &full_cmd {
+            cmd.arg(arg);
         }
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
