@@ -148,6 +148,22 @@ async fn get_tool_help(
     let mut stderr_reader = tokio::io::BufReader::new(stderr);
     stderr_reader.read_to_end(&mut stderr_output).await?;
 
+    // Wait for the process to finish and check exit code
+    let status = handle.wait().await?;
+
+    if !status.success() {
+        let code = status.code().unwrap_or(-1);
+        let stdout_str = String::from_utf8_lossy(&output);
+        let stderr_str = String::from_utf8_lossy(&stderr_output);
+        return Err(anyhow::anyhow!(
+            "{} --help failed with exit code {}\nstdout:\n{}\nstderr:\n{}",
+            tool,
+            code,
+            stdout_str,
+            stderr_str
+        ));
+    }
+
     let stdout_str = String::from_utf8_lossy(&output).to_string();
     let stderr_str = String::from_utf8_lossy(&stderr_output).to_string();
 
@@ -157,9 +173,6 @@ async fn get_tool_help(
     } else {
         stderr_str
     };
-
-    // Wait for the process to finish
-    let _ = handle.wait().await;
 
     Ok(combined)
 }

@@ -1098,8 +1098,7 @@ impl Runtime for PRoot {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        info!("[DEBUG]run: spawning process");
-        info!(proot_bin = %proot_bin, "[trace]run: final command details");
+        info!(proot_bin = %proot_bin, cmd = ?cmd, "[trace]run: final command details");
         let child = cmd
             .spawn()
             .map_err(|e| anyhow::anyhow!("Failed to spawn process: {}", e))?;
