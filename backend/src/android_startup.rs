@@ -130,6 +130,11 @@ pub async fn setup_android_runtime() -> anyhow::Result<()> {
         match tokio::fs::symlink(&symlink_target, &dest_path).await {
             Ok(()) => {
                 symlink_count += 1;
+                // If executable, chmod the symlink to 0755
+                if file_info.executable {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = tokio::fs::set_permissions(&dest_path, std::fs::Permissions::from_mode(0o755)).await;
+                }
                 if symlink_count % 100 == 0 {
                     debug!(
                         count = symlink_count,

@@ -185,16 +185,10 @@ impl PRoot {
         }
     }
     pub fn new_default_images(runtime_dir: PathBuf) -> Self {
-        Self::new(
-            runtime_dir.clone(),
-            runtime_dir.join("images"),
-        )
+        Self::new(runtime_dir.clone(), runtime_dir.join("images"))
     }
     pub fn new_simple(runtime_dir: PathBuf) -> Self {
-        Self::new(
-            runtime_dir.clone(),
-            runtime_dir.join("images"),
-        )
+        Self::new(runtime_dir.clone(), runtime_dir.join("images"))
     }
 
     // -----------------------------------------------------------------------
@@ -800,8 +794,7 @@ impl Runtime for PRoot {
         match find_proot_binary(&self.runtime_dir).await {
             Ok(proot_bin) => {
                 info!(proot_bin = %proot_bin, "[debug]available_versions: found proot binary");
-                let mut cmd =
-                    setup_proot_command(&proot_bin);
+                let mut cmd = setup_proot_command(&proot_bin);
                 info!("[trace]available_versions: executing proot --version");
                 let output = cmd.arg("--version").output().await;
 
@@ -863,10 +856,7 @@ impl Runtime for PRoot {
         }
 
         // Check if proot is already available via any other strategy
-        if find_proot_binary(&self.runtime_dir, )
-            .await
-            .is_ok()
-        {
+        if find_proot_binary(&self.runtime_dir).await.is_ok() {
             info!("[DEBUG]download: proot is already available");
             return Ok(());
         }
@@ -1041,11 +1031,27 @@ impl Runtime for PRoot {
         );
         cmd.env("HOME", "/root");
 
-        // Bind the native-lib dir (runtime_dir) to /mnt/jni inside the
-        // container so symlinks in the skeleton can resolve to real files.
+        // On Android, bind the jniLibs directory for symlink resolution.
+        // Symlinks now point directly to jniLibs, so we bind the parent directory.
+        #[cfg(target_os = "android")]
         if self.embedded_rootfs_manifest_path().is_some() {
-            cmd.arg("-b")
-                .arg(format!("{}:/mnt/jni", self.runtime_dir.display()));
+            if let Some(jnilib_dir) = crate::settings::get_android_native_lib_dir() {
+                if let Some(parent) = std::path::Path::new(&jnilib_dir).parent() {
+                    if let Some(parent_str) = parent.to_str() {
+                        cmd.arg("-b").arg(format!("{}:{}", parent_str, parent_str));
+                    }
+                }
+            }
+        }
+
+        // Set PROOT_TMP_DIR for Android
+        #[cfg(target_os = "android")]
+        {
+            let tmp_dir = self.images_dir.join(".proot-tmp");
+            let _ = std::fs::create_dir_all(&tmp_dir);
+            if let Some(tmp_str) = tmp_dir.to_str() {
+                cmd.env("PROOT_TMP_DIR", tmp_str);
+            }
         }
 
         info!(
