@@ -548,10 +548,14 @@ impl PRoot {
         let mut size = 0u64;
         if let Ok(mut entries) = tokio::fs::read_dir(path).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
+                // Use metadata() which follows symlinks automatically
                 if let Ok(meta) = entry.metadata().await {
                     if meta.is_dir() {
+                        // Recurse into directory
                         size += Box::pin(self.calculate_dir_size_async(&entry.path())).await?;
                     } else {
+                        // Count file size (works for both regular files and symlink targets)
+                        // metadata() follows symlinks, so we get the real file size
                         size += meta.len();
                     }
                 }
@@ -716,6 +720,19 @@ impl PRoot {
         }
         if meta_tag.ends_with(&format!("/{}", image)) {
             return true;
+        }
+        false
+    }
+
+    /// Check if the given image tag is the embedded image on Android.
+    /// Returns false on non-Android targets.
+    #[cfg_attr(not(target_os = "android"), allow(unused_variables))]
+    fn is_embedded_image(&self, image_tag: &str) -> bool {
+        #[cfg(target_os = "android")]
+        {
+            if let Some(embedded_tag) = crate::settings::read_embedded_image_tag_public() {
+                return image_tag == embedded_tag;
+            }
         }
         false
     }
@@ -944,6 +961,13 @@ impl Runtime for PRoot {
     }
 
     async fn remove(&self, image_tag: &str) -> RuntimeResult<()> {
+        // Prevent removal of embedded image on Android
+        if self.is_embedded_image(image_tag) {
+            return Err(anyhow::anyhow!(
+                "Cannot remove embedded image on Android.                  Embedded rootfs is part of the application and                  can only be updated by installing a new version of the app."
+            ));
+        }
+
         let tag_dir_name = image_tag.replace([':', '/'], "_");
         let image_dir = self.images_dir.join(&tag_dir_name);
 

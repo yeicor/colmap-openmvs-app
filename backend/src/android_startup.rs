@@ -3,6 +3,11 @@
 //! On Android, the APK's native libraries (jniLibs) are extracted to disk by the system.
 //! This module sets up symbolic links and directory structure for the PRoot runtime,
 //! using the embedded manifest to guide the setup.
+//!
+//! Key strategy:
+//! - Symlinks point directly to actual jniLibs paths (e.g., /data/app/.../lib/arm64/librootfs-XXX.so)
+//! - This allows size calculation to correctly follow symlinks and get actual file sizes
+//! - The embedded image is always available and cannot be removed on Android
 
 use std::collections::HashMap;
 
@@ -16,7 +21,8 @@ use tracing::{debug, info, warn};
 /// This function:
 /// 1. Reads the embedded rootfs manifest from jniLibs
 /// 2. Creates the target rootfs directory structure in the configured images_dir
-/// 3. Sets up symbolic links from rootfs paths to the actual librootfs-*.so files in jniLibs
+/// 3. Sets up symbolic links from rootfs paths to actual librootfs-*.so files in jniLibs
+///    (Symlinks point to real paths like /data/app/.../lib/arm64/librootfs-XXX.so)
 /// 4. Recreates symlinks for directory/file aliases from the manifest
 ///
 /// This is idempotent and safe to call multiple times.
@@ -35,6 +41,15 @@ pub async fn setup_android_runtime() -> anyhow::Result<()> {
         binary_dir = %binary_dir.display(),
         images_dir = %images_dir.display(),
         "Android startup: using directories"
+    );
+
+    // Get the actual jniLibs directory for symlink targets
+    let jnilib_dir = crate::settings::get_android_native_lib_dir()
+        .ok_or_else(|| anyhow::anyhow!("Failed to determine jniLibs directory"))?;
+
+    debug!(
+        jnilib_dir = %jnilib_dir,
+        "Android startup: determined jniLibs directory for symlink targets"
     );
 
     // Try to read the embedded manifest
@@ -94,14 +109,9 @@ pub async fn setup_android_runtime() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create rootfs directory: {}", e))?;
 
-    // Create /mnt/jni mount point (where jniLibs files are bound)
-    tokio::fs::create_dir_all(rootfs_dir.join("mnt/jni"))
-        .await
-        .ok();
+    debug!("Android startup: created rootfs directory");
 
-    debug!("Android startup: created /mnt/jni mount point");
-
-    // Set up file symlinks
+    // Set up file symlinks pointing to actual jniLibs paths
     let mut symlink_count = 0;
     for (hash, file_info) in &manifest.files {
         let dest_path = rootfs_dir.join(file_info.path.trim_start_matches('/'));
@@ -114,8 +124,9 @@ pub async fn setup_android_runtime() -> anyhow::Result<()> {
         // Remove any existing file/symlink at this location
         let _ = tokio::fs::remove_file(&dest_path).await;
 
-        // Create symlink to the librootfs-*.so file in jniLibs
-        let symlink_target = format!("/mnt/jni/librootfs-{}.so", hash);
+        // Create symlink to the actual librootfs-*.so file in jniLibs
+        // This allows size calculation to follow symlinks and get real file sizes
+        let symlink_target = format!("{}/librootfs-{}.so", jnilib_dir, hash);
         match tokio::fs::symlink(&symlink_target, &dest_path).await {
             Ok(()) => {
                 symlink_count += 1;

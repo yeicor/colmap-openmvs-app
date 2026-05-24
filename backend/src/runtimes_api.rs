@@ -223,10 +223,14 @@ async fn fetch_hub_image_tags() -> anyhow::Result<Vec<ImageTagInfo>> {
 /// List available tags for the colmap-openmvs image from Docker Hub, sorted by date.
 /// Filters out platform-specific tags (-latest, -arm64-, -amd64-) to show only multi-arch tags.
 ///
-/// On Android the embedded image tag (from `libembedded_metadata.so`) is prepended to the list
-/// so it always appears first, even when Docker Hub is unreachable. If the Docker Hub fetch fails
-/// entirely but an embedded tag is available, only the embedded tag is returned instead of
-/// propagating the error.
+/// On Android, this function returns an empty list with an explanatory message.
+/// Due to platform security features, no downloadable images are available. You must update
+/// the entire application to change the rootfs. Ready images always show the embedded image.
+///
+/// On non-Android platforms, the embedded image tag (if available) is prepended to the list
+/// so it always appears first, even when Docker Hub is unreachable. If the Docker Hub fetch
+/// fails entirely but an embedded tag is available, only the embedded tag is returned instead
+/// of propagating the error.
 pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
     // On Android, ensure the embedded runtime environment is set up first.
     // This is idempotent and safe to call multiple times.
@@ -235,7 +239,15 @@ pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
         tracing::warn!(error = %e, "list_available_image_tags: Android setup failed, continuing anyway");
     }
 
-    // Probe for the embedded tag first (no-op on non-Android targets).
+    // On Android, no downloadable images are available due to platform security features.
+    // You must update the entire application to change the rootfs.
+    #[cfg(target_os = "android")]
+    {
+        tracing::info!("list_available_image_tags: returning empty list on Android (no downloadable images available)");
+        return Ok(Vec::new());
+    }
+
+    // On non-Android targets, probe for the embedded tag first.
     let embedded_tag = crate::settings::read_embedded_image_tag_public().map(|name| ImageTagInfo {
         name,
         build_date: None,
