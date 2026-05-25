@@ -27,7 +27,7 @@ tracing-subscriber = { workspace = true }
 tracing-log = { workspace = true }
 
 [features]
-default = []
+default = ["web"]
 
 # Client target features
 web = ["dioxus/web"]

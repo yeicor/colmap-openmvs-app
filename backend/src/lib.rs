@@ -4,8 +4,6 @@
 mod config;
 pub use config::{get_image_config, load_project_config, save_project_config};
 
-pub mod logging;
-
 mod line_reader;
 pub use line_reader::LineReader;
 

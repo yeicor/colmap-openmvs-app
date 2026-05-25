@@ -114,7 +114,7 @@ async fn run_pipeline_task(
     }
     debug!(args = ?args, "Container arguments prepared");
 
-    let mut handle = rt.run(&image_tag, &args, &mounts).await.map_err(|e| {
+    let mut handle = rt.run(&image_tag, &args, &mounts, &[]).await.map_err(|e| {
         error!(error = %e, "Failed to start pipeline container");
         anyhow::anyhow!("Failed to start pipeline container: {}", e)
     })?;

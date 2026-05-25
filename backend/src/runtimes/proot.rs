@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 // ---------------------------------------------------------------------------
 // PRoot binary detection
@@ -63,9 +63,7 @@ async fn find_proot_binary(runtime_dir: &Path) -> RuntimeResult<String> {
         "find_proot_binary: all strategies failed to locate proot binary"
     );
     Err(anyhow::anyhow!(
-        "PRoot binary not found. Checked: runtime_dir={}, system PATH. \
-         Current PATH: {}. \
-         Ensure PRoot is installed and accessible.",
+        "PRoot binary not found. Checked: runtime_dir={}, system PATH. Current PATH: {}. Ensure PRoot is installed and accessible.",
         runtime_dir.display(),
         path_info
     ))
@@ -119,7 +117,7 @@ struct RootfsFileInfo {
 /// every symlink so the app can reconstruct the directory skeleton at
 /// first launch without copying any file data.
 #[derive(Debug, Deserialize)]
-struct RootfsManifest {
+pub(crate) struct RootfsManifest {
     #[serde(default)]
     tag: String,
     #[serde(default)]
@@ -264,11 +262,11 @@ impl PRoot {
     }
 
     async fn fetch_android_latest_version(&self) -> RuntimeResult<Vec<String>> {
-        info!("[DEBUG]fetch_android_latest_version: starting");
+        debug!("fetch_android_latest_version: starting");
         let client = reqwest::Client::new();
         let url = "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/";
 
-        info!(url = %url, "[debug]fetch_android_latest_version: fetching from Termux repository");
+        debug!(url = %url, "fetch_android_latest_version: fetching from Termux repository");
         let html = client
             .get(url)
             .header("User-Agent", "colmap-openmvs-app")
@@ -289,7 +287,7 @@ impl PRoot {
                 if let Some(end) = line[start..].find("_aarch64.deb") {
                     let filename = &line[start..start + end];
                     if let Some(version_part) = filename.strip_prefix("proot_") {
-                        info!(version = %version_part, "[trace]fetch_android_latest_version: found version");
+                        trace!(version = %version_part, "fetch_android_latest_version: found version");
                         versions.push(version_part.to_string());
                     }
                 }
@@ -300,9 +298,9 @@ impl PRoot {
         versions.reverse();
         versions.dedup();
 
-        info!(versions = ?versions, "[debug]fetch_android_latest_version: parsed versions");
+        debug!(versions = ?versions, "fetch_android_latest_version: parsed versions");
         if versions.is_empty() {
-            info!("fetch_android_latest_version: no versions found in Termux repository");
+            debug!("fetch_android_latest_version: no versions found in Termux repository");
         }
         versions
             .into_iter()
@@ -312,11 +310,11 @@ impl PRoot {
     }
 
     async fn fetch_libtalloc_version(&self) -> RuntimeResult<Vec<String>> {
-        info!("[DEBUG]fetch_libtalloc_version: starting");
+        debug!("fetch_libtalloc_version: starting");
         let client = reqwest::Client::new();
         let url = "https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/";
 
-        info!(url = %url, "[debug]fetch_libtalloc_version: fetching from Termux repository");
+        debug!(url = %url, "fetch_libtalloc_version: fetching from Termux repository");
         let html = client
             .get(url)
             .header("User-Agent", "colmap-openmvs-app")
@@ -337,7 +335,7 @@ impl PRoot {
                 if let Some(end) = line[start..].find("_aarch64.deb") {
                     let filename = &line[start..start + end];
                     if let Some(version_part) = filename.strip_prefix("libtalloc_") {
-                        info!("[trace]fetch_libtalloc_version: found version");
+                        trace!("fetch_libtalloc_version: found version");
                         versions.push(version_part.to_string());
                     }
                 }
@@ -348,9 +346,9 @@ impl PRoot {
         versions.reverse();
         versions.dedup();
 
-        info!(versions = ?versions, "[debug]fetch_libtalloc_version: parsed versions");
+        debug!(versions = ?versions, "fetch_libtalloc_version: parsed versions");
         if versions.is_empty() {
-            info!("fetch_libtalloc_version: no versions found in Termux repository");
+            debug!("fetch_libtalloc_version: no versions found in Termux repository");
         }
         versions
             .into_iter()
@@ -379,9 +377,12 @@ impl PRoot {
         let latest_cleaned = latest.trim_start_matches('v');
         let latest_base = latest_cleaned.split('-').next().unwrap_or(latest_cleaned);
 
-        eprintln!(
-            "[DEBUG] download_linux: Requested: {}, base: {}, latest: {}, latest_base: {}",
-            version, base_version, latest, latest_base
+        debug!(
+            requested = %version,
+            base = %base_version,
+            latest = %latest,
+            latest_base = %latest_base,
+            "download_linux: version comparison"
         );
 
         // Allow download if the base version matches (ignoring 'v' prefix and suffixes)
@@ -427,7 +428,7 @@ impl PRoot {
     async fn download_android(&self, version: &str) -> RuntimeResult<()> {
         info!(version = %version, "download_android: starting Android PRoot download");
 
-        info!(runtime_dir = %self.runtime_dir.display(), "[debug]download_android: creating runtime directory");
+        debug!(runtime_dir = %self.runtime_dir.display(), "download_android: creating runtime directory");
         tokio::fs::create_dir_all(&self.runtime_dir)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create runtime directory: {}", e))?;
@@ -439,16 +440,16 @@ impl PRoot {
         info!(version = %version, url = %proot_url, "download_android: downloading PRoot");
         self.download_and_extract_deb(&client, &proot_url, "proot")
             .await?;
-        info!("[DEBUG]download_android: PRoot download completed");
+        debug!("download_android: PRoot download completed");
 
         // Fetch the latest libtalloc version from the correct directory
-        info!("download_android: fetching libtalloc version");
+        debug!("download_android: fetching libtalloc version");
         let libtalloc_versions = self.fetch_libtalloc_version().await?;
         let libtalloc_version = libtalloc_versions
             .first()
             .ok_or_else(|| anyhow::anyhow!("No libtalloc version found"))?
             .clone();
-        info!(libtalloc_version = %libtalloc_version, "[debug]download_android: libtalloc version fetched");
+        debug!(libtalloc_version = %libtalloc_version, "download_android: libtalloc version fetched");
 
         let libtalloc_base_url =
             "https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/";
@@ -459,7 +460,7 @@ impl PRoot {
         info!(libtalloc_version = %libtalloc_version, url = %talloc_url, "download_android: downloading libtalloc");
         self.download_and_extract_deb(&client, &talloc_url, "libtalloc")
             .await?;
-        info!("[DEBUG]download_android: libtalloc download completed");
+        debug!("download_android: libtalloc download completed");
 
         info!(version = %version, "download_android: Android installation completed");
         Ok(())
@@ -485,17 +486,17 @@ impl PRoot {
                 anyhow::anyhow!("Failed to download {} (HTTP error): {}", package_name, e)
             })?;
 
-        info!(package_name = %package_name, "[debug]download_and_extract_deb: response received");
+        debug!(package_name = %package_name, "download_and_extract_deb: response received");
         let bytes = response
             .bytes()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", package_name, e))?
             .to_vec();
 
-        info!(package_name = %package_name, size = bytes.len(), "[debug]download_and_extract_deb: bytes received");
+        debug!(package_name = %package_name, size = bytes.len(), "download_and_extract_deb: bytes received");
 
         // Validate that we received a valid ar archive (deb file)
-        info!(package_name = %package_name, "[trace]download_and_extract_deb: validating ar archive format");
+        trace!(package_name = %package_name, "download_and_extract_deb: validating ar archive format");
         if bytes.len() < 8 || &bytes[0..8] != b"!<arch>\n" {
             error!(package_name = %package_name, size = bytes.len(), url = %url, "download_and_extract_deb: invalid deb archive format");
             return Err(anyhow::anyhow!(
@@ -504,13 +505,13 @@ impl PRoot {
                 url
             ));
         }
-        info!(package_name = %package_name, "[debug]download_and_extract_deb: archive format is valid");
+        debug!(package_name = %package_name, "download_and_extract_deb: archive format is valid");
 
         // All subsequent work is CPU/disk-bound — offload to a blocking thread.
         let install_dir = self.runtime_dir.clone();
         let pkg = package_name.to_string();
 
-        info!(package_name = %package_name, "[trace]download_and_extract_deb: offloading to blocking task");
+        trace!(package_name = %package_name, "download_and_extract_deb: offloading to blocking task");
         tokio::task::spawn_blocking(move || {
             let temp_deb = install_dir.join(format!("{}.deb", pkg));
             let temp_data = install_dir.join("data.tar.xz");
@@ -524,7 +525,7 @@ impl PRoot {
             std::fs::remove_file(&temp_deb).ok();
             std::fs::remove_file(&temp_data).ok();
 
-            info!(package_name = %pkg, "[debug]download_and_extract_deb: extraction completed");
+            debug!(package_name = %pkg, "download_and_extract_deb: extraction completed");
             Ok::<_, anyhow::Error>(())
         })
         .await
@@ -759,9 +760,7 @@ impl Runtime for PRoot {
             ("x86_64", "linux") => Ok(()),
             ("aarch64", "android") | ("x86_64", "android") => Ok(()),
             (arch, os) => Err(anyhow::anyhow!(
-                "PRoot cannot be automatically installed on this platform \
-                 (arch: {arch}, os: {os}). Supported: x86_64-linux, *-android. \
-                 Install proot manually and add it to $PATH to use it on other platforms."
+                "PRoot cannot be automatically installed on this platform \\n                 (arch: {arch}, os: {os}). Supported: x86_64-linux, *-android. \\n                 Install proot manually and add it to $PATH to use it on other platforms."
             )),
         }
     }
@@ -772,7 +771,7 @@ impl Runtime for PRoot {
         info!(proot_bin = %proot_bin, "version: found proot binary");
 
         let mut cmd = setup_proot_command(&proot_bin);
-        info!(cmd = ?cmd, "[trace]version: executing proot --version");
+        trace!(cmd = ?cmd, "version: executing proot --version");
         let output = cmd.arg("--version").output().await.map_err(|e| {
             error!(cmd = ?cmd, error = %e, "version: failed to execute proot --version");
             anyhow::anyhow!("Failed to execute proot to get version: {}", e)
@@ -782,7 +781,7 @@ impl Runtime for PRoot {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        info!(output = %combined, "[debug]version: proot output");
+        debug!(output = %combined, "version: proot output");
         let version = Self::parse_proot_version(&combined)?;
         info!(version = %version, "version: parsed version");
         Ok(version)
@@ -793,15 +792,15 @@ impl Runtime for PRoot {
         // Try to use the installed proot version if available
         match find_proot_binary(&self.runtime_dir).await {
             Ok(proot_bin) => {
-                info!(proot_bin = %proot_bin, "[debug]available_versions: found proot binary");
+                debug!(proot_bin = %proot_bin, "available_versions: found proot binary");
                 let mut cmd = setup_proot_command(&proot_bin);
-                info!("[trace]available_versions: executing proot --version");
+                trace!("available_versions: executing proot --version");
                 let output = cmd.arg("--version").output().await;
 
                 let output = match output {
                     Ok(o) => Some(o),
                     Err(_) if cfg!(target_os = "android") => {
-                        info!("[DEBUG]available_versions: trying shell workaround on Android");
+                        debug!("available_versions: trying shell workaround on Android");
                         Command::new("/system/bin/sh")
                             .arg("-c")
                             .arg(format!("{} --version", proot_bin))
@@ -818,7 +817,7 @@ impl Runtime for PRoot {
                         String::from_utf8_lossy(&output.stdout),
                         String::from_utf8_lossy(&output.stderr)
                     );
-                    info!(output = %combined, "[debug]available_versions: proot output");
+                    debug!(output = %combined, "available_versions: proot output");
                     if let Ok(v) = Self::parse_proot_version(&combined) {
                         info!(version = %v, "available_versions: returning installed version");
                         return Ok(vec![v]);
@@ -826,11 +825,11 @@ impl Runtime for PRoot {
                 }
             }
             Err(_) => {
-                info!("[DEBUG]available_versions: proot not found, fetching from repository");
+                debug!("available_versions: proot not found, fetching from repository");
             }
         }
 
-        info!(arch = %std::env::consts::ARCH, os = %std::env::consts::OS, "[debug]available_versions: fetching from repository");
+        debug!(arch = %std::env::consts::ARCH, os = %std::env::consts::OS, "available_versions: fetching from repository");
         match (std::env::consts::ARCH, std::env::consts::OS) {
             ("x86_64", "linux") => self.fetch_linux_versions().await,
             ("aarch64", "android") | ("x86_64", "android") => {
@@ -857,11 +856,11 @@ impl Runtime for PRoot {
 
         // Check if proot is already available via any other strategy
         if find_proot_binary(&self.runtime_dir).await.is_ok() {
-            info!("[DEBUG]download: proot is already available");
+            debug!("download: proot is already available");
             return Ok(());
         }
 
-        info!(arch = %std::env::consts::ARCH, os = %std::env::consts::OS, "[debug]download: platform info");
+        debug!(arch = %std::env::consts::ARCH, os = %std::env::consts::OS, "download: platform info");
         match (std::env::consts::ARCH, std::env::consts::OS) {
             ("x86_64", "linux") => self.download_linux(version).await,
             ("aarch64", "android") | ("x86_64", "android") => self.download_android(version).await,
@@ -974,6 +973,7 @@ impl Runtime for PRoot {
         image: &str,
         args: &[String],
         mounts: &[Mount],
+        env_vars: &[(&str, &str)],
     ) -> RuntimeResult<ProcessHandle> {
         info!(image = %image, args_len = args.len(), mounts_len = mounts.len(), "run: starting container");
 
@@ -981,19 +981,19 @@ impl Runtime for PRoot {
         let image_dir = self.images_dir.join(&tag_dir_name);
         let rootfs_dir = image_dir.join("rootfs");
 
-        info!(runtime_dir = %self.runtime_dir.display(), "[debug]run: runtime directory");
-        info!(rootfs_dir = %rootfs_dir.display(), "[debug]run: checking if rootfs exists");
+        debug!(runtime_dir = %self.runtime_dir.display(), "run: runtime directory");
+        debug!(rootfs_dir = %rootfs_dir.display(), "run: checking if rootfs exists");
         if !rootfs_dir.exists() {
             return Err(anyhow::anyhow!(
                 "Image not prepared: {}. Call prepare() first.",
                 image
             ));
         }
-        info!("[DEBUG]run: rootfs exists");
+        debug!("run: rootfs exists");
 
         // Load metadata
         let metadata_path = image_dir.join("metadata.json");
-        info!(metadata_path = %metadata_path.display(), "[debug]run: loading metadata");
+        debug!(metadata_path = %metadata_path.display(), "run: loading metadata");
         let metadata: ImageMetadata = if metadata_path.exists() {
             let content = tokio::fs::read_to_string(&metadata_path)
                 .await
@@ -1001,7 +1001,7 @@ impl Runtime for PRoot {
             serde_json::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("Failed to deserialize metadata: {}", e))?
         } else {
-            info!("[DEBUG]run: metadata file not found, using defaults");
+            warn!("run: metadata file not found, using defaults");
             ImageMetadata {
                 tag: String::new(),
                 build_date: None,
@@ -1011,11 +1011,11 @@ impl Runtime for PRoot {
                 working_dir: Some("/".to_string()),
             }
         };
-        info!(metadata = ?metadata, "[trace]run: metadata loaded");
+        trace!(metadata = ?metadata, "run: metadata loaded");
 
         // Locate the proot binary
         let proot_bin = find_proot_binary(&self.runtime_dir).await?;
-        info!(proot_bin = %proot_bin, "[debug]run: found proot binary");
+        debug!(proot_bin = %proot_bin, "run: found proot binary");
 
         // Build the tokio async Command with proper environment setup
         let mut cmd = setup_proot_command(&proot_bin);
@@ -1029,11 +1029,7 @@ impl Runtime for PRoot {
         #[cfg(target_os = "android")]
         if self.embedded_rootfs_manifest_path().is_some() {
             if let Some(jnilib_dir) = crate::settings::get_android_native_lib_dir() {
-                if let Some(parent) = std::path::Path::new(&jnilib_dir).parent() {
-                    if let Some(parent_str) = parent.to_str() {
-                        cmd.arg("-b").arg(format!("{}:{}", parent_str, parent_str));
-                    }
-                }
+                cmd.arg("-b").arg(jnilib_dir);
             }
         }
 
@@ -1048,10 +1044,19 @@ impl Runtime for PRoot {
             }
         }
 
-        info!(
-            mounts_len = mounts.len(),
-            "[trace]run: adding mount bindings"
-        );
+        // Set PROOT_LOADER for Android (required for proot to work)
+        #[cfg(target_os = "android")]
+        {
+            if let Some(loader_path) = crate::settings::get_android_native_lib_dir()
+                .map(|lib_dir| std::path::PathBuf::from(lib_dir).join("libloader.so"))
+            {
+                if let Some(loader_str) = loader_path.to_str() {
+                    cmd.env("PROOT_LOADER", loader_str);
+                }
+            }
+        }
+
+        trace!(mounts_len = mounts.len(), "run: adding mount bindings");
         for mount in mounts {
             cmd.arg("-b").arg(format!(
                 "{}:{}",
@@ -1065,11 +1070,14 @@ impl Runtime for PRoot {
             cmd.arg("-w").arg(workdir);
         }
 
-        // Compose entrypoint + cmd + user args
-        let mut full_cmd: Vec<String> = Vec::new();
+        // Extract environment variables from entrypoint if it uses env -i pattern
+        let mut actual_entrypoint: Vec<String> = Vec::new();
         if let Some(ep) = &metadata.entrypoint {
-            full_cmd.extend(ep.clone());
+            actual_entrypoint.extend(ep.clone());
         }
+
+        // Compose entrypoint + cmd + user args
+        let mut full_cmd: Vec<String> = actual_entrypoint;
         // Follow Docker semantics: if the caller provides explicit args, they
         // *replace* the image's default CMD entirely.  Only fall back to CMD
         // when no args are supplied.
@@ -1081,13 +1089,31 @@ impl Runtime for PRoot {
             full_cmd.extend(args.iter().cloned());
         }
 
-        info!(full_cmd = ?full_cmd, "[trace]run: full command");
+        trace!(full_cmd = ?full_cmd, "run: full command");
 
         // Set environment variables directly on the command
+        // First, add the image's default environment variables
         for env_var in &metadata.env {
             if let Some((key, value)) = env_var.split_once('=') {
                 cmd.env(key, value);
             }
+        }
+
+        // Then, add environment variables extracted from entrypoint if present
+        if let Some(ep) = &metadata.entrypoint {
+            if ep.len() >= 2 && ep[0] == "env" && ep[1] == "-i" {
+                for arg in &ep[2..] {
+                    if let Some((key, value)) = arg.split_once('=') {
+                        cmd.env(key, value);
+                    }
+                }
+            }
+        }
+
+        // Finally, add any extra environment variables passed by the caller
+        // These will override image defaults and entrypoint vars if there are conflicts
+        for (key, value) in env_vars {
+            cmd.env(key, value);
         }
 
         // Add the actual command to execute
@@ -1098,7 +1124,7 @@ impl Runtime for PRoot {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        info!(proot_bin = %proot_bin, cmd = ?cmd, "[trace]run: final command details");
+        trace!(proot_bin = %proot_bin, cmd = ?cmd, "run: final command details");
         let child = cmd
             .spawn()
             .map_err(|e| anyhow::anyhow!("Failed to spawn process: {}", e))?;
@@ -1194,8 +1220,7 @@ impl Runtime for PRoot {
         #[cfg(target_os = "android")]
         {
             return Err(anyhow::anyhow!(
-                "Cannot delete the embedded proot binary — \
-                 it is part of the application package and managed by Android."
+                "Cannot delete the embedded proot binary — \\n                 it is part of the application package and managed by Android."
             ));
         }
 
@@ -1216,8 +1241,7 @@ impl Runtime for PRoot {
             }
 
             Err(anyhow::anyhow!(
-                "Cannot delete system proot binary at {}. \
-                 Only binaries downloaded into the runtime directory can be deleted.",
+                "Cannot delete system proot binary at {}. \\n                 Only binaries downloaded into the runtime directory can be deleted.",
                 proot_bin
             ))
         }
@@ -1230,9 +1254,9 @@ impl Runtime for PRoot {
 
 /// Extract `data.tar.xz` from a Debian `.ar` archive.
 fn extract_from_ar_sync(ar_path: &Path, output_path: &Path) -> RuntimeResult<()> {
-    info!(ar_path = %ar_path.display(), output_path = %output_path.display(), "[debug]extract_from_ar_sync: starting extraction");
+    debug!(ar_path = %ar_path.display(), output_path = %output_path.display(), "extract_from_ar_sync: starting extraction");
 
-    info!("[trace]extract_from_ar_sync: reading ar file");
+    trace!("extract_from_ar_sync: reading ar file");
     let file_data =
         std::fs::read(ar_path).map_err(|e| anyhow::anyhow!("Failed to read ar file: {}", e))?;
 
@@ -1247,7 +1271,7 @@ fn extract_from_ar_sync(ar_path: &Path, output_path: &Path) -> RuntimeResult<()>
         ));
     }
 
-    info!("[trace]extract_from_ar_sync: validating ar magic signature");
+    trace!("extract_from_ar_sync: validating ar magic signature");
     if &file_data[0..8] != b"!<arch>\n" {
         let magic = String::from_utf8_lossy(&file_data[0..8]);
         error!(magic = %magic, "extract_from_ar_sync: invalid ar magic signature");
@@ -1256,10 +1280,10 @@ fn extract_from_ar_sync(ar_path: &Path, output_path: &Path) -> RuntimeResult<()>
             magic
         ));
     }
-    info!("[DEBUG]extract_from_ar_sync: ar magic signature is valid");
+    debug!("extract_from_ar_sync: ar magic signature is valid");
 
     let mut offset = 8usize;
-    info!("[trace]extract_from_ar_sync: parsing ar members");
+    trace!("extract_from_ar_sync: parsing ar members");
     while offset + 60 <= file_data.len() {
         let name = String::from_utf8_lossy(&file_data[offset..offset + 16])
             .trim_end()
@@ -1273,13 +1297,13 @@ fn extract_from_ar_sync(ar_path: &Path, output_path: &Path) -> RuntimeResult<()>
             .parse()
             .map_err(|_| anyhow::anyhow!("Invalid ar member size"))?;
 
-        info!(member_name = %name, member_size = size, "[trace]extract_from_ar_sync: found ar member");
+        trace!(member_name = %name, member_size = size, "extract_from_ar_sync: found ar member");
         if name.contains("data.tar") {
-            info!(member_name = %name, member_size = size, "[debug]extract_from_ar_sync: data.tar found");
+            debug!(member_name = %name, member_size = size, "extract_from_ar_sync: data.tar found");
             let data_start = offset + 60;
             std::fs::write(output_path, &file_data[data_start..data_start + size])
                 .map_err(|e| anyhow::anyhow!("Failed to write extracted data: {}", e))?;
-            info!(output_path = %output_path.display(), bytes_written = size, "[debug]extract_from_ar_sync: extracted successfully");
+            debug!(output_path = %output_path.display(), bytes_written = size, "extract_from_ar_sync: extracted successfully");
             return Ok(());
         }
 
@@ -1307,7 +1331,7 @@ fn extract_tar_xz_sync(
     tar_xz_path: &Path,
     package_name: &str,
 ) -> RuntimeResult<()> {
-    info!(images_dir = %images_dir.display(), tar_xz_path = %tar_xz_path.display(), package_name = %package_name, "[debug]extract_tar_xz_sync: starting extraction");
+    debug!(images_dir = %images_dir.display(), tar_xz_path = %tar_xz_path.display(), package_name = %package_name, "extract_tar_xz_sync: starting extraction");
 
     let tar_xz_data =
         std::fs::read(tar_xz_path).map_err(|e| anyhow::anyhow!("Failed to read tar.xz: {}", e))?;
@@ -1324,7 +1348,7 @@ fn extract_tar_xz_sync(
 
     let mut archive = tar::Archive::new(&tar_data[..]);
 
-    info!("[trace]extract_tar_xz_sync: iterating through tar entries");
+    trace!("extract_tar_xz_sync: iterating through tar entries");
     for entry in archive
         .entries()
         .map_err(|e| anyhow::anyhow!("Failed to read tar: {}", e))?
@@ -1335,10 +1359,10 @@ fn extract_tar_xz_sync(
             .map_err(|e| anyhow::anyhow!("Failed to get entry path: {}", e))?;
         let path_str = path.to_string_lossy().into_owned();
 
-        info!(entry_path = %path_str, package_name = %package_name, "[trace]extract_tar_xz_sync: processing tar entry");
+        trace!(entry_path = %path_str, package_name = %package_name, "extract_tar_xz_sync: processing tar entry");
         if package_name == "proot" && path_str.ends_with("usr/bin/proot") {
             let dest = images_dir.join("proot");
-            info!(dest = %dest.display(), "[debug]extract_tar_xz_sync: extracting proot binary");
+            debug!(dest = %dest.display(), "extract_tar_xz_sync: extracting proot binary");
             entry
                 .unpack(&dest)
                 .map_err(|e| anyhow::anyhow!("Failed to unpack proot: {}", e))?;
@@ -1348,17 +1372,17 @@ fn extract_tar_xz_sync(
                 use std::os::unix::fs::PermissionsExt;
                 let perms = std::fs::Permissions::from_mode(0o755);
                 std::fs::set_permissions(&dest, perms).ok();
-                info!(dest = %dest.display(), "[debug]extract_tar_xz_sync: set executable permissions on proot");
+                debug!(dest = %dest.display(), "extract_tar_xz_sync: set executable permissions on proot");
             }
         } else if package_name == "libtalloc" && path_str.contains("usr/lib/libtalloc") {
             let dest = images_dir.join(path.file_name().unwrap_or_default());
-            info!(dest = %dest.display(), "[debug]extract_tar_xz_sync: extracting libtalloc library");
+            debug!(dest = %dest.display(), "extract_tar_xz_sync: extracting libtalloc library");
             entry
                 .unpack(&dest)
                 .map_err(|e| anyhow::anyhow!("Failed to unpack library: {}", e))?;
         }
     }
 
-    info!(package_name = %package_name, "[debug]extract_tar_xz_sync: extraction completed");
+    debug!(package_name = %package_name, "extract_tar_xz_sync: extraction completed");
     Ok(())
 }

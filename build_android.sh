@@ -123,16 +123,23 @@ if [ ! -f "$CACHE_DIR/proot" ]; then
     fi
     echo "Downloading proot: $PROOT_DEB_NAME"
     curl -fsSL -o "$CACHE_DIR/proot.deb" "${PROOT_BASE_URL}${PROOT_DEB_NAME}"
-    echo "Extracting proot binary..."
+    echo "Extracting proot binary and loader..."
     WORK_DIR="$(mktemp -d)"
     cp "$CACHE_DIR/proot.deb" "$WORK_DIR/pkg.deb"
     (
         cd "$WORK_DIR"
         ar x pkg.deb
         DATA_TAR="$(ls data.tar.* 2>/dev/null | head -1)"
-        tar --wildcards -xf "$DATA_TAR" "*/bin/proot"
-        PROOT_BIN="$(find . -name proot -path "*/bin/proot" | head -1)"
+        tar --wildcards -xf "$DATA_TAR" "*/bin/proot" "*/libexec/proot/loader"
+        PROOT_BIN="$(find . -path "*/bin/proot" | head -1)"
         cp -L "$PROOT_BIN" "$CACHE_DIR/proot"
+        LOADER="$(find . -path "*/libexec/proot/loader" | head -1)"
+        if [ -n "$LOADER" ]; then
+            cp -L "$LOADER" "$CACHE_DIR/loader"
+            echo "loader extracted → $CACHE_DIR/loader"
+        else
+            echo "WARNING: loader not found in proot deb"
+        fi
     )
     rm -rf "$WORK_DIR"
     chmod +x "$CACHE_DIR/proot"
@@ -263,8 +270,7 @@ manifest_path = os.path.join(cache_dir, "embedded_rootfs_manifest.json")
 with open(manifest_path, "w") as f:
     json.dump(manifest, f, separators=(",", ":"))
 
-print(f"Manifest written: {len(manifest['files'])} files, "
-      f"{len(manifest['dirs'])} dirs, {len(manifest['symlinks'])} symlinks")
+print(f"Manifest written: {len(manifest['files'])} files, {len(manifest['symlinks'])} symlinks")
 PYEOF
 
     docker rm "$CONTAINER_ID"
@@ -282,6 +288,9 @@ mkdir -p "$JNILIB_DIR"
 # proot executable → libproot.so (auto-included by AGP as a native lib)
 cp "$CACHE_DIR/proot" "$JNILIB_DIR/libproot.so"
 chmod +x "$JNILIB_DIR/libproot.so"
+# proot loader → libloader.so (auto-included by AGP as a native lib)
+cp "$CACHE_DIR/loader" "$JNILIB_DIR/libloader.so"
+chmod +x "$JNILIB_DIR/libloader.so"
 # libtalloc - copy all libtalloc.so* files with original names (already *.so)
 for f in "$CACHE_DIR"/libtalloc.so*; do
     [ -f "$f" ] && cp "$f" "$JNILIB_DIR/$(basename "$f")"

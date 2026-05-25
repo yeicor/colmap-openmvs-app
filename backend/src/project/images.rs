@@ -279,7 +279,7 @@ pub async fn download_demo_images(project_name: String) -> dioxus::Result<String
         });
         while let Some(event) = rx.next().await {
             let is_error = matches!(event, DemoProgressEvent::Error { .. });
-            debug!(error = is_error, "Processing demo progress event");
+            debug!(event = ?event, "Processing demo progress event");
             crate::task_registry::publish_event(
                 &task_id_clone,
                 colmap_openmvs_api::TaskEvent::DemoProgress(event),

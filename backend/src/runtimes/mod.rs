@@ -233,7 +233,7 @@ impl PreparedImage {
 /// });
 /// rt.prepare("library/alpine:3.18", tx).await?;
 ///
-/// let mut handle = rt.run("library/alpine:3.18", &["echo".into(), "hello".into()]).await?;
+/// let mut handle = rt.run("library/alpine:3.18", &["echo".into(), "hello".into()], &[], &[]).await?;
 /// handle.wait().await?;
 /// # Ok(())
 /// # }
@@ -267,11 +267,15 @@ pub trait Runtime: Send + Sync {
     ///
     /// The returned [`ProcessHandle`] owns the child process; dropping it will
     /// kill the process (via `tokio::process::Child` drop semantics).
+    ///
+    /// Extra environment variables can be passed via `env_vars` and will be merged
+    /// with the image's default environment variables.
     async fn run(
         &self,
         image: &str,
         args: &[String],
         mounts: &[Mount],
+        env_vars: &[(&str, &str)],
     ) -> RuntimeResult<ProcessHandle>;
 
     /// List all images that have been prepared and are ready to run.
@@ -303,10 +307,7 @@ impl RuntimeFactory {
                     images_dir = %images_dir.display(),
                     "Failed to load settings, using default PRoot directories"
                 );
-                return PRoot::new(
-                    binary_dir,
-                    images_dir,
-                );
+                return PRoot::new(binary_dir, images_dir);
             }
         };
         let binary_dir: PathBuf = settings.proot_binary_dir.into();
@@ -316,10 +317,7 @@ impl RuntimeFactory {
             images_dir = %images_dir.display(),
             "Creating PRoot runtime with configured directories"
         );
-        PRoot::new(
-            binary_dir,
-            images_dir,
-        )
+        PRoot::new(binary_dir, images_dir)
     }
 
     /// Create a [`PRoot`] runtime with a custom binary directory.

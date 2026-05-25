@@ -5,9 +5,7 @@
 
 use dioxus::prelude::*;
 use tracing::info;
-
 pub mod components;
-pub mod logging;
 pub mod mycomponents;
 pub mod server;
 pub mod views;
@@ -28,7 +26,7 @@ pub enum Route {
 
 #[component]
 pub fn App() -> Element {
-    #[cfg(debug_assertions)] // Inject Eruda console for debugging
+    #[cfg(debug_assertions)]
     let _ = dioxus::document::eval(
         r#"
         if (typeof eruda === 'undefined') {
@@ -53,9 +51,9 @@ pub fn App() -> Element {
 }
 
 fn main() {
-    // Initialize structured logging
-    logging::init();
-    info!("🚀 Application starting");
-
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", "info,colmap_openmvs_backend=trace");
+    }
+    info!("Starting colmap-openmvs-app client");
     dioxus::launch(App);
 }
