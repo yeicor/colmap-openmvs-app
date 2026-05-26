@@ -24,6 +24,7 @@ pub struct ImageConfig {
 
 /// OCI image manifest v2 schema
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct OciImageManifest {
     #[serde(rename = "schemaVersion")]
     pub schema_version: u32,
@@ -35,6 +36,7 @@ pub struct OciImageManifest {
 
 /// OCI image index for multi-platform images
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct OciImageIndex {
     #[serde(rename = "schemaVersion")]
     pub schema_version: u32,
@@ -45,6 +47,7 @@ pub struct OciImageIndex {
 
 /// Entry in an OCI image index
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct IndexEntry {
     pub digest: String,
     #[serde(rename = "mediaType")]
@@ -55,6 +58,7 @@ pub struct IndexEntry {
 
 /// Platform specification
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct Platform {
     pub os: String,
     pub architecture: String,
@@ -64,6 +68,7 @@ pub struct Platform {
 
 /// Descriptor for an OCI object (layer, config, etc.)
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct Descriptor {
     #[serde(rename = "mediaType")]
     pub media_type: String,

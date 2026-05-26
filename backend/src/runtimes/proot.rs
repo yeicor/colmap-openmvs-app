@@ -102,6 +102,7 @@ pub(crate) struct ImageMetadata {
 
 /// Entry in the embedded rootfs manifest for a single regular file.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct RootfsFileInfo {
     path: String,
     #[serde(default)]
@@ -683,6 +684,8 @@ impl PRoot {
         }
 
         // ── Write metadata ───────────────────────────────────────────────
+        #[allow(unused_assignments)]
+        let _ = done; // done is only used for progress reporting in the above loops
         let metadata = ImageMetadata {
             tag: image_tag.to_string(),
             ..manifest.into_image_metadata()

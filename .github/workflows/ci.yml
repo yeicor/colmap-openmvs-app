@@ -57,6 +57,9 @@ jobs:
           - os: ubuntu-latest
             target: wasm32-unknown-unknown
             build-type: web
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+            build-type: android
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -67,11 +70,34 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config libglib2.0-dev libgtk-3-dev
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            lld
+      - if: runner.build-type == 'android' #SDK + NDK
+        shell: bash
+        run: |
+          wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
+          unzip cmdline-tools.zip -d $HOME/cmdline-tools
+          yes | $HOME/cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$HOME/Android/Sdk "cmdline-tools;latest" "platforms;android-34" "build-tools;34.0.0" "ndk;30.0.14904198" "cmake;4.1.2"
+          echo "ANDROID_HOME=$HOME/Android/Sdk" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/30.0.14904198" >> $GITHUB_ENV
+          echo "PATH=$PATH:$HOME/Android/Sdk/cmake/4.1.2/bin:$HOME/Android/Sdk/ndk/30.0.14904198" >> $GITHUB_ENV
       - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
       - shell: bash
-        run: $HOME/.dx/bin/dx build --verbose --release --target ${{ matrix.target }} --${{ matrix.build-type }}
+        if: runner.build-type != 'android'
+        run: $HOME/.dx/bin/dx build --release --target ${{ matrix.target }} --${{ matrix.build-type }}
+      - shell: bash
+        if: runner.build-type == 'android'
+        run: ./build_android.sh --release
       - uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.build-type }}-${{ matrix.target }}

@@ -6,7 +6,7 @@ use tracing::{debug, info, trace, warn};
 #[cfg(target_os = "windows")]
 mod platform {
     use super::*;
-    use std::ptr;
+    use std::ffi::c_void;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
@@ -32,10 +32,14 @@ mod platform {
         for &pid in &pids_to_kill {
             trace!(pid = pid, "Terminating process");
             unsafe {
-                let handle = OpenProcess(PROCESS_TERMINATE, false, pid as u32);
-                if handle != HANDLE(0) {
-                    let _ = TerminateProcess(handle, 1);
-                    let _ = CloseHandle(handle);
+                match OpenProcess(PROCESS_TERMINATE, false, pid as u32) {
+                    Ok(handle) => {
+                        if !handle.is_invalid() {
+                            let _ = TerminateProcess(handle, 1);
+                            let _ = CloseHandle(handle);
+                        }
+                    }
+                    Err(_) => trace!(pid = pid, "Failed to open process"),
                 }
             }
         }
@@ -46,32 +50,40 @@ mod platform {
     fn collect_children(parent_pid: i32, pids: &mut HashSet<i32>) {
         pids.insert(parent_pid);
         unsafe {
-            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-            if snapshot == HANDLE(0) {
-                return;
-            }
-            let mut entry = PROCESSENTRY32W {
-                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
-                ..Default::default()
-            };
-            if Process32FirstW(snapshot, &mut entry).as_bool() {
-                loop {
-                    let pid = entry.th32ProcessID as i32;
-                    let ppid = entry.th32ParentProcessID as i32;
-                    if ppid == parent_pid && !pids.contains(&pid) {
-                        trace!(
-                            parent_pid = parent_pid,
-                            child_pid = pid,
-                            "Found child process (Windows)"
-                        );
-                        collect_children(pid, pids);
+            match CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) {
+                Ok(snapshot) => {
+                    if snapshot.is_invalid() {
+                        return;
                     }
-                    if !Process32NextW(snapshot, &mut entry).as_bool() {
-                        break;
-                    }
+                    let result = (|| {
+                        let mut pids_ref = pids;
+                        let mut entry = PROCESSENTRY32W {
+                            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                            ..Default::default()
+                        };
+                        if Process32FirstW(snapshot, &mut entry).as_bool() {
+                            loop {
+                                let pid = entry.th32ProcessID as i32;
+                                let ppid = entry.th32ParentProcessID as i32;
+                                if ppid == parent_pid && !pids_ref.contains(&pid) {
+                                    trace!(
+                                        parent_pid = parent_pid,
+                                        child_pid = pid,
+                                        "Found child process (Windows)"
+                                    );
+                                    collect_children(pid, pids_ref);
+                                }
+                                if !Process32NextW(snapshot, &mut entry).as_bool() {
+                                    break;
+                                }
+                            }
+                        }
+                        Ok(())
+                    })();
+                    let _ = CloseHandle(snapshot);
                 }
+                Err(_) => trace!("Failed to create toolhelp snapshot"),
             }
-            let _ = CloseHandle(snapshot);
         }
     }
 }

@@ -231,6 +231,7 @@ async fn fetch_hub_image_tags() -> anyhow::Result<Vec<ImageTagInfo>> {
 /// so it always appears first, even when Docker Hub is unreachable. If the Docker Hub fetch
 /// fails entirely but an embedded tag is available, only the embedded tag is returned instead
 /// of propagating the error.
+#[cfg_attr(target_os = "android", allow(unreachable_code))]
 pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
     // On Android, ensure the embedded runtime environment is set up first.
     // This is idempotent and safe to call multiple times.
@@ -244,7 +245,7 @@ pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
     #[cfg(target_os = "android")]
     {
         tracing::info!("list_available_image_tags: returning empty list on Android (no downloadable images available)");
-        return Ok(Vec::new());
+        return Err(anyhow::anyhow!("No downloadable images available on Android (due to platform security features); update the entire application to change the rootfs.").into());
     }
 
     // On non-Android targets, probe for the embedded tag first.
