@@ -29,6 +29,11 @@ async fn ensure_android_startup() {
 
     let mut done = started.lock().await;
     if !*done {
+        // First repair any invalid settings paths from a previous app install
+        if let Err(e) = backend::repair_android_settings().await {
+            warn!(error = %e, "Android startup: settings repair failed or skipped");
+        }
+        // Then set up the runtime with the repaired/validated settings
         match backend::setup_android_runtime().await {
             Ok(()) => info!("Android startup: completed successfully"),
             Err(e) => warn!(error = %e, "Android startup: failed or skipped"),
@@ -161,6 +166,11 @@ pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
 #[get("/runtimes/proot/images/embedded-tag")]
 pub async fn get_embedded_image_tag() -> Result<Option<String>> {
     backend::get_embedded_image_tag().await
+}
+
+#[post("/repair-android-settings")]
+pub async fn repair_android_settings() -> Result<String> {
+    backend::repair_android_settings().await
 }
 
 // ---------------------------------------------------------------------------

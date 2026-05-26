@@ -1,32 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-# build_android.sh — Build the Android APK with embedded proot + rootfs.
-#
-# Usage:
-#   ./build_android.sh [--release] [--image TAG] [--skip-dx] [--skip-embed]
-#
-# Environment overrides (defaults shown):
-#   ANDROID_HOME     ~/Projects/AndroidSdk
-#   ANDROID_NDK_HOME $ANDROID_HOME/ndk/30.0.14904198
-#   DOCKER_IMAGE     yeicor/colmap-openmvs:latest
-#   BUILD_MODE       debug  (or "release")
-#   TARGET_ARCH      aarch64-linux-android
-#   ARCH_ABI         arm64-v8a
-#
-# What it does:
-#   1. Run `dx build --android` (compiles Rust + generates gradle project).
-#   2. Download proot and libtalloc for aarch64 from Termux APT repos.
-#   3. Pull the Docker image for linux/arm64, export & compress its rootfs.
-#   4. Embed all assets as *.so files in the gradle project's jniLibs dir:
-#        - proot binary         → libproot.so
-#        - rootfs content files → librootfs-<hash>.so
-#        - rootfs manifest JSON → librootfs-manifest.so
-#        - libtalloc            → libtalloc.so.2 (already *.so, unchanged)
-#      All *.so files are auto-included by AGP — no custom merge task needed.
-#   5. Patch the generated build.gradle.kts (app module) to set
-#        useLegacyPackaging = true  (so *.so files are extracted to disk).
-#   6. Patch AndroidManifest.xml for extractNativeLibs=true.
-#   7. Re-run `./gradlew assemble<Mode>` to produce the final APK.
+# build_android.sh — Build the Android APK with embedded proot + rootfs
+# (to avoid the "security" feature that blocks exec from writeable app data dirs on Android 10+)
 # =============================================================================
 set -euo pipefail
 

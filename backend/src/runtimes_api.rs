@@ -2,6 +2,7 @@
 
 use crate::runtimes::{prepare_progress_channel, Runtime, RuntimeFactory};
 use crate::task_registry::TASK_REGISTRY;
+use crate::AndroidSettingsValidation;
 use colmap_openmvs_api::{
     ImageTagInfo, PrepareProgress, PreparedImageInfo, RuntimeInfo, TaskEvent, TaskInfo, TaskKind,
 };
@@ -333,4 +334,54 @@ pub async fn subscribe_task_events(task_id: String) -> Result<ServerEvents<TaskE
         Box::new(std::io::Error::other(e.to_string()))
     });
     Ok(ServerEvents::from_stream(stream))
+}
+
+// ---------------------------------------------------------------------------
+// Android settings repair
+// ---------------------------------------------------------------------------
+
+/// Repair invalid Android settings paths and re-trigger runtime setup.
+/// Returns the task ID immediately; subscribe with `subscribe_task_events`.
+/// On non-Android platforms, this completes immediately without doing anything.
+pub async fn repair_android_settings() -> Result<String> {
+    let task_id = {
+        let mut registry = TASK_REGISTRY.lock().unwrap();
+        registry.create_task(TaskKind::AndroidSettingsRepair, "system".to_string())
+    };
+
+    let task_id_clone = task_id.clone();
+    tokio::spawn(async move {
+        crate::task_registry::publish_event(
+            &task_id_clone,
+            TaskEvent::Log("Starting Android settings validation and repair...".to_string()),
+        );
+
+        match repair_android_settings_impl().await {
+            Ok(_string) => {
+                crate::task_registry::publish_event(
+                    &task_id_clone,
+                    TaskEvent::Log("Android settings repair completed successfully.".to_string()),
+                );
+                crate::task_registry::publish_event(&task_id_clone, TaskEvent::Completed);
+            }
+            Err(e) => {
+                let error_msg = format!("Android settings repair failed: {}", e);
+                crate::task_registry::publish_event(
+                    &task_id_clone,
+                    TaskEvent::Log(error_msg.clone()),
+                );
+                crate::task_registry::publish_event(&task_id_clone, TaskEvent::Failed(error_msg));
+            }
+        }
+    });
+
+    Ok(task_id)
+}
+
+/// Repair invalid Android settings paths and trigger runtime setup.
+/// This is a no-op on non-Android platforms.
+pub async fn repair_android_settings_impl() -> anyhow::Result<()> {
+    let _changed = AndroidSettingsValidation::repair_paths().await?;
+    tracing::info!(changed = _changed, "Android settings repair completed");
+    Ok(())
 }

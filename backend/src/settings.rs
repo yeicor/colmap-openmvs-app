@@ -168,7 +168,7 @@ pub fn read_embedded_image_tag_public() -> Option<String> {
 // ─── Platform defaults ────────────────────────────────────────────────────────
 
 /// Directory for the PRoot binary itself (non-modifiable on Android, embedded in JNI libs).
-pub(crate) fn default_proot_binary_dir() -> String {
+pub fn default_proot_binary_dir() -> String {
     #[cfg(target_os = "android")]
     {
         // On Android, libproot.so lives in the extracted native-lib directory.
@@ -198,7 +198,7 @@ pub(crate) fn default_proot_binary_dir() -> String {
 }
 
 /// Directory for large PRoot runtime images (user configurable, but on Android defaults to app files).
-pub(crate) fn default_proot_images_dir() -> String {
+pub fn default_proot_images_dir() -> String {
     if cfg!(target_os = "android") {
         "/data/data/com.github.yeicor.colmap_openmvs_app/files/proot-images".to_string()
     } else if cfg!(target_os = "ios") {

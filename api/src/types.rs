@@ -212,6 +212,7 @@ pub enum TaskKind {
     BatchResize,
     RunPipeline,
     DryRunPipeline,
+    AndroidSettingsRepair,
 }
 
 /// Status of a pipeline stage as reported by the `::group` marker
@@ -262,6 +263,8 @@ pub enum TaskEvent {
     DemoProgress(DemoProgressEvent),
     /// Progress during batch image resize
     ResizeProgress(ResizeProgressEvent),
+    /// A generic log message from a task
+    Log(String),
     /// A log line from the pipeline
     PipelineLog {
         /// Pipeline stage index (0-based)

@@ -10,7 +10,7 @@ pub mod mycomponents;
 pub mod server;
 pub mod views;
 
-pub use views::{Project, Projects, ProjectsSidebar, SettingsView};
+pub use views::{Project, Projects, ProjectsSidebar, SettingsView, StartupTasks};
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -22,6 +22,8 @@ pub enum Route {
         SettingsView {},
         #[route("/project/:name")]
         Project { name: String },
+    #[route("/startup")]
+    StartupTasks {},
 }
 
 #[component]

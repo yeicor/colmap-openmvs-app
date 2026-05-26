@@ -10,6 +10,9 @@ pub use line_reader::LineReader;
 mod android_startup;
 pub use android_startup::setup_android_runtime;
 
+mod android_settings_validation;
+pub use android_settings_validation::AndroidSettingsValidation;
+
 mod project;
 pub use project::{
     add_project_image, batch_resize_images, clear_project_images, delete_project_image,
@@ -27,7 +30,7 @@ pub use runtimes_api::{
     cancel_task, delete_runtime_binary, download_runtime_version, get_available_runtime_versions,
     get_embedded_image_tag, get_runtime_info, get_task_info, list_available_image_tags,
     list_runtime_images, list_tasks, prepare_runtime_image, remove_runtime_image,
-    subscribe_task_events,
+    repair_android_settings, subscribe_task_events,
 };
 
 pub mod runtimes;
