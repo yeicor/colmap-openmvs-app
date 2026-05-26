@@ -170,6 +170,10 @@ pub fn publish_event(task_id: &str, event: TaskEvent) {
 /// Build an async stream that replays a task's event history and then streams
 /// live events until a terminal event (`Completed` or `Failed`) is emitted.
 ///
+/// This function includes a keep-alive mechanism to prevent HTTP connection timeouts
+/// on mobile browsers. A heartbeat log event is sent every 2-3 seconds if no real events
+/// are received, keeping the stream alive.
+///
 /// This function is safe to call from multiple clients simultaneously.
 pub fn create_event_stream(
     task_id: &str,
@@ -180,6 +184,10 @@ pub fn create_event_stream(
 
     tokio::spawn(async move {
         let mut cursor = 0usize;
+        let keep_alive_interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        let mut keep_alive = keep_alive_interval;
+        let mut last_event_time = std::time::Instant::now();
+
         loop {
             // Mark the current seq as "seen" so changed() only triggers for NEW events.
             rx.borrow_and_update();
@@ -197,6 +205,7 @@ pub fn create_event_stream(
                 if tx.unbounded_send(Ok(event)).is_err() {
                     return; // Client disconnected
                 }
+                last_event_time = std::time::Instant::now();
                 if terminal {
                     is_terminal = true;
                     break;
@@ -207,9 +216,24 @@ pub fn create_event_stream(
                 break;
             }
 
-            // Wait for the next event (or registry shutdown).
-            if rx.changed().await.is_err() {
-                break;
+            // Race between waiting for new events and sending keep-alive heartbeats
+            tokio::select! {
+                _ = rx.changed() => {
+                    // New event is available
+                    continue;
+                }
+                _ = keep_alive.tick() => {
+                    // Send a keep-alive heartbeat to prevent connection timeout
+                    // (especially important for mobile browsers)
+                    let msg = format!("[Keep-alive: stream active at {}]",
+                        std::time::Instant::now()
+                            .duration_since(last_event_time)
+                            .as_secs());
+                    let heartbeat = TaskEvent::Log(msg);
+                    if tx.unbounded_send(Ok(heartbeat)).is_err() {
+                        return; // Client disconnected
+                    }
+                }
             }
         }
     });

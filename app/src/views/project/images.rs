@@ -103,8 +103,6 @@ pub fn ImagesTab(project_name: String) -> Element {
                             if let Ok(mut stream) =
                                 crate::server::subscribe_task_events(task_id.clone()).await
                             {
-                                let mut total_files = 0usize;
-                                let mut total_bytes = 0u64;
                                 while let Some(Ok(event)) = stream.recv().await {
                                     match event {
                                         TaskEvent::DemoProgress(
@@ -126,36 +124,65 @@ pub fn ImagesTab(project_name: String) -> Element {
                                                 ..
                                             },
                                         ) => {
-                                            total_files = f;
-                                            total_bytes = b;
-                                            info_message.set(Some(format!(
-                                                "Extracting… ({} files, {:.1} MB)",
-                                                f,
-                                                b as f64 / 1e6
-                                            )));
-                                        }
-                                        TaskEvent::Completed
-                                        | TaskEvent::DemoProgress(DemoProgressEvent::Error {
-                                            ..
-                                        }) => {
-                                            info_message.set(Some(format!(
-                                                "Demo ready ({} images, {:.1} MB).",
-                                                total_files,
-                                                total_bytes as f64 / 1e6
-                                            )));
-                                            demo_loading.set(false);
-                                            if let Ok(paths) =
-                                                crate::server::get_project_images(pn.clone()).await
-                                            {
-                                                image_paths.set(paths);
+                                            // Only update if we have meaningful data (files > 0)
+                                            if f > 0 {
+                                                info_message.set(Some(format!(
+                                                    "Extracting… ({} files, {:.1} MB)",
+                                                    f,
+                                                    b as f64 / 1e6
+                                                )));
                                             }
+                                        }
+                                        TaskEvent::DemoProgress(DemoProgressEvent::Error {
+                                            message,
+                                        }) => {
+                                            error_message.set(Some(message));
+                                            demo_loading.set(false);
                                             let k = format!("demo_{pn}").replace('\'', "_");
                                             let _ = eval(&format!(
                                                 "try{{localStorage.removeItem('colmap_task_{k}');}}catch(e){{}}"
                                             ));
                                             return;
                                         }
-                                        TaskEvent::Failed(_) => {
+                                        TaskEvent::Completed => {
+                                            // Add a small delay to allow final progress events to be processed
+                                            tokio::time::sleep(tokio::time::Duration::from_millis(
+                                                200,
+                                            ))
+                                            .await;
+
+                                            // Force reload images from server to get accurate counts
+                                            match crate::server::get_project_images(pn.clone())
+                                                .await
+                                            {
+                                                Ok(paths) => {
+                                                    let actual_count = paths.len();
+                                                    image_paths.set(paths);
+                                                    // Use actual count from server instead of tracking
+                                                    info_message.set(Some(format!(
+                                                        "Demo ready ({} images). You may want to optimize them using the 'Optimize Images' button.",
+                                                        actual_count
+                                                    )));
+                                                }
+                                                Err(e) => {
+                                                    error_message.set(Some(format!(
+                                                        "Failed to reload images: {}",
+                                                        e
+                                                    )));
+                                                }
+                                            }
+                                            demo_loading.set(false);
+                                            let k = format!("demo_{pn}").replace('\'', "_");
+                                            let _ = eval(&format!(
+                                                "try{{localStorage.removeItem('colmap_task_{k}');}}catch(e){{}}"
+                                            ));
+                                            return;
+                                        }
+                                        TaskEvent::Failed(msg) => {
+                                            error_message.set(Some(format!(
+                                                "Demo download failed: {}",
+                                                msg
+                                            )));
                                             demo_loading.set(false);
                                             let k = format!("demo_{pn}").replace('\'', "_");
                                             let _ = eval(&format!(
@@ -313,7 +340,6 @@ pub fn ImagesTab(project_name: String) -> Element {
                 match crate::server::subscribe_task_events(task_id).await {
                     Ok(mut stream) => {
                         let mut total_files = 0usize;
-                        let mut total_bytes = 0u64;
                         while let Some(Ok(event)) = stream.recv().await {
                             match event {
                                 TaskEvent::DemoProgress(DemoProgressEvent::DownloadProgress {
@@ -334,13 +360,15 @@ pub fn ImagesTab(project_name: String) -> Element {
                                         total_bytes: bytes,
                                     },
                                 ) => {
-                                    let size_mb = bytes as f64 / 1_000_000.0;
-                                    total_files = files;
-                                    total_bytes = bytes;
-                                    info_message.set(Some(format!(
-                                        "Extracting... ({} files, {:.1} MB)",
-                                        files, size_mb
-                                    )));
+                                    // Only update if we have meaningful data (files > 0)
+                                    if files > 0 {
+                                        let size_mb = bytes as f64 / 1_000_000.0;
+                                        total_files = files;
+                                        info_message.set(Some(format!(
+                                            "Extracting... ({} files, {:.1} MB)",
+                                            files, size_mb
+                                        )));
+                                    }
                                 }
                                 TaskEvent::DemoProgress(DemoProgressEvent::Error { message }) => {
                                     error_message.set(Some(message));
@@ -348,23 +376,22 @@ pub fn ImagesTab(project_name: String) -> Element {
                                     return;
                                 }
                                 TaskEvent::Completed => {
-                                    info_message.set(Some(format!(
-                                                        "Demo downloaded ({} images, {:.1} MB). You may want to optimize them using the 'Optimize Images' button.",
-                                                        total_files,
-                                                        total_bytes as f64 / 1_000_000.0
-                                                    )));
-                                    demo_loading.set(false);
-                                    {
-                                        let k = format!("demo_{project_name}").replace('\'', "_");
-                                        let _ = eval(&format!(
-                                                            "try{{localStorage.removeItem('colmap_task_{k}');}}catch(e){{}}"
-                                                        ));
-                                    }
+                                    // Add a small delay to allow final progress events to be processed
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(200))
+                                        .await;
+
+                                    // Force reload images from server to get accurate counts
                                     match crate::server::get_project_images(project_name.clone())
                                         .await
                                     {
                                         Ok(paths) => {
+                                            let actual_count = paths.len();
                                             image_paths.set(paths);
+                                            // Use actual count from server instead of tracking
+                                            info_message.set(Some(format!(
+                                                "Demo downloaded ({} images). You may want to optimize them using the 'Optimize Images' button.",
+                                                actual_count
+                                            )));
                                         }
                                         Err(e) => {
                                             error_message.set(Some(format!(
@@ -372,6 +399,13 @@ pub fn ImagesTab(project_name: String) -> Element {
                                                 e
                                             )));
                                         }
+                                    }
+                                    demo_loading.set(false);
+                                    {
+                                        let k = format!("demo_{project_name}").replace('\'', "_");
+                                        let _ = eval(&format!(
+                                                            "try{{localStorage.removeItem('colmap_task_{k}');}}catch(e){{}}"
+                                                        ));
                                     }
                                     return;
                                 }
@@ -392,9 +426,8 @@ pub fn ImagesTab(project_name: String) -> Element {
                         }
                         // Stream ended
                         info_message.set(Some(format!(
-                            "Demo downloaded ({} images, {:.1} MB). You may want to optimize them using the 'Optimize Images' button.",
-                            total_files,
-                            total_bytes as f64 / 1_000_000.0
+                            "Demo downloaded ({} images). You may want to optimize them using the 'Optimize Images' button.",
+                            total_files
                         )));
                     }
                     Err(e) => {

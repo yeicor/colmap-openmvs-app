@@ -120,7 +120,6 @@ impl AndroidSettingsValidation {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[tokio::test]
     #[cfg(target_os = "android")]

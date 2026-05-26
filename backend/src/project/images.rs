@@ -424,12 +424,6 @@ fn extract_jpg_from_7z_memory_with_events<R: std::io::Read + std::io::Seek>(
                     let _ = std::fs::create_dir_all(parent);
                 }
 
-                let _ = tx.send(DemoProgressEvent::ExtractionProgress {
-                    last_file: None,
-                    total_files: 0,
-                    total_bytes: 0,
-                });
-
                 match std::fs::File::create(&dest_file) {
                     Ok(mut output) => match std::io::copy(reader, &mut output) {
                         Ok(bytes_written) => {

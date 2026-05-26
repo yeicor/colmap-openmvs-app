@@ -6,8 +6,7 @@ use tracing::{debug, info, trace, warn};
 #[cfg(target_os = "windows")]
 mod platform {
     use super::*;
-    use std::ffi::c_void;
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
@@ -61,7 +60,7 @@ mod platform {
                             dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
                             ..Default::default()
                         };
-                        if Process32FirstW(snapshot, &mut entry).as_bool() {
+                        if Process32FirstW(snapshot, &mut entry).is_ok() {
                             loop {
                                 let pid = entry.th32ProcessID as i32;
                                 let ppid = entry.th32ParentProcessID as i32;
@@ -73,7 +72,7 @@ mod platform {
                                     );
                                     collect_children(pid, pids_ref);
                                 }
-                                if !Process32NextW(snapshot, &mut entry).as_bool() {
+                                if Process32NextW(snapshot, &mut entry).is_err() {
                                     break;
                                 }
                             }

@@ -326,14 +326,29 @@ pub async fn cancel_task(task_id: String) -> Result<()> {
 
 /// Subscribe to a task's event stream (replays history + live).
 /// Returns a ServerEvents stream of TaskEvents.
+///
+/// This includes automatic keep-alive heartbeats to prevent HTTP connection timeouts
+/// on mobile browsers. Heartbeats are sent every 2-3 seconds if no real events occur.
 pub async fn subscribe_task_events(task_id: String) -> Result<ServerEvents<TaskEvent>> {
     use futures_util::TryStreamExt;
-    let stream = crate::task_registry::create_event_stream(&task_id)
-        .ok_or_else(|| anyhow::anyhow!("Task not found: {}", task_id))?;
+
+    tracing::debug!(task_id = %task_id, "Subscribing to task events");
+
+    let stream = crate::task_registry::create_event_stream(&task_id).ok_or_else(|| {
+        tracing::warn!(task_id = %task_id, "Task not found when subscribing to events");
+        anyhow::anyhow!("Task not found: {}", task_id)
+    })?;
+
     let stream = stream.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-        Box::new(std::io::Error::other(e.to_string()))
+        let error_msg = e.to_string();
+        tracing::error!(error = %error_msg, "Event stream error");
+        Box::new(std::io::Error::other(error_msg))
     });
-    Ok(ServerEvents::from_stream(stream))
+
+    let server_events = ServerEvents::from_stream(stream);
+    tracing::debug!(task_id = %task_id, "Task event stream created successfully");
+
+    Ok(server_events)
 }
 
 // ---------------------------------------------------------------------------

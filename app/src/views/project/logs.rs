@@ -301,6 +301,16 @@ fn spawn_pipeline_stream(
         match subscribe_task_events(task_id.clone()).await {
             Ok(mut stream) => {
                 while let Some(Ok(event)) = stream.recv().await {
+                    // Skip keep-alive heartbeats from the server
+                    let is_heartbeat = if let TaskEvent::Log(ref msg) = event {
+                        msg.contains("Keep-alive")
+                    } else {
+                        false
+                    };
+                    if is_heartbeat {
+                        continue;
+                    }
+                    
                     match event {
                         // --------------------------------------------------
                         // Pre-populate stage list from the leading groups list
@@ -517,7 +527,7 @@ fn spawn_pipeline_stream(
             }
 
             Err(e) => {
-                error_msg.set(format!("Failed to subscribe to pipeline events: {e}"));
+                error_msg.set(format!("Failed to subscribe to pipeline events: {e} (will retry)"));
                 pipeline_status.set(PipelineStatus::Idle);
                 active_task_id.set(String::new());
                 pipeline_progress_ctx.set(None);

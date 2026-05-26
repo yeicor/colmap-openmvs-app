@@ -642,15 +642,17 @@ impl PRoot {
                 tokio::fs::create_dir_all(parent).await.ok();
             }
             let _ = tokio::fs::remove_file(&dest).await;
-            let symlink_target = format!("/mnt/jni/librootfs-{}.so", hash);
             #[cfg(unix)]
-            if let Err(e) = tokio::fs::symlink(&symlink_target, &dest).await {
-                warn!(
-                    path = %dest.display(),
-                    target = %symlink_target,
-                    error = %e,
-                    "setup_rootfs_skeleton: failed to create file symlink"
-                );
+            {
+                let symlink_target = format!("/mnt/jni/librootfs-{}.so", hash);
+                if let Err(e) = tokio::fs::symlink(&symlink_target, &dest).await {
+                    warn!(
+                        path = %dest.display(),
+                        target = %symlink_target,
+                        error = %e,
+                        "setup_rootfs_skeleton: failed to create file symlink"
+                    );
+                }
             }
             done += 1;
             if done % 500 == 0 {
@@ -672,13 +674,15 @@ impl PRoot {
             let _ = tokio::fs::remove_file(&dest).await;
             let _ = tokio::fs::remove_dir(&dest).await;
             #[cfg(unix)]
-            if let Err(e) = tokio::fs::symlink(target, &dest).await {
-                warn!(
-                    path = %dest.display(),
-                    target = %target,
-                    error = %e,
-                    "setup_rootfs_skeleton: failed to create original symlink"
-                );
+            {
+                if let Err(e) = tokio::fs::symlink(target, &dest).await {
+                    warn!(
+                        path = %dest.display(),
+                        target = %target,
+                        error = %e,
+                        "setup_rootfs_skeleton: failed to create original symlink"
+                    );
+                }
             }
             done += 1;
         }
