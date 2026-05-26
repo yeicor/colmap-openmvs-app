@@ -97,7 +97,7 @@ jobs:
         run: $HOME/.dx/bin/dx build --release --target ${{ matrix.target }} --${{ matrix.build-type }}
       - shell: bash
         if: runner.build-type == 'android'
-        run: ./build_android.sh --release
+        run: ./build_android.sh # TODO: --release
       - uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.build-type }}-${{ matrix.target }}
