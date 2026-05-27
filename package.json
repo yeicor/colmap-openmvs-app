@@ -1,6 +1,11 @@
 {
+  "name": "colmap-openmvs-app",
+  "version": "0.1.0",
+  "description": "JS dependencies for the colmap-openmvs-app Dioxus app. Run `npm install` before `dx build` so that esbuild can bundle three.js into assets/viewer3d.js.",
+  "private": true,
+  "type": "module",
   "dependencies": {
-    "eruda": "3.4.1",
-    "three": "0.169.0"
+    "eruda": "3.4.3",
+    "three": "0.184.0"
   }
 }

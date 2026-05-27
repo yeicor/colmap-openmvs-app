@@ -29,59 +29,9 @@ pub enum Route {
 
 #[component]
 pub fn App() -> Element {
-    // Inject an ES module importmap so bare/relative specifiers inside
-    // dynamically eval'd scripts resolve to the locally-vendored assets.
-    //
-    // Mappings:
-    //   'three'                        → three.module.js (fingerprinted)
-    //   '/utils/BufferGeometryUtils.js'→ BufferGeometryUtils.js (fingerprinted)
-    //     └─ After dx flattens assets, GLTFLoader (at /assets/GLTFLoader-HASH.js)
-    //       resolves its `from '../utils/BufferGeometryUtils.js'` import to
-    //       /utils/BufferGeometryUtils.js.  The importmap catches that path.
-    //
-    // Uses eval so the importmap is in the DOM before any dynamic import() call,
-    // even if the component renders after the WASM bootstrap script.
-    // build.rs downloads all files; asset!() ensures they are copied into the
-    // bundle and returns the (possibly fingerprinted) serving URL.
-    {
-        let three_url = asset!(
-            "/assets/lib/three/three.module.js",
-            AssetOptions::js().with_minify(false)
-        )
-        .to_string();
-        // with_minify(false) → dx skips esbuild for these files. Without it
-        // esbuild may reformat them into a non-module (IIFE/CJS) format, which
-        // causes `import('three')` to fail with "Importing a module script
-        // failed". Files with bare 'three' imports would also ERROR in esbuild.
-        let buf_geo_url = asset!(
-            "/assets/lib/utils/BufferGeometryUtils.js",
-            AssetOptions::js().with_minify(false)
-        )
-        .to_string();
-        let skeleton_url = asset!(
-            "/assets/lib/utils/SkeletonUtils.js",
-            AssetOptions::js().with_minify(false)
-        )
-        .to_string();
-        let _ = dioxus::document::eval(&format!(
-            r#"
-            if (!document.querySelector('script[type="importmap"]')) {{
-                const m = document.createElement('script');
-                m.type = 'importmap';
-                m.textContent = JSON.stringify({{
-                    imports: {{
-                        three: '{three_url}',
-                        '/utils/BufferGeometryUtils.js': '{buf_geo_url}',
-                        '/utils/SkeletonUtils.js': '{skeleton_url}'
-                    }}
-                }});
-                document.head.insertBefore(m, document.head.firstChild);
-            }}
-            "#
-        ));
-    }
-
     // Eruda debug console — only injected in debug builds.
+    // The eruda.js file is copied from node_modules by build.rs and referenced
+    // here so that dx includes it in the asset bundle.
     #[cfg(debug_assertions)]
     {
         let eruda_url = asset!("/assets/lib/eruda/eruda.js").to_string();

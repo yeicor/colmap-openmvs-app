@@ -2,5 +2,9 @@
 /target/
 /devstorage/
 
+# npm — node_modules is populated by `npm install` (run automatically by app/build.rs)
+node_modules/
+package-lock.json
+
 # Vendored JS assets — downloaded automatically by app/build.rs on build
 /app/assets/lib/

@@ -1,5 +1,6 @@
 # Multi-stage build for the Rust application
-
+# TODO: https://github.com/DioxusLabs/dioxus/blob/f3a9137041877199c94db17148986ece6dc1b4c0/examples/01-app-demos/hotdog/Dockerfile#L7
+#
 # Stage 1: Builder
 FROM rust:1 AS builder
 
@@ -58,6 +59,6 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD test -f /proc/1/stat || exit 1
 
 
-    
+
 # Run the application
 CMD ["/app/server"]
