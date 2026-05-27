@@ -15,9 +15,13 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: "npm"
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -61,11 +65,15 @@ jobs:
             target: aarch64-linux-android
             build-type: android
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+          cache: "npm"
       - if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -93,12 +101,12 @@ jobs:
       - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
       - shell: bash
-        if: runner.build-type != 'android'
-        run: $HOME/.dx/bin/dx build --release --target ${{ matrix.target }} --${{ matrix.build-type }}
+        if: runner.build-type == 'desktop'
+        run: $HOME/.dx/bin/dx build --release --target ${{ matrix.target }} --${{ runner.build-type }}
       - shell: bash
         if: runner.build-type == 'android'
-        run: ./build_android.sh # TODO: --release
-      - uses: actions/upload-artifact@v4
+        run: ./build_android.sh # TODO: --release (needs signing)
+      - uses: actions/upload-artifact@v7
         with:
           name: build-${{ matrix.build-type }}-${{ matrix.target }}
           path: target/dx/${{ github.repository_name }}/*/*

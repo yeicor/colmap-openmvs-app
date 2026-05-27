@@ -13,7 +13,7 @@ jobs:
     outputs:
       ci-run-id: ${{ steps.get-run-id.outputs.run-id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - id: get-run-id
         run: |
@@ -51,14 +51,14 @@ jobs:
     needs: find-ci-artifacts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ needs.find-ci-artifacts.outputs.ci-run-id }}
           pattern: build-*
           path: artifacts
 
-      - uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
           draft: false
@@ -73,11 +73,11 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: docker/setup-buildx-action@v2
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v2
+      - uses: docker/login-action@v3
         with:
           username: ${{ github.actor }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -92,7 +92,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha
 
-      - uses: docker/build-push-action@v4
+      - uses: docker/build-push-action@v7
         with:
           context: .
           push: true
