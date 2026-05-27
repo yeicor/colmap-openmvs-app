@@ -28,15 +28,18 @@ pub use settings::{get_settings, update_settings};
 mod runtimes_api;
 pub use runtimes_api::{
     cancel_task, delete_runtime_binary, download_runtime_version, get_available_runtime_versions,
-    get_embedded_image_tag, get_runtime_info, get_task_info, list_available_image_tags,
-    list_runtime_images, list_tasks, prepare_runtime_image, remove_runtime_image,
+    get_docker_runtime_info, get_embedded_image_tag, get_project_run_status, get_runtime_info,
+    get_task_info, list_available_image_tags, list_docker_images, list_runtime_images, list_tasks,
+    prepare_docker_image, prepare_runtime_image, remove_docker_image, remove_runtime_image,
     repair_android_settings, subscribe_task_events,
 };
 
 pub mod runtimes;
 
 pub mod task_registry;
-pub use task_registry::{create_event_stream, publish_event, task_registry, TaskRegistry};
+pub use task_registry::{
+    create_event_stream, publish_event, task_registry, TaskEntry, TaskRegistry,
+};
 
 mod pipeline;
 pub use pipeline::run_pipeline;

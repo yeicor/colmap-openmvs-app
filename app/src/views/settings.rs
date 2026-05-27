@@ -6,8 +6,10 @@ use crate::mycomponents::BackButton;
 use crate::mycomponents::{Banner, BannerType, PageHeader};
 use crate::server::{
     delete_runtime_binary, download_runtime_version, get_available_runtime_versions,
-    get_runtime_info, get_settings, get_task_info, list_available_image_tags, list_runtime_images,
-    list_tasks, prepare_runtime_image, remove_runtime_image, update_settings,
+    get_docker_runtime_info, get_runtime_info, get_settings, get_task_info,
+    list_available_image_tags, list_docker_images, list_runtime_images, list_tasks,
+    prepare_docker_image, prepare_runtime_image, remove_docker_image, remove_runtime_image,
+    update_settings,
 };
 use crate::task_manager::{drive_task, start_task, TasksCtx};
 use crate::Route;
@@ -18,7 +20,7 @@ use colmap_openmvs_api::{
 use dioxus::document::eval;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
-    BsDownload, BsFolder, BsGear, BsTerminal, BsTrash3,
+    BsBox, BsDownload, BsFolder, BsGear, BsHdd, BsTerminal, BsTrash3,
 };
 use dioxus_free_icons::Icon;
 
@@ -26,21 +28,15 @@ use dioxus_free_icons::Icon;
 // Date helpers
 // ---------------------------------------------------------------------------
 
-/// Parse an ISO-8601 / RFC-3339 date string and return (relative_text, tooltip_text).
-/// Falls back gracefully if the string cannot be parsed.
 fn format_relative_date(date_str: &str) -> (String, String) {
     let parsed = DateTime::parse_from_rfc3339(date_str)
-        .or_else(|_| {
-            // Try with explicit format (Docker Hub sometimes omits the T separator)
-            DateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S%.fZ")
-        })
+        .or_else(|_| DateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S%.fZ"))
         .map(|dt| dt.with_timezone(&Utc));
 
     match parsed {
         Ok(dt) => {
             let now = Utc::now();
             let diff = now.signed_duration_since(dt);
-
             let relative = if diff < Duration::minutes(1) {
                 "just now".to_string()
             } else if diff < Duration::hours(1) {
@@ -62,8 +58,6 @@ fn format_relative_date(date_str: &str) -> (String, String) {
                 let y = diff.num_days() / 365;
                 format!("{} year{} ago", y, if y == 1 { "" } else { "s" })
             };
-
-            // Tooltip: "Jan 15, 2024 at 10:30 UTC"
             let tooltip = dt.format("%b %-e, %Y at %H:%M UTC").to_string();
             (relative, tooltip)
         }
@@ -71,11 +65,6 @@ fn format_relative_date(date_str: &str) -> (String, String) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Small date badge component
-// ---------------------------------------------------------------------------
-
-/// Renders "📅 3 months ago" with an exact-date tooltip (using the HTML title attribute).
 #[component]
 fn DateBadge(date: String) -> Element {
     let (rel, tooltip) = format_relative_date(&date);
@@ -89,7 +78,7 @@ fn DateBadge(date: String) -> Element {
 }
 
 // ---------------------------------------------------------------------------
-// Top-level view
+// Top-level view  (2 tabs: General | Runtime)
 // ---------------------------------------------------------------------------
 
 #[component]
@@ -110,7 +99,9 @@ pub fn SettingsView() -> Element {
                 }
             }
 
-            Tabs {
+            div {
+                class: "main-content",
+                Tabs {
                 value: active_tab,
                 default_value: "general".to_string(),
                 on_value_change: move |tab| active_tab.set(Some(tab)),
@@ -131,27 +122,23 @@ pub fn SettingsView() -> Element {
                 }
 
                 if active_tab() == Some("general".to_string()) {
-                    TabContent {
-                        value: "general".to_string(),
-                        index: 0usize,
+                    TabContent { value: "general".to_string(), index: 0usize,
                         GeneralTab {}
                     }
                 }
                 if active_tab() == Some("runtime".to_string()) {
-                    TabContent {
-                        value: "runtime".to_string(),
-                        index: 1usize,
+                    TabContent { value: "runtime".to_string(), index: 1usize,
                         RuntimeTab {}
                     }
                 }
-
+            }
             }
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// General tab  (existing settings – projects folder)
+// General tab
 // ---------------------------------------------------------------------------
 
 #[component]
@@ -166,7 +153,6 @@ fn GeneralTab() -> Element {
     use_effect(move || {
         spawn(async move {
             loading.set(true);
-            error.set(String::new());
             match get_settings().await {
                 Ok(s) => {
                     projects_folder.set(s.projects_folder);
@@ -198,150 +184,84 @@ fn GeneralTab() -> Element {
                     settings.settings_file_path = settings_path;
                     match update_settings(settings).await {
                         Ok(_) => {
-                            success.set("Settings saved successfully!".to_string());
+                            success.set("Settings saved.".to_string());
                             has_changed.set(false);
                         }
-                        Err(e) => error.set(format!("Failed to save settings: {}", e)),
+                        Err(e) => error.set(format!("Failed to save: {}", e)),
                     }
                 }
-                Err(e) => error.set(format!("Failed to load current settings: {}", e)),
+                Err(e) => error.set(format!("Failed to load settings: {}", e)),
             }
         });
     };
 
     let handle_cancel = move |_| {
         spawn(async move {
-            match get_settings().await {
-                Ok(s) => {
-                    projects_folder.set(s.projects_folder);
-                    settings_file_path.set(s.settings_file_path.unwrap_or_default());
-                    has_changed.set(false);
-                    error.set(String::new());
-                }
-                Err(e) => error.set(format!("Failed to reload settings: {}", e)),
+            if let Ok(s) = get_settings().await {
+                projects_folder.set(s.projects_folder);
+                settings_file_path.set(s.settings_file_path.unwrap_or_default());
+                has_changed.set(false);
+                error.set(String::new());
             }
         });
     };
 
     rsx! {
-        Banner {
-            message: error(),
-            banner_type: BannerType::Error,
-            on_close: move |_| error.set(String::new()),
-        }
-        Banner {
-            message: success(),
-            banner_type: BannerType::Info,
-            on_close: move |_| success.set(String::new()),
-        }
+        Banner { message: error(), banner_type: BannerType::Error, on_close: move |_| error.set(String::new()) }
+        Banner { message: success(), banner_type: BannerType::Info, on_close: move |_| success.set(String::new()) }
 
         if loading() {
-            p { class: "loading", "Loading settings…" }
+            p { class: "loading", "Loading…" }
         } else {
-            div {
-                class: "settings-form",
-                div {
-                    class: "form-group",
-                    label { "Projects Folder" }
-                    div {
-                        class: "folder-row",
+            div { class: "settings-form",
+                div { class: "form-group",
+                    label { title: "Root directory where all project folders are stored.", "Projects Folder" }
+                    div { class: "folder-row",
                         input {
                             r#type: "text",
                             value: "{projects_folder}",
                             placeholder: "./projects",
                             class: "folder-input",
-                            oninput: move |evt| {
-                                projects_folder.set(evt.value());
-                                has_changed.set(true);
-                                error.set(String::new());
-                                success.set(String::new());
-                            },
+                            oninput: move |e| { projects_folder.set(e.value()); has_changed.set(true); error.set(String::new()); success.set(String::new()); },
                         }
-                        input {
-                            r#type: "file",
-                            directory: true,
-                            style: "display: none;",
-                            id: "projects-folder-input",
-                            onchange: move |evt| {
-                                if let Some(file) = evt.files().into_iter().next() {
-                                    projects_folder.set(
-                                        file.path().to_str().expect("Invalid path").to_string(),
-                                    );
+                        input { r#type: "file", directory: true, style: "display:none;", id: "genpf-input",
+                            onchange: move |e| {
+                                if let Some(f) = e.files().into_iter().next() {
+                                    projects_folder.set(f.path().to_str().unwrap_or("").to_string());
                                     has_changed.set(true);
-                                    error.set(String::new());
-                                    success.set(String::new());
                                 }
                             }
                         }
-                        Button {
-                            variant: ButtonVariant::Secondary,
-                            onclick: move |_| {
-                                eval("document.querySelector('#projects-folder-input').click()");
-                            },
-                            Icon { icon: BsFolder }
-                        }
+                        Button { variant: ButtonVariant::Secondary, onclick: move |_| { eval("document.querySelector('#genpf-input').click()"); }, Icon { icon: BsFolder } }
                     }
                 }
 
-                div {
-                    class: "form-group",
-                    label { "Settings File Path (optional)" }
-                    div {
-                        class: "form-group-help",
-                        small { "Leave empty to use projects_folder/settings.json. Can be overridden with COLMAP_SETTINGS_PATH environment variable." }
-                    }
-                    div {
-                        class: "folder-row",
+                div { class: "form-group",
+                    label { title: "Override the settings.json path. Leave empty to use projects_folder/settings.json. Can also be set via COLMAP_SETTINGS_PATH env var.", "Settings File (optional)" }
+                    div { class: "folder-row",
                         input {
                             r#type: "text",
                             value: "{settings_file_path}",
-                            placeholder: "Leave empty to use projects_folder/settings.json",
+                            placeholder: "Leave empty for default",
                             class: "folder-input",
-                            oninput: move |evt| {
-                                settings_file_path.set(evt.value());
-                                has_changed.set(true);
-                                error.set(String::new());
-                                success.set(String::new());
-                            },
+                            oninput: move |e| { settings_file_path.set(e.value()); has_changed.set(true); error.set(String::new()); success.set(String::new()); },
                         }
-                        input {
-                            r#type: "file",
-                            style: "display: none;",
-                            id: "settings-file-input",
-                            onchange: move |evt| {
-                                if let Some(file) = evt.files().into_iter().next() {
-                                    settings_file_path.set(
-                                        file.path().to_str().expect("Invalid path").to_string(),
-                                    );
+                        input { r#type: "file", style: "display:none;", id: "gensf-input",
+                            onchange: move |e| {
+                                if let Some(f) = e.files().into_iter().next() {
+                                    settings_file_path.set(f.path().to_str().unwrap_or("").to_string());
                                     has_changed.set(true);
-                                    error.set(String::new());
-                                    success.set(String::new());
                                 }
                             }
                         }
-                        Button {
-                            variant: ButtonVariant::Secondary,
-                            onclick: move |_| {
-                                eval("document.querySelector('#settings-file-input').click()");
-                            },
-                            Icon { icon: BsFolder }
-                        }
+                        Button { variant: ButtonVariant::Secondary, onclick: move |_| { eval("document.querySelector('#gensf-input').click()"); }, Icon { icon: BsFolder } }
                     }
                 }
 
                 if has_changed() {
-                    div {
-                        class: "form-actions",
-                        Button {
-                            variant: ButtonVariant::Primary,
-                            onclick: handle_save,
-                            "Save"
-                        }
-                        Button {
-                            variant: ButtonVariant::Secondary,
-                            onclick: handle_cancel,
-                            "Cancel"
-                        }
+                    div { class: "form-actions",
+                        Button { variant: ButtonVariant::Primary, onclick: handle_save, "Save" }
+                        Button { variant: ButtonVariant::Secondary, onclick: handle_cancel, "Cancel" }
                     }
                 }
             }
@@ -350,96 +270,129 @@ fn GeneralTab() -> Element {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime tab  (PRoot binary management)
+// Runtime tab  (runtime selector + selected runtime's panel)
 // ---------------------------------------------------------------------------
 
 #[component]
 fn RuntimeTab() -> Element {
-    let mut active_runtime_tab = use_signal(|| Some("proot".to_string()));
-    let mut active_proot_subtab = use_signal(|| Some("settings".to_string()));
+    // Preload both runtime statuses so the selector cards show live status
+    let proot_info = use_signal(|| None::<RuntimeInfo>);
+    let docker_info = use_signal(|| None::<RuntimeInfo>);
+    let mut active_runtime = use_signal(|| "proot".to_string());
+
+    // Load both statuses concurrently on mount
+    use_effect(move || {
+        let mut pi = proot_info;
+        let mut di = docker_info;
+        spawn(async move {
+            if let Ok(info) = get_runtime_info().await {
+                pi.set(Some(info));
+            }
+            if let Ok(info) = get_docker_runtime_info().await {
+                di.set(Some(info));
+            }
+        });
+    });
+
+    // Helper: availability label + CSS class from RuntimeInfo
+    let status_class = |info: Option<RuntimeInfo>| -> (&'static str, &'static str) {
+        match info {
+            Some(i) if i.supported && i.installed => ("✓ Ready", "rt-badge rt-badge-ok"),
+            Some(i) if i.supported => ("⚠ Not installed", "rt-badge rt-badge-warn"),
+            Some(_) => ("✗ Unavailable", "rt-badge rt-badge-err"),
+            None => ("…", "rt-badge rt-badge-dim"),
+        }
+    };
+
+    let (proot_label, proot_cls) = status_class(proot_info());
+    let (docker_label, docker_cls) = status_class(docker_info());
 
     rsx! {
-        div {
-            class: "runtime-sub-tabs",
+        div { class: "runtime-tab",
 
+            // ── Runtime selector ─────────────────────────────────────────────
             div {
-                class: "runtime-tab-triggers",
+                class: "rt-selector",
+                role: "radiogroup",
+                aria_label: "Choose a container runtime",
+
+                // PRoot option
                 button {
-                    class: if active_runtime_tab() == Some("proot".to_string()) { "runtime-trigger active" } else { "runtime-trigger" },
-                    onclick: move |_| active_runtime_tab.set(Some("proot".to_string())),
-                    "PRoot"
+                    class: if active_runtime() == "proot" { "rt-option rt-option-active" } else { "rt-option" },
+                    role: "radio",
+                    aria_checked: (active_runtime() == "proot").to_string(),
+                    title: "PRoot — userspace container runner, works without root or Docker",
+                    onclick: move |_| active_runtime.set("proot".to_string()),
+
+                    div { class: "rt-option-icon", Icon { icon: BsHdd } }
+                    div { class: "rt-option-body",
+                        span { class: "rt-option-name", "PRoot" }
+                        span { class: "{proot_cls}", "{proot_label}" }
+                    }
+                    // Active indicator dot
+                    div { class: "rt-option-dot" }
                 }
+
+                // Docker option
                 button {
-                    class: "runtime-trigger disabled",
-                    disabled: true,
-                    title: "Docker support coming soon",
-                    "Docker (Coming Soon)"
+                    class: if active_runtime() == "docker" { "rt-option rt-option-active" } else { "rt-option" },
+                    role: "radio",
+                    aria_checked: (active_runtime() == "docker").to_string(),
+                    title: "Docker — system Docker daemon; requires Docker to be installed",
+                    onclick: move |_| active_runtime.set("docker".to_string()),
+
+                    div { class: "rt-option-icon", Icon { icon: BsBox } }
+                    div { class: "rt-option-body",
+                        span { class: "rt-option-name", "Docker" }
+                        span { class: "{docker_cls}", "{docker_label}" }
+                    }
+                    div { class: "rt-option-dot" }
                 }
             }
 
-            if active_runtime_tab() == Some("proot".to_string()) {
-                div {
-                    class: "proot-sub-tabs",
-                    div {
-                        class: "proot-subtab-triggers",
-                        button {
-                            class: if active_proot_subtab() == Some("settings".to_string()) { "proot-subtrigger active" } else { "proot-subtrigger" },
-                            onclick: move |_| active_proot_subtab.set(Some("settings".to_string())),
-                            "Settings"
-                        }
-                        button {
-                            class: if active_proot_subtab() == Some("management".to_string()) { "proot-subtrigger active" } else { "proot-subtrigger" },
-                            onclick: move |_| active_proot_subtab.set(Some("management".to_string())),
-                            "Management"
-                        }
-                        button {
-                            class: if active_proot_subtab() == Some("images".to_string()) { "proot-subtrigger active" } else { "proot-subtrigger" },
-                            onclick: move |_| active_proot_subtab.set(Some("images".to_string())),
-                            "Images"
-                        }
-                    }
-                    if active_proot_subtab() == Some("settings".to_string()) {
-                        runtime_proot_settings_tab {}
-                    }
-                    if active_proot_subtab() == Some("management".to_string()) {
-                        runtime_proot_tab {}
-                    }
-                    if active_proot_subtab() == Some("images".to_string()) {
-                        runtime_images_tab {}
-                    }
-                }
+            // ── Selected runtime panel ────────────────────────────────────────
+            if active_runtime() == "proot" {
+                ProotPanel {}
+            } else {
+                DockerPanel {}
             }
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// PRoot tab  (Status + Storage + Images, single page)
+// ---------------------------------------------------------------------------
+
 #[component]
-fn runtime_proot_tab() -> Element {
+fn ProotPanel() -> Element {
     let mut runtime_info = use_signal(|| None::<RuntimeInfo>);
     let mut available_versions = use_signal(Vec::<String>::new);
     let mut selected_version = use_signal(String::new);
+    let mut proot_images_dir = use_signal(String::new);
     let mut loading = use_signal(|| true);
     let mut downloading = use_signal(|| false);
+    let mut deleting = use_signal(|| false);
     let mut error = use_signal(String::new);
     let mut success = use_signal(String::new);
+    let mut dir_changed = use_signal(|| false);
 
     use_effect(move || {
         spawn(async move {
             loading.set(true);
-            error.set(String::new());
-
             match get_runtime_info().await {
                 Ok(info) => runtime_info.set(Some(info)),
                 Err(e) => error.set(format!("Failed to load runtime info: {}", e)),
             }
-
             if let Ok(versions) = get_available_runtime_versions().await {
                 if let Some(first) = versions.first() {
                     selected_version.set(first.clone());
                 }
                 available_versions.set(versions);
             }
-
+            if let Ok(s) = get_settings().await {
+                proot_images_dir.set(s.proot_images_dir);
+            }
             loading.set(false);
         });
     });
@@ -451,161 +404,192 @@ fn runtime_proot_tab() -> Element {
         }
         downloading.set(true);
         error.set(String::new());
-        success.set(String::new());
         spawn(async move {
             match download_runtime_version(version).await {
                 Ok(_) => {
-                    success.set("PRoot installed/updated successfully!".to_string());
+                    success.set("PRoot installed/updated.".to_string());
                     if let Ok(info) = get_runtime_info().await {
                         runtime_info.set(Some(info));
                     }
                 }
-                Err(e) => error.set(format!("Failed to install PRoot: {}", e)),
+                Err(e) => error.set(format!("Failed: {}", e)),
             }
             downloading.set(false);
         });
     };
 
-    let handle_refresh_versions = move |_| {
-        spawn(async move {
-            match get_available_runtime_versions().await {
-                Ok(versions) => {
-                    if let Some(first) = versions.first() {
-                        selected_version.set(first.clone());
-                    }
-                    available_versions.set(versions);
-                }
-                Err(e) => error.set(format!("Failed to fetch versions: {}", e)),
-            }
-        });
-    };
-
-    let mut deleting = use_signal(|| false);
     let handle_delete = move |_| {
         deleting.set(true);
         error.set(String::new());
-        success.set(String::new());
         spawn(async move {
             match delete_runtime_binary().await {
                 Ok(_) => {
-                    success.set("PRoot binary deleted successfully!".to_string());
+                    success.set("PRoot binary deleted.".to_string());
                     if let Ok(info) = get_runtime_info().await {
                         runtime_info.set(Some(info));
                     }
                 }
-                Err(e) => error.set(format!("Failed to delete PRoot binary: {}", e)),
+                Err(e) => error.set(format!("Failed: {}", e)),
             }
             deleting.set(false);
         });
     };
 
+    let handle_save_dir = move |_| {
+        spawn(async move {
+            let folder = proot_images_dir().trim().to_string();
+            if folder.is_empty() {
+                error.set("Path cannot be empty.".to_string());
+                return;
+            }
+            match get_settings().await {
+                Ok(mut s) => {
+                    s.proot_images_dir = folder;
+                    match update_settings(s).await {
+                        Ok(_) => {
+                            success.set("Images directory saved.".to_string());
+                            dir_changed.set(false);
+                        }
+                        Err(e) => error.set(format!("Failed: {}", e)),
+                    }
+                }
+                Err(e) => error.set(format!("Failed to load settings: {}", e)),
+            }
+        });
+    };
+
     rsx! {
-        Banner {
-            message: error(),
-            banner_type: BannerType::Error,
-            on_close: move |_| error.set(String::new()),
-        }
-        Banner {
-            message: success(),
-            banner_type: BannerType::Info,
-            on_close: move |_| success.set(String::new()),
-        }
+        Banner { message: error(), banner_type: BannerType::Error, on_close: move |_| error.set(String::new()) }
+        Banner { message: success(), banner_type: BannerType::Info, on_close: move |_| success.set(String::new()) }
 
         if loading() {
-            p { class: "loading", "Loading runtime info…" }
+            p { class: "loading", "Loading…" }
         } else {
-            div {
-                class: "settings-section",
+            div { class: "runtime-tab",
 
-                if let Some(info) = runtime_info() {
-                    div {
-                        class: "runtime-status",
+                // ── Status & Binary card ─────────────────────────────────────
+                div { class: "runtime-card",
+                    div { class: "runtime-card-title", "Binary" }
 
-                        div {
-                            class: "status-row",
-                            span { class: "status-label", "Platform" }
+                    if let Some(info) = runtime_info() {
+                        div { class: "status-row",
                             span {
                                 class: if info.supported { "status-badge ok" } else { "status-badge error" },
-                                if info.supported { "✓ Supported" } else { "✗ Not Supported" }
+                                if info.supported { "✓ Supported" } else { "✗ Unsupported" }
                             }
-                        }
-
-                        if let Some(reason) = &info.unsupported_reason {
-                            p { class: "status-note error-note", "{reason}" }
-                        }
-
-                        div {
-                            class: "status-row",
-                            span { class: "status-label", "Binary" }
                             span {
                                 class: if info.installed { "status-badge ok" } else { "status-badge warn" },
-                                if info.installed { "✓ Installed" } else { "✗ Not Installed" }
+                                if info.installed { "✓ Installed" } else { "✗ Not installed" }
                             }
                             if let Some(v) = &info.version {
                                 code { class: "version-text", "v{v}" }
                             }
                         }
-                    }
+                        if let Some(reason) = &info.unsupported_reason {
+                            p { class: "status-note error-note", "{reason}" }
+                        }
 
-                    if info.supported {
-                        div {
-                            class: "install-form",
-
-                            label { class: "install-label", "Version" }
-
-                            if available_versions().is_empty() {
-                                span { class: "versions-empty", "No versions available" }
-                            } else {
-                                select {
-                                    class: "version-select",
-                                    onchange: move |e| selected_version.set(e.value()),
-                                    for v in available_versions() {
-                                        option {
-                                            value: "{v}",
-                                            selected: v == selected_version(),
-                                            "{v}"
+                        if info.supported {
+                            div { class: "status-actions",
+                                if available_versions().is_empty() {
+                                    span { class: "versions-empty", "No versions found" }
+                                } else {
+                                    select {
+                                        class: "version-select",
+                                        title: "Select a PRoot version to install",
+                                        onchange: move |e| selected_version.set(e.value()),
+                                        for v in available_versions() {
+                                            option { value: "{v}", selected: v == selected_version(), "{v}" }
                                         }
                                     }
                                 }
-                            }
-
-                            Button {
-                                variant: ButtonVariant::Ghost,
-                                title: "Refresh version list",
-                                onclick: handle_refresh_versions,
-                                "↻"
-                            }
-
-                            Button {
-                                variant: ButtonVariant::Primary,
-                                onclick: handle_install,
-                                if downloading() {
-                                    "Installing…"
-                                } else if info.installed {
-                                    Icon { icon: BsDownload }
-                                    " Update"
-                                } else {
-                                    Icon { icon: BsDownload }
-                                    " Install"
-                                }
-                            }
-
-                            if info.installed {
                                 Button {
                                     variant: ButtonVariant::Ghost,
-                                    title: "Delete PRoot binary (only custom installations)",
-                                    disabled: deleting(),
-                                    onclick: handle_delete,
-                                    if deleting() {
-                                        "Deleting…"
-                                    } else {
-                                        Icon { icon: BsTrash3 }
-                                        " Delete"
+                                    title: "Refresh available versions",
+                                    onclick: move |_| {
+                                        spawn(async move {
+                                            if let Ok(versions) = get_available_runtime_versions().await {
+                                                if let Some(first) = versions.first() { selected_version.set(first.clone()); }
+                                                available_versions.set(versions);
+                                            }
+                                        });
+                                    },
+                                    "↻"
+                                }
+                                Button {
+                                    variant: ButtonVariant::Primary,
+                                    title: if info.installed { "Download and replace the current PRoot binary" } else { "Download and install PRoot" },
+                                    disabled: downloading(),
+                                    onclick: handle_install,
+                                    if downloading() { "Installing…" } else {
+                                        Icon { icon: BsDownload }
+                                        if info.installed { " Update" } else { " Install" }
+                                    }
+                                }
+                                if info.installed {
+                                    Button {
+                                        variant: ButtonVariant::Ghost,
+                                        title: "Remove the custom PRoot binary from disk (only works for non-system installs)",
+                                        disabled: deleting(),
+                                        onclick: handle_delete,
+                                        if deleting() { "Removing…" } else {
+                                            Icon { icon: BsTrash3 }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                }
+
+                // ── Storage card ─────────────────────────────────────────────
+                div { class: "runtime-card",
+                    div { class: "runtime-card-title", "Storage" }
+                    div { class: "form-group",
+                        label { title: "Directory where PRoot container image rootfs archives are extracted and stored.", "Images Directory" }
+                        div { class: "folder-row",
+                            input {
+                                r#type: "text",
+                                class: "folder-input",
+                                value: "{proot_images_dir}",
+                                placeholder: "./proot-images",
+                                oninput: move |e| { proot_images_dir.set(e.value()); dir_changed.set(true); error.set(String::new()); success.set(String::new()); },
+                            }
+                            input { r#type: "file", directory: true, style: "display:none;", id: "proot-dir-input",
+                                onchange: move |e| {
+                                    if let Some(f) = e.files().into_iter().next() {
+                                        proot_images_dir.set(f.path().to_str().unwrap_or("").to_string());
+                                        dir_changed.set(true);
+                                    }
+                                }
+                            }
+                            Button { variant: ButtonVariant::Secondary, onclick: move |_| { eval("document.querySelector('#proot-dir-input').click()"); }, Icon { icon: BsFolder } }
+                        }
+                        if dir_changed() {
+                            div { class: "form-actions",
+                                Button { variant: ButtonVariant::Primary, onclick: handle_save_dir, "Save" }
+                                Button {
+                                    variant: ButtonVariant::Secondary,
+                                    onclick: move |_| {
+                                        spawn(async move {
+                                            if let Ok(s) = get_settings().await {
+                                                proot_images_dir.set(s.proot_images_dir);
+                                                dir_changed.set(false);
+                                                error.set(String::new());
+                                            }
+                                        });
+                                    },
+                                    "Cancel"
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── Images card ──────────────────────────────────────────────
+                div { class: "runtime-card",
+                    div { class: "runtime-card-title", "Images" }
+                    RuntimeImagesSection { runtime_type: "proot".to_string() }
                 }
             }
         }
@@ -613,146 +597,66 @@ fn runtime_proot_tab() -> Element {
 }
 
 // ---------------------------------------------------------------------------
-// PRoot Settings tab  (Configure PRoot directory)
+// Docker tab  (Status + Images, single page)
 // ---------------------------------------------------------------------------
 
 #[component]
-fn runtime_proot_settings_tab() -> Element {
-    let mut proot_images_dir = use_signal(String::new);
-
+fn DockerPanel() -> Element {
+    let mut runtime_info = use_signal(|| None::<RuntimeInfo>);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(String::new);
-    let mut success = use_signal(String::new);
-    let mut has_changed = use_signal(|| false);
 
     use_effect(move || {
         spawn(async move {
             loading.set(true);
-            error.set(String::new());
-            match get_settings().await {
-                Ok(s) => {
-                    proot_images_dir.set(s.proot_images_dir);
-                }
-                Err(e) => error.set(format!("Failed to load settings: {}", e)),
+            match get_docker_runtime_info().await {
+                Ok(info) => runtime_info.set(Some(info)),
+                Err(e) => error.set(format!("Failed to check Docker: {}", e)),
             }
             loading.set(false);
         });
     });
 
-    let handle_save = move |_| {
-        spawn(async move {
-            error.set(String::new());
-            success.set(String::new());
-            let folder = proot_images_dir().trim().to_string();
-            if folder.is_empty() {
-                error.set("PRoot folder path cannot be empty".to_string());
-                return;
-            }
-            match get_settings().await {
-                Ok(mut settings) => {
-                    settings.proot_images_dir = folder;
-                    match update_settings(settings).await {
-                        Ok(_) => {
-                            success.set("PRoot folder updated successfully!".to_string());
-                            has_changed.set(false);
-                        }
-                        Err(e) => error.set(format!("Failed to save settings: {}", e)),
-                    }
-                }
-                Err(e) => error.set(format!("Failed to load current settings: {}", e)),
-            }
-        });
-    };
-
-    let handle_cancel = move |_| {
-        spawn(async move {
-            match get_settings().await {
-                Ok(s) => {
-                    proot_images_dir.set(s.proot_images_dir);
-
-                    has_changed.set(false);
-                    error.set(String::new());
-                }
-                Err(e) => error.set(format!("Failed to reload settings: {}", e)),
-            }
-        });
-    };
-
     rsx! {
-        Banner {
-            message: error(),
-            banner_type: BannerType::Error,
-            on_close: move |_| error.set(String::new()),
-        }
-        Banner {
-            message: success(),
-            banner_type: BannerType::Info,
-            on_close: move |_| success.set(String::new()),
-        }
+        Banner { message: error(), banner_type: BannerType::Error, on_close: move |_| error.set(String::new()) }
 
         if loading() {
-            p { class: "loading", "Loading settings…" }
+            p { class: "loading", "Loading…" }
         } else {
-            div {
-                class: "settings-form",
-                div {
-                    class: "form-group",
-                    label { "PRoot Runtime Directory" }
-                    p { class: "form-help", "Location where PRoot binary and container environments are stored." }
-                    div {
-                        class: "folder-row",
-                        input {
-                            r#type: "text",
-                            value: "{proot_images_dir}",
-                            placeholder: "./runtimes/proot",
-                            class: "folder-input",
-                            oninput: move |evt| {
-                                proot_images_dir.set(evt.value());
-                                has_changed.set(true);
-                                error.set(String::new());
-                                success.set(String::new());
-                            },
+            div { class: "runtime-tab",
+
+                // ── Status card ───────────────────────────────────────────────
+                div { class: "runtime-card",
+                    div { class: "runtime-card-title", "Status" }
+
+                    if let Some(info) = runtime_info() {
+                        div { class: "status-row",
+                            span {
+                                class: if info.supported { "status-badge ok" } else { "status-badge error" },
+                                if info.supported { "✓ Available" } else { "✗ Not found" }
+                            }
+                            if let Some(v) = &info.version {
+                                code { class: "version-text", "{v}" }
+                            }
                         }
-                        input {
-                            r#type: "file",
-                            directory: true,
-                            style: "display: none;",
-                            id: "proot-folder-input",
-                            onchange: move |evt| {
-                                if let Some(file) = evt.files().into_iter().next() {
-                                    proot_images_dir.set(
-                                        file.path().to_str().expect("Invalid path").to_string(),
-                                    );
-                                    has_changed.set(true);
-                                    error.set(String::new());
-                                    success.set(String::new());
+                        if let Some(reason) = &info.unsupported_reason {
+                            p { class: "status-note error-note", "{reason}" }
+                        }
+                        if !info.supported {
+                            p { class: "status-note",
+                                "Install Docker from "
+                                a { href: "https://docs.docker.com/get-docker/", target: "_blank",
+                                    "docs.docker.com/get-docker"
                                 }
                             }
                         }
-                        Button {
-                            variant: ButtonVariant::Secondary,
-                            onclick: move |_| {
-                                eval("document.querySelector('#proot-folder-input').click()");
-                            },
-                            Icon { icon: BsFolder }
-                        }
                     }
                 }
 
-                if has_changed() {
-                    div {
-                        class: "form-actions",
-                        Button {
-                            variant: ButtonVariant::Primary,
-                            onclick: handle_save,
-                            "Save"
-                        }
-                        Button {
-                            variant: ButtonVariant::Secondary,
-                            onclick: handle_cancel,
-                            "Cancel"
-                        }
-                    }
+                // ── Images card ───────────────────────────────────────────────
+                div { class: "runtime-card",
+                    div { class: "runtime-card-title", "Images" }
+                    RuntimeImagesSection { runtime_type: "docker".to_string() }
                 }
             }
         }
@@ -760,11 +664,10 @@ fn runtime_proot_settings_tab() -> Element {
 }
 
 // ---------------------------------------------------------------------------
-// Images tab  (container image management)
+// Shared images section  (works for both PRoot and Docker)
 // ---------------------------------------------------------------------------
 
 /// Build the event callback for a prepare-image task.
-/// Free function so it can be called at any scope without ownership issues.
 fn build_prepare_cb(
     tag: String,
     mut ready_tags: Signal<Vec<PreparedImageInfo>>,
@@ -773,6 +676,7 @@ fn build_prepare_cb(
     mut preparing_tag: Signal<String>,
     mut error: Signal<String>,
     mut success: Signal<String>,
+    runtime_type: String,
 ) -> impl FnMut(TaskEvent) + 'static {
     move |event: TaskEvent| match event {
         TaskEvent::PrepareProgress(colmap_openmvs_api::PrepareProgress::Downloading {
@@ -799,12 +703,18 @@ fn build_prepare_cb(
             preparing_tag.set(String::new());
         }
         TaskEvent::Completed => {
-            success.set(format!("Tag '{}' prepared successfully!", tag));
+            success.set(format!("'{}' prepared successfully!", tag));
             prepare_status.set(String::new());
             preparing.set(false);
             preparing_tag.set(String::new());
+            let rt = runtime_type.clone();
             spawn(async move {
-                if let Ok(imgs) = list_runtime_images().await {
+                let imgs = if rt == "docker" {
+                    list_docker_images().await
+                } else {
+                    list_runtime_images().await
+                };
+                if let Ok(imgs) = imgs {
                     ready_tags.set(imgs);
                 }
             });
@@ -820,7 +730,10 @@ fn build_prepare_cb(
 }
 
 #[component]
-fn runtime_images_tab() -> Element {
+fn RuntimeImagesSection(runtime_type: String) -> Element {
+    // Store runtime_type in a signal so closures can capture it without moving a String.
+    let rt_signal = use_signal(|| runtime_type.clone());
+    let rt = runtime_type.clone();
     let mut tasks_ctx = use_context::<TasksCtx>();
     let mut ready_tags = use_signal(Vec::<PreparedImageInfo>::new);
     let mut available_tags = use_signal(Vec::<ImageTagInfo>::new);
@@ -831,70 +744,65 @@ fn runtime_images_tab() -> Element {
     let mut error = use_signal(String::new);
     let mut success = use_signal(String::new);
     let mut default_image_tag = use_signal(String::new);
-    let mut projects_folder = use_signal(String::new);
-    let mut proot_binary_dir = use_signal(String::new);
-    let mut proot_images_dir = use_signal(String::new);
     let mut preparing_tag = use_signal(String::new);
 
     const COLMAP_IMAGE: &str = "mirror.gcr.io/yeicor/colmap-openmvs";
 
-    // ── On mount: load images + available tags, then reconnect any running task ──
+    // On mount: load images + available tags, reconnect any running task
     use_effect(move || {
+        let rt_inner = rt.clone();
         spawn(async move {
             loading.set(true);
             tags_loading.set(true);
 
-            match list_runtime_images().await {
+            // Load current default tag from settings
+            if let Ok(s) = get_settings().await {
+                let tag = if rt_inner == "docker" {
+                    s.docker_default_image_tag.unwrap_or_default()
+                } else {
+                    s.default_image_tag.unwrap_or_default()
+                };
+                default_image_tag.set(tag);
+            }
+
+            // Load prepared/pulled images
+            let images_result = if rt_inner == "docker" {
+                list_docker_images().await
+            } else {
+                list_runtime_images().await
+            };
+
+            match images_result {
                 Ok(imgs) => {
+                    // Auto-select default if exactly one image and no default set
                     if imgs.len() == 1 && default_image_tag().is_empty() {
-                        if let Ok(settings) = get_settings().await {
-                            if settings.default_image_tag.is_none() {
-                                let tag = imgs[0].tag.clone();
-                                let folder = settings.projects_folder.clone();
-                                let proot = settings.proot_images_dir.clone();
-                                projects_folder.set(folder.clone());
-                                if let Err(e) = update_settings(Settings {
-                                    projects_folder: folder,
-                                    proot_binary_dir: settings.proot_binary_dir.clone(),
-                                    proot_images_dir: proot,
-                                    default_image_tag: Some(tag.clone()),
-                                    custom_mounts: settings.custom_mounts.clone(),
-                                    settings_file_path: settings.settings_file_path.clone(),
-                                })
-                                .await
-                                {
-                                    error.set(format!("Failed to auto-select default tag: {}", e));
-                                } else {
-                                    default_image_tag.set(tag);
-                                }
+                        let tag = imgs[0].tag.clone();
+                        if let Ok(mut s) = get_settings().await {
+                            if rt_inner == "docker" {
+                                s.docker_default_image_tag = Some(tag.clone());
                             } else {
-                                default_image_tag
-                                    .set(settings.default_image_tag.unwrap_or_default());
-                                projects_folder.set(settings.projects_folder);
-                                proot_binary_dir.set(settings.proot_binary_dir);
-                                proot_images_dir.set(settings.proot_images_dir);
+                                s.default_image_tag = Some(tag.clone());
+                            }
+                            if update_settings(s).await.is_ok() {
+                                default_image_tag.set(tag);
                             }
                         }
-                    } else if let Ok(settings) = get_settings().await {
-                        default_image_tag.set(settings.default_image_tag.unwrap_or_default());
-                        projects_folder.set(settings.projects_folder);
-                        proot_binary_dir.set(settings.proot_binary_dir);
-                        proot_images_dir.set(settings.proot_images_dir);
                     }
                     ready_tags.set(imgs);
                 }
                 Err(e) => error.set(format!("Failed to load images: {}", e)),
             }
 
+            // Load available tags from registry
             match list_available_image_tags().await {
                 Ok(tags) => available_tags.set(tags),
-                Err(e) => error.set(format!("Failed to load tags: {}", e)),
+                Err(e) => error.set(format!("Failed to load available tags: {}", e)),
             }
 
             loading.set(false);
             tags_loading.set(false);
 
-            // ── Reconnect to any in-progress prepare task ──────────────────
+            // Reconnect to any in-progress prepare task
             let reconnect_id = list_tasks(Some("PrepareImage".to_string()), None)
                 .await
                 .ok()
@@ -908,7 +816,6 @@ fn runtime_images_tab() -> Element {
             if let Some(task_id) = reconnect_id {
                 if let Ok(Some(info)) = get_task_info(task_id.clone()).await {
                     if info.state == TaskState::Running {
-                        // Extract the tag name from the context_key (full image ref "repo:tag")
                         let tag = info
                             .context_key
                             .split_once(':')
@@ -918,7 +825,6 @@ fn runtime_images_tab() -> Element {
                         preparing.set(true);
                         preparing_tag.set(tag.clone());
                         prepare_status.set("Reconnecting…".to_string());
-                        // Register in global context (no-op if already present)
                         let label = format!("Preparing {}", tag);
                         tasks_ctx
                             .write()
@@ -931,6 +837,7 @@ fn runtime_images_tab() -> Element {
                             preparing_tag,
                             error,
                             success,
+                            rt_inner.clone(),
                         );
                         drive_task(task_id, tasks_ctx, cb);
                     }
@@ -939,7 +846,7 @@ fn runtime_images_tab() -> Element {
         });
     });
 
-    // ── Start a new prepare task ───────────────────────────────────────
+    // Start a new prepare task
     let mut handle_prepare = move |tag: String| {
         if tag.is_empty() || preparing() {
             return;
@@ -952,8 +859,14 @@ fn runtime_images_tab() -> Element {
 
         let full_image = format!("{}:{}", COLMAP_IMAGE, tag);
         let label = format!("Preparing {}", tag);
+        let rt_spawn = rt_signal();
         spawn(async move {
-            match prepare_runtime_image(full_image.clone()).await {
+            let result = if rt_spawn == "docker" {
+                prepare_docker_image(full_image.clone()).await
+            } else {
+                prepare_runtime_image(full_image.clone()).await
+            };
+            match result {
                 Ok(task_id) => {
                     let cb = build_prepare_cb(
                         tag,
@@ -963,11 +876,12 @@ fn runtime_images_tab() -> Element {
                         preparing_tag,
                         error,
                         success,
+                        rt_spawn,
                     );
                     start_task(task_id, label, TaskKind::PrepareImage, tasks_ctx, cb);
                 }
                 Err(e) => {
-                    error.set(format!("Failed to start preparation: {}", e));
+                    error.set(format!("Failed to start: {}", e));
                     prepare_status.set(String::new());
                     preparing.set(false);
                     preparing_tag.set(String::new());
@@ -976,162 +890,138 @@ fn runtime_images_tab() -> Element {
         });
     };
 
-    let handle_remove = move |hash: String| {
+    let handle_remove = move |remove_id: String| {
+        let rt_rm = rt_signal();
         spawn(async move {
-            match remove_runtime_image(hash.clone()).await {
+            let result = if rt_rm == "docker" {
+                remove_docker_image(remove_id).await
+            } else {
+                remove_runtime_image(remove_id).await
+            };
+            match result {
                 Ok(_) => {
-                    success.set("Tag removed.".to_string());
-                    if let Ok(imgs) = list_runtime_images().await {
+                    success.set("Image removed.".to_string());
+                    let imgs = if rt_rm == "docker" {
+                        list_docker_images().await
+                    } else {
+                        list_runtime_images().await
+                    };
+                    if let Ok(imgs) = imgs {
                         ready_tags.set(imgs);
                     }
                 }
-                Err(e) => error.set(format!("Failed to remove tag: {}", e)),
+                Err(e) => error.set(format!("Failed to remove: {}", e)),
             }
         });
     };
 
     let handle_set_default = move |tag: String| {
-        let folder = projects_folder().clone();
-        let binary_dir = proot_binary_dir().clone();
-        let proot = proot_images_dir().clone();
+        let rt_sd = rt_signal();
         spawn(async move {
-            error.set(String::new());
-            success.set(String::new());
-            match update_settings(Settings {
-                projects_folder: folder,
-                proot_binary_dir: binary_dir,
-                proot_images_dir: proot,
-                default_image_tag: Some(tag.clone()),
-                custom_mounts: Vec::new(),
-                settings_file_path: None,
-            })
-            .await
-            {
-                Ok(_) => {
-                    default_image_tag.set(tag.clone());
-                    success.set(format!("Default tag set to '{}'", tag));
+            match get_settings().await {
+                Ok(mut s) => {
+                    if rt_sd == "docker" {
+                        s.docker_default_image_tag = Some(tag.clone());
+                    } else {
+                        s.default_image_tag = Some(tag.clone());
+                    }
+                    match update_settings(s).await {
+                        Ok(_) => {
+                            default_image_tag.set(tag.clone());
+                            success.set(format!("Default set to '{}'", tag));
+                        }
+                        Err(e) => error.set(format!("Failed: {}", e)),
+                    }
                 }
-                Err(e) => error.set(format!("Failed to set default tag: {}", e)),
+                Err(e) => error.set(format!("Failed to load settings: {}", e)),
             }
         });
     };
 
     let handle_unset_default = move |_| {
-        let folder = projects_folder().clone();
-        let binary_dir = proot_binary_dir().clone();
-        let proot = proot_images_dir().clone();
+        let rt_ud = rt_signal();
         spawn(async move {
-            error.set(String::new());
-            success.set(String::new());
-            match update_settings(Settings {
-                projects_folder: folder,
-                proot_binary_dir: binary_dir,
-                proot_images_dir: proot,
-                default_image_tag: None,
-                custom_mounts: Vec::new(),
-                settings_file_path: None,
-            })
-            .await
-            {
-                Ok(_) => {
-                    default_image_tag.set(String::new());
-                    success.set("Default tag cleared".to_string());
+            match get_settings().await {
+                Ok(mut s) => {
+                    if rt_ud == "docker" {
+                        s.docker_default_image_tag = None;
+                    } else {
+                        s.default_image_tag = None;
+                    }
+                    match update_settings(s).await {
+                        Ok(_) => {
+                            default_image_tag.set(String::new());
+                            success.set("Default cleared.".to_string());
+                        }
+                        Err(e) => error.set(format!("Failed: {}", e)),
+                    }
                 }
-                Err(e) => error.set(format!("Failed to clear default tag: {}", e)),
+                Err(e) => error.set(format!("Failed to load settings: {}", e)),
             }
         });
     };
 
     rsx! {
-        Banner {
-            message: error(),
-            banner_type: BannerType::Error,
-            on_close: move |_| error.set(String::new()),
-        }
-        Banner {
-            message: success(),
-            banner_type: BannerType::Info,
-            on_close: move |_| success.set(String::new()),
-        }
+        Banner { message: error(), banner_type: BannerType::Error, on_close: move |_| error.set(String::new()) }
+        Banner { message: success(), banner_type: BannerType::Info, on_close: move |_| success.set(String::new()) }
 
-        // ── Header with in-progress indicator ───────────────────────────────
+        // In-progress indicator
         if !prepare_status().is_empty() {
-            div {
-                class: "images-header",
+            div { class: "images-header",
                 p { class: "prepare-progress", "⟳ Preparing '{preparing_tag}': {prepare_status}" }
             }
         }
 
-        // ── Ready Tags list ─────────────────────────────────────────────────
-        div {
-            class: "tags-container",
-            h2 { class: "section-title", "Ready Tags" }
+        // ── Ready Images ────────────────────────────────────────────────────
+        div { class: "tags-container",
+            h2 { class: "section-title", "Ready" }
 
             if loading() {
                 p { class: "loading", "Loading…" }
             } else if ready_tags().is_empty() {
-                p { class: "empty", "No tags prepared yet." }
+                p { class: "empty", "No images ready. Pull one from the Available list below." }
             } else {
-                ul {
-                    class: "tags-list",
+                ul { class: "tags-list",
                     {ready_tags().into_iter().map(|image| {
                         let tag = image.tag.clone();
                         let tag2 = image.tag.clone();
-                        let hash = image.hash.clone();
+                        // For Docker, remove by tag; for PRoot, remove by hash (which equals tag)
+                        let remove_id = image.hash.clone();
                         let build_date = image.build_date.clone();
                         let size_readable = image.size_readable.clone();
                         let size = image.size;
                         let is_default = tag == default_image_tag();
                         rsx! {
-                            li {
-                                key: "{hash}",
-                                class: "tags-item",
-
-                                // ── Line 1: name + action buttons ──────────────
-                                div {
-                                    class: "tags-item-top",
-                                    span {
-                                        class: "tag-name",
-                                        title: "{tag}",
-                                        "{tag}"
-                                    }
-                                    div {
-                                        class: "tag-actions",
+                            li { key: "{remove_id}", class: "tags-item",
+                                div { class: "tags-item-top",
+                                    span { class: "tag-name", title: "{tag}", "{tag}" }
+                                    div { class: "tag-actions",
                                         if is_default {
                                             Button {
                                                 variant: ButtonVariant::Primary,
-                                                title: "Unset as default tag",
+                                                title: "Currently the default image — click to unset",
                                                 onclick: handle_unset_default,
                                                 "✓ Default"
                                             }
                                         } else {
                                             Button {
                                                 variant: ButtonVariant::Secondary,
-                                                title: "Set as default tag",
+                                                title: "Use this image as the default for pipeline runs",
                                                 onclick: move |_| handle_set_default(tag2.clone()),
                                                 "Set Default"
                                             }
                                         }
                                         Button {
                                             variant: ButtonVariant::Destructive,
-                                            title: "Remove this prepared tag",
-                                            onclick: move |_| handle_remove(hash.clone()),
+                                            title: "Remove this image",
+                                            onclick: move |_| handle_remove(remove_id.clone()),
                                             Icon { icon: BsTrash3 }
                                         }
                                     }
                                 }
-
-                                // ── Line 2: metadata (date + size) ─────────────
-                                div {
-                                    class: "tags-item-meta",
-                                    if let Some(date) = build_date {
-                                        DateBadge { date }
-                                    }
-                                    span {
-                                        class: "tag-meta-size",
-                                        title: "{size} bytes",
-                                        "💾 {size_readable}"
-                                    }
+                                div { class: "tags-item-meta",
+                                    if let Some(date) = build_date { DateBadge { date } }
+                                    span { class: "tag-meta-size", title: "{size} bytes", "💾 {size_readable}" }
                                 }
                             }
                         }
@@ -1140,53 +1030,36 @@ fn runtime_images_tab() -> Element {
             }
         }
 
-        // ── Available Tags list ──────────────────────────────────────────────
-        div {
-            class: "tags-container",
-            h2 { class: "section-title", "Available Tags" }
+        // ── Available Tags ──────────────────────────────────────────────────
+        div { class: "tags-container",
+            h2 { class: "section-title", "Available" }
 
             if tags_loading() {
                 p { class: "loading", "Loading…" }
             } else if available_tags().is_empty() {
-                p { class: "empty", "Failed to load tags." }
+                p { class: "empty", "Could not load available tags." }
             } else {
-                ul {
-                    class: "tags-list",
+                ul { class: "tags-list",
                     {available_tags().into_iter().map(|tag_info| {
                         let name = tag_info.name.clone();
                         let name2 = tag_info.name.clone();
                         let build_date = tag_info.build_date.clone();
                         rsx! {
-                            li {
-                                key: "{name}",
-                                class: "tags-item",
-
-                                // ── Line 1: name + download button ─────────────
-                                div {
-                                    class: "tags-item-top",
-                                    span {
-                                        class: "tag-name",
-                                        title: "{name}",
-                                        "{name}"
-                                    }
-                                    div {
-                                        class: "tag-actions",
+                            li { key: "{name}", class: "tags-item",
+                                div { class: "tags-item-top",
+                                    span { class: "tag-name", title: "{name}", "{name}" }
+                                    div { class: "tag-actions",
                                         Button {
                                             variant: ButtonVariant::Secondary,
-                                            title: "Download and prepare this tag",
-                                            onclick: move |_| handle_prepare(name2.clone()),
+                                            title: "Pull this image",
                                             disabled: preparing(),
+                                            onclick: move |_| handle_prepare(name2.clone()),
                                             Icon { icon: BsDownload }
                                         }
                                     }
                                 }
-
-                                // ── Line 2: build date ─────────────────────────
                                 if let Some(date) = build_date {
-                                    div {
-                                        class: "tags-item-meta",
-                                        DateBadge { date }
-                                    }
+                                    div { class: "tags-item-meta", DateBadge { date } }
                                 }
                             }
                         }

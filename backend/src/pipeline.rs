@@ -64,10 +64,7 @@ pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String>
         TaskKind::RunPipeline
     };
 
-    let task_id = {
-        let mut registry = TASK_REGISTRY.lock().unwrap();
-        registry.create_task(task_kind, project_name.clone())
-    };
+    let task_id = TASK_REGISTRY.create_task(task_kind, project_name.clone());
     info!(task_id = %task_id, "Pipeline task created");
 
     let task_id_clone = task_id.clone();
@@ -125,13 +122,10 @@ async fn run_pipeline_task(
         // We need to capture the PID to kill the process and its children
         if let Some(pid) = handle.id() {
             debug!(pid = pid, "Registered process termination handler");
-            TASK_REGISTRY
-                .lock()
-                .unwrap()
-                .set_kill_fn(&task_id_kill, move || {
-                    info!(pid = pid, "Terminating pipeline process tree");
-                    kill_process_tree(pid as i32);
-                });
+            TASK_REGISTRY.set_kill_fn(&task_id_kill, move || {
+                info!(pid = pid, "Terminating pipeline process tree");
+                kill_process_tree(pid as i32);
+            });
         }
     }
 

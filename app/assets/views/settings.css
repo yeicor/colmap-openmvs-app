@@ -8,15 +8,40 @@
     padding: 0.5rem;
     max-width: 1200px;
     margin: 0 auto;
-    container-name: settings;
-    container-type: inline-size;
 }
 
-/* Tab labels – hide text on very narrow widths */
-#settings .tab-label {
-    display: inline;
+/* Main content area — mirrors #project .main-content */
+#settings .main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
 }
-@container settings (max-width: 360px) {
+
+/* Center the tab list — mirrors #project */
+#settings .dx-tabs-list {
+    width: 100%;
+    justify-content: center;
+}
+
+/* Trigger layout — mirrors #project */
+#settings .dx-tabs-trigger {
+    display: flex;
+    gap: 0.25rem;
+}
+
+@media (max-width: 400px) {
+    #settings .dx-tabs-trigger {
+        display: block;
+    }
+}
+
+/* Tab labels — hide text on very narrow widths, mirrors #project */
+#settings .tab-label {
+    display: block;
+}
+
+@media (max-width: 300px) {
     #settings .tab-label {
         display: none;
     }
@@ -60,6 +85,7 @@
     font-size: 1rem;
     min-width: max-content;
     color: var(--secondary-color);
+    cursor: help;
 }
 
 #settings .form-group input[type="text"],
@@ -85,121 +111,191 @@
     box-shadow: 0 0 0 3px var(--primary-color-7);
 }
 
-#settings .hidden-file-input {
-    display: none;
-}
-
 #settings .folder-row {
     display: flex;
     flex: 1;
     gap: 0.25rem;
+    min-width: 0;
 }
 
 #settings .form-actions {
     display: flex;
     gap: 0.5rem;
-    margin-top: 1rem;
+    margin-top: 0.75rem;
     flex-wrap: wrap;
 }
 
 /* =========================================================================
-   Shared section card  (used in Runtime & Images tabs)
+   Runtime tab container
    ========================================================================= */
 
-#settings .settings-section {
+#settings .runtime-tab {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+}
+
+/* =========================================================================
+   Runtime selector  (radio-card group)
+   ========================================================================= */
+
+#settings .rt-selector {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.6rem;
+}
+
+@media (max-width: 420px) {
+    #settings .rt-selector {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Individual option card */
+#settings .rt-option {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: var(--primary-color-5);
+    border: 2px solid var(--primary-color-6);
+    border-radius: 0.5rem;
+    cursor: pointer;
+    text-align: left;
+    transition:
+        border-color 0.15s,
+        background 0.15s,
+        box-shadow 0.15s;
+    position: relative;
+    font-family: inherit;
+    width: 100%;
+}
+
+#settings .rt-option:hover {
+    border-color: var(--focused-border-color);
+    background: var(--primary-color-4);
+}
+
+#settings .rt-option-active {
+    border-color: var(--focused-border-color);
+    background: var(--primary-color-4);
+    box-shadow: 0 0 0 3px var(--primary-color-7);
+}
+
+/* Icon column */
+#settings .rt-option-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    flex-shrink: 0;
+    color: var(--secondary-color-5);
+    transition: color 0.15s;
+}
+
+#settings .rt-option-active .rt-option-icon,
+#settings .rt-option:hover .rt-option-icon {
+    color: var(--focused-border-color);
+}
+
+/* Text column */
+#settings .rt-option-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    flex: 1;
+    min-width: 0;
+}
+
+#settings .rt-option-name {
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: var(--secondary-color);
+    line-height: 1.2;
+}
+
+/* Selection dot (right side) */
+#settings .rt-option-dot {
+    width: 0.9rem;
+    height: 0.9rem;
+    border-radius: 50%;
+    border: 2px solid var(--primary-color-6);
+    flex-shrink: 0;
+    background: transparent;
+    transition:
+        border-color 0.15s,
+        background 0.15s;
+}
+
+#settings .rt-option-active .rt-option-dot {
+    border-color: var(--focused-border-color);
+    background: var(--focused-border-color);
+}
+
+/* Status badges inside the selector */
+#settings .rt-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+    padding: 0.1em 0.5em;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+}
+
+#settings .rt-badge-ok {
+    background: var(--primary-success-color);
+    color: var(--secondary-success-color);
+    border: 1px solid var(--secondary-success-color);
+}
+
+#settings .rt-badge-warn {
+    background: var(--primary-warning-color);
+    color: var(--secondary-warning-color);
+    border: 1px solid var(--secondary-warning-color);
+}
+
+#settings .rt-badge-err {
+    background: var(--primary-error-color);
+    color: var(--secondary-error-color);
+    border: 1px solid var(--secondary-error-color);
+}
+
+#settings .rt-badge-dim {
+    background: var(--primary-color-6);
+    color: var(--secondary-color-5);
+    border: 1px solid var(--primary-color-6);
+}
+
+/* ── Runtime section cards ─────────────────────────────────────────────────── */
+
+#settings .runtime-card {
     background: var(--primary-color-5);
     border: 1px solid var(--primary-color-6);
     border-radius: 0.5rem;
-    padding: 1rem;
-    margin-bottom: 1rem;
-}
-
-#settings .settings-section:last-child {
-    margin-bottom: 0;
-}
-
-#settings .section-title {
-    margin: 0 0 0.4rem 0;
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: var(--secondary-color);
-}
-
-#settings .section-hint {
-    margin: 0 0 0.9rem 0;
-    font-size: 0.88rem;
-    color: var(--secondary-color-5);
-    line-height: 1.45;
-}
-
-/* Compact runtime sections */
-#settings .runtime-sub-tabs .settings-section .section-title,
-#settings .runtime-sub-tabs .settings-section .section-hint {
-    display: none;
-}
-
-#settings .runtime-sub-tabs .settings-section {
-    padding: 0.75rem;
+    padding: 0.9rem 1rem;
     margin-bottom: 0.75rem;
 }
 
-#settings .section-hint code {
-    font-family: "Monaco", "Menlo", monospace;
-    background: var(--primary-color-6);
-    padding: 0.1em 0.35em;
-    border-radius: 3px;
-    font-size: 0.85em;
+#settings .runtime-card:last-child {
+    margin-bottom: 0;
+}
+
+#settings .runtime-card-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--secondary-color-5);
+    margin-bottom: 0.65rem;
 }
 
 /* =========================================================================
-   Runtime tab
+   Status rows (shared between PRoot and Docker cards)
    ========================================================================= */
 
-/* Runtime sub-tabs */
-#settings .runtime-sub-tabs {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-}
-
-#settings .runtime-tab-triggers {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    border-bottom: 1px solid var(--primary-color-6);
-    padding-bottom: 0.5rem;
-}
-
-#settings .runtime-trigger {
-    padding: 0.5rem 1rem;
-    background: transparent;
-    border: none;
-    color: var(--secondary-color-5);
-    font-weight: 600;
-    font-size: 0.95rem;
-    cursor: pointer;
-    transition:
-        color 0.15s,
-        border-bottom 0.15s;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -0.5rem;
-}
-
-#settings .runtime-trigger:hover:not(.disabled) {
-    color: var(--secondary-color);
-}
-
-#settings .runtime-trigger.active {
-    color: var(--secondary-color);
-    border-bottom-color: var(--focused-border-color);
-}
-
-#settings .runtime-trigger.disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-/* Status rows */
 #settings .runtime-status {
     display: flex;
     flex-direction: column;
@@ -260,7 +356,7 @@
     border-radius: 4px;
 }
 
-/* Status notes (e.g. unsupported reason) */
+/* Status notes */
 #settings .status-note {
     margin: 0.2rem 0 0;
     font-size: 0.85rem;
@@ -271,21 +367,16 @@
     color: var(--secondary-error-color);
 }
 
-/* Install / update form */
-#settings .install-form {
+/* Inline actions row (install/update form) */
+#settings .status-actions {
     display: flex;
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
+    margin-top: 0.6rem;
 }
 
-#settings .install-label {
-    font-weight: 600;
-    font-size: 0.9rem;
-    color: var(--secondary-color-5);
-    white-space: nowrap;
-}
-
+/* Version select */
 #settings .version-select {
     padding: 0.4rem 0.6rem;
     border: 1px solid var(--primary-color-6);
@@ -313,132 +404,28 @@
 }
 
 /* =========================================================================
-   Images tab
+   Images section (shared between PRoot and Docker)
    ========================================================================= */
 
-/* Prepare form */
-#settings .prepare-form {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    align-items: center;
-    margin-bottom: 0.5rem;
-}
-
-#settings .image-tag-input {
-    flex: 1;
-    min-width: 200px;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid var(--primary-color-6);
-    border-radius: 0.375rem;
-    font-size: 1rem;
-    font-family: "Monaco", "Menlo", monospace;
-    background: var(--primary-color-1);
-    color: var(--secondary-color);
-    transition:
-        border-color 0.15s,
-        box-shadow 0.15s;
-}
-
-#settings .image-tag-input:focus {
-    outline: none;
-    border-color: var(--focused-border-color);
-    box-shadow: 0 0 0 3px var(--primary-color-7);
-}
-
-/* Prepare progress text */
-#settings .prepare-progress {
-    margin: 0.4rem 0 0;
-    font-size: 0.9rem;
-    color: var(--secondary-info-color);
-    font-style: italic;
-}
-
-/* Image list */
-#settings .image-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-}
-
-#settings .image-item {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.5rem 0.75rem;
-    background: var(--primary-color-3);
-    border: 1px solid var(--primary-color-6);
-    border-radius: 0.375rem;
-    flex-wrap: wrap;
-    transition: border-color 0.15s;
-}
-
-#settings .image-item:hover {
-    border-color: var(--focused-border-color);
-}
-
-#settings .image-tag {
-    font-family: "Monaco", "Menlo", monospace;
-    font-size: 0.9rem;
-    color: var(--secondary-color);
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-#settings .image-size {
-    font-size: 0.82rem;
-    color: var(--secondary-color-5);
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-
-/* Compact delete button inside image rows */
-#settings .image-item .dx-button[data-style="destructive"] {
-    width: 2.2rem;
-    height: 2.2rem;
-    padding: 0;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 0.25rem;
-}
-
-/* =========================================================================
-   Images header  (runtime info reminder)
-   ========================================================================= */
-
+/* In-progress header */
 #settings .images-header {
     margin-bottom: 0.75rem;
-    padding: 0.5rem 0.75rem;
+    padding: 0.45rem 0.75rem;
     background: var(--primary-color-4);
     border-left: 3px solid var(--focused-border-color);
     border-radius: 0.25rem;
 }
 
-#settings .images-info {
+#settings .prepare-progress {
     margin: 0;
-    font-size: 0.85rem;
-    color: var(--secondary-color-5);
-    font-weight: 500;
+    font-size: 0.9rem;
+    color: var(--secondary-info-color);
+    font-style: italic;
 }
 
-/* =========================================================================
-   Tags list (similar to project list)
-   ========================================================================= */
-
+/* Tags containers */
 #settings .tags-container {
-    background: var(--primary-color-5);
-    border: 1px solid var(--primary-color-6);
-    border-radius: 0.5rem;
-    padding: 1rem;
-    margin-bottom: 1rem;
+    margin-bottom: 0.75rem;
 }
 
 #settings .tags-container:last-child {
@@ -446,26 +433,29 @@
 }
 
 #settings .tags-container .section-title {
-    margin: 0 0 0.75rem 0;
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: var(--secondary-color);
+    margin: 0 0 0.5rem 0;
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--secondary-color-5);
 }
 
+/* Tags list */
 #settings .tags-list {
     list-style: none;
     padding: 0;
     margin: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 0.3rem;
 }
 
 #settings .tags-item {
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
-    padding: 0.55rem 0.75rem;
+    gap: 0.25rem;
+    padding: 0.5rem 0.7rem;
     background: var(--primary-color-3);
     border: 1px solid var(--primary-color-6);
     border-radius: 0.375rem;
@@ -476,8 +466,7 @@
     border-color: var(--focused-border-color);
 }
 
-/* ── Line 1: tag name + action buttons ─────────────────────────────────── */
-
+/* Line 1: tag name + action buttons */
 #settings .tags-item-top {
     display: flex;
     align-items: center;
@@ -487,7 +476,7 @@
 
 #settings .tag-name {
     font-family: "Monaco", "Menlo", monospace;
-    font-size: 0.88rem;
+    font-size: 0.85rem;
     color: var(--secondary-color);
     flex: 1;
     min-width: 0;
@@ -499,44 +488,44 @@
 #settings .tag-actions {
     display: flex;
     align-items: center;
-    gap: 0.35rem;
+    gap: 0.3rem;
     flex-shrink: 0;
 }
 
-/* ── Line 2: metadata (date, size) ──────────────────────────────────────── */
-
+/* Line 2: metadata (date, size) */
 #settings .tags-item-meta {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    min-height: 1.1rem; /* prevent layout shift when meta is absent */
+    gap: 0.65rem;
+    min-height: 1rem;
 }
 
-/* Relative-date badge – browser tooltip shows the exact date */
 #settings .tag-date-relative {
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     color: var(--secondary-color-5);
     white-space: nowrap;
     cursor: help;
 }
 
-/* Disk-size badge */
 #settings .tag-meta-size {
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     color: var(--secondary-color-5);
     white-space: nowrap;
-    cursor: default;
 }
 
-/* ── Action button sizing ────────────────────────────────────────────────── */
-
+/* Action button sizing */
 #settings .tags-item .dx-button {
-    height: 2rem;
-    min-width: 2rem;
-    padding: 0 0.45rem;
+    height: 1.9rem;
+    min-width: 1.9rem;
+    padding: 0 0.4rem;
     display: flex;
     align-items: center;
     justify-content: center;
     border-radius: 0.25rem;
-    font-size: 0.82rem;
+    font-size: 0.8rem;
+}
+
+/* Storage form inside a card */
+#settings .runtime-card .form-group {
+    margin-bottom: 0;
 }

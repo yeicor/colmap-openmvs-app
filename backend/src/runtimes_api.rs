@@ -4,7 +4,8 @@ use crate::runtimes::{prepare_progress_channel, Runtime, RuntimeFactory};
 use crate::task_registry::TASK_REGISTRY;
 use crate::AndroidSettingsValidation;
 use colmap_openmvs_api::{
-    ImageTagInfo, PrepareProgress, PreparedImageInfo, RuntimeInfo, TaskEvent, TaskInfo, TaskKind,
+    ImageTagInfo, PrepareProgress, PreparedImageInfo, ProjectRunStatus, RuntimeInfo, TaskEvent,
+    TaskInfo, TaskKind, TaskState,
 };
 use dioxus::fullstack::ServerEvents;
 use dioxus::Result;
@@ -93,10 +94,7 @@ pub async fn list_runtime_images() -> Result<Vec<PreparedImageInfo>> {
 pub async fn prepare_runtime_image(image: String) -> Result<String> {
     let rt = RuntimeFactory::proot().await;
 
-    let task_id = {
-        let mut registry = TASK_REGISTRY.lock().unwrap();
-        registry.create_task(TaskKind::PrepareImage, image.clone())
-    };
+    let task_id = TASK_REGISTRY.create_task(TaskKind::PrepareImage, image.clone());
 
     let task_id_clone = task_id.clone();
     tokio::spawn(async move {
@@ -292,8 +290,7 @@ pub async fn list_tasks(
     kind_filter: Option<TaskKind>,
     context_key_filter: Option<String>,
 ) -> Result<Vec<TaskInfo>> {
-    let registry = TASK_REGISTRY.lock().unwrap();
-    let mut tasks = registry.list_tasks();
+    let mut tasks = TASK_REGISTRY.list_tasks();
     if let Some(kind) = kind_filter {
         tasks.retain(|t| t.kind == kind);
     }
@@ -305,8 +302,7 @@ pub async fn list_tasks(
 
 /// Get info for a single task by ID.
 pub async fn get_task_info(task_id: String) -> Result<Option<TaskInfo>> {
-    let registry = TASK_REGISTRY.lock().unwrap();
-    Ok(registry.get_task_info(&task_id))
+    Ok(TASK_REGISTRY.get_task_info(&task_id))
 }
 
 /// Delete the PRoot binary if it's installed in the custom location.
@@ -320,7 +316,7 @@ pub async fn delete_runtime_binary() -> Result<()> {
 
 /// Cancel a running task.
 pub async fn cancel_task(task_id: String) -> Result<()> {
-    TASK_REGISTRY.lock().unwrap().cancel_task(&task_id);
+    TASK_REGISTRY.cancel_task(&task_id);
     Ok(())
 }
 
@@ -359,10 +355,7 @@ pub async fn subscribe_task_events(task_id: String) -> Result<ServerEvents<TaskE
 /// Returns the task ID immediately; subscribe with `subscribe_task_events`.
 /// On non-Android platforms, this completes immediately without doing anything.
 pub async fn repair_android_settings() -> Result<String> {
-    let task_id = {
-        let mut registry = TASK_REGISTRY.lock().unwrap();
-        registry.create_task(TaskKind::AndroidSettingsRepair, "system".to_string())
-    };
+    let task_id = TASK_REGISTRY.create_task(TaskKind::AndroidSettingsRepair, "system".to_string());
 
     let task_id_clone = task_id.clone();
     tokio::spawn(async move {
@@ -400,4 +393,146 @@ pub async fn repair_android_settings_impl() -> anyhow::Result<()> {
         tracing::info!("Android settings repair completed");
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Docker runtime API
+// ---------------------------------------------------------------------------
+
+/// Return the current status of the Docker runtime.
+pub async fn get_docker_runtime_info() -> Result<RuntimeInfo> {
+    let rt = RuntimeFactory::docker();
+    let (supported, unsupported_reason) = match rt.is_supported() {
+        Ok(()) => (true, None),
+        Err(e) => (false, Some(e.to_string())),
+    };
+    let (installed, version) = if supported {
+        match rt.version().await {
+            Ok(v) => (true, Some(v)),
+            Err(_) => (false, None),
+        }
+    } else {
+        (false, None)
+    };
+    Ok(RuntimeInfo {
+        name: "Docker".to_string(),
+        supported,
+        unsupported_reason,
+        installed,
+        version,
+    })
+}
+
+/// List all Docker images available locally on the system.
+pub async fn list_docker_images() -> Result<Vec<PreparedImageInfo>> {
+    let rt = RuntimeFactory::docker();
+    let images = rt
+        .list_images()
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    Ok(images
+        .into_iter()
+        .map(|img| PreparedImageInfo {
+            tag: img.tag_str().to_string(),
+            hash: img.hash.to_string(),
+            size: img.size,
+            size_readable: img.size_readable(),
+            build_date: img.build_date,
+        })
+        .collect())
+}
+
+/// Pull a Docker image, streaming progress via the task registry.
+/// Returns the task ID immediately; subscribe with `subscribe_task_events`.
+pub async fn prepare_docker_image(image: String) -> Result<String> {
+    let rt = RuntimeFactory::docker();
+
+    let task_id = TASK_REGISTRY.create_task(TaskKind::PrepareImage, image.clone());
+
+    let task_id_clone = task_id.clone();
+    tokio::spawn(async move {
+        let (tx, mut rx) = prepare_progress_channel();
+
+        // Relay PrepareProgress events into the task registry
+        let task_id_relay = task_id_clone.clone();
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                TASK_REGISTRY.publish_event(&task_id_relay, TaskEvent::PrepareProgress(event));
+            }
+        });
+
+        match rt.prepare(&image, tx).await {
+            Ok(()) => {
+                TASK_REGISTRY.publish_event(&task_id_clone, TaskEvent::Completed);
+            }
+            Err(e) => {
+                TASK_REGISTRY.publish_event(&task_id_clone, TaskEvent::Failed(e.to_string()));
+            }
+        }
+    });
+
+    Ok(task_id)
+}
+
+/// Remove a Docker image by its tag (or ID).
+pub async fn remove_docker_image(image_tag: String) -> Result<()> {
+    let rt = RuntimeFactory::docker();
+    rt.remove(&image_tag)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e).into())
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline status querying
+// ---------------------------------------------------------------------------
+
+/// Query the current run status for a project.
+/// Returns information about any active or recently completed RunPipeline/DryRunPipeline task.
+pub async fn get_project_run_status(project_name: String) -> Result<ProjectRunStatus> {
+    let tasks = TASK_REGISTRY.list_tasks();
+
+    // Look for the most recent RunPipeline or DryRunPipeline task for this project
+    for task_info in &tasks {
+        if task_info.context_key == project_name
+            && (task_info.kind == TaskKind::RunPipeline
+                || task_info.kind == TaskKind::DryRunPipeline)
+        {
+            let is_running = matches!(task_info.state, TaskState::Running);
+            let is_dry_run = task_info.kind == TaskKind::DryRunPipeline;
+
+            // Try to extract progress from the task's event log
+            let progress = if is_running {
+                if let Some(entry) = TASK_REGISTRY.get_task_entry(&task_info.id) {
+                    let events = entry.events.lock().unwrap();
+                    // Look for the most recent PipelineStageProgress event
+                    events.iter().rev().find_map(|event| {
+                        if let TaskEvent::PipelineStageProgress { progress: p, .. } = event {
+                            Some(p.clone())
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            return Ok(ProjectRunStatus {
+                is_running,
+                is_dry_run,
+                progress,
+                task_id: task_info.id.clone(),
+            });
+        }
+    }
+
+    // No active or recent task found
+    Ok(ProjectRunStatus {
+        is_running: false,
+        is_dry_run: false,
+        progress: None,
+        task_id: String::new(),
+    })
 }

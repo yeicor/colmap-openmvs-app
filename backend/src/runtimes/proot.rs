@@ -1294,7 +1294,11 @@ impl Runtime for PRoot {
             let proot_bin = find_proot_binary(&self.runtime_dir).await?;
             let runtime_proot = self.runtime_dir.join("proot");
 
-            if proot_bin == runtime_proot.to_string_lossy().as_ref() {
+            // Use canonicalized paths for comparison to avoid issues with symlinks or relative paths
+            let proot_bin_canon = tokio::fs::canonicalize(&proot_bin).await.unwrap_or_else(|_| std::path::PathBuf::from(&proot_bin));
+            let runtime_proot_canon = tokio::fs::canonicalize(&runtime_proot).await.unwrap_or(runtime_proot.clone());
+
+            if proot_bin_canon == runtime_proot_canon {
                 tokio::fs::remove_file(&runtime_proot)
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to delete proot binary: {}", e))?;

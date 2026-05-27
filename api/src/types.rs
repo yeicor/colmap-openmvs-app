@@ -27,6 +27,10 @@ pub struct Settings {
     /// Example: "/usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1"
     #[serde(default)]
     pub custom_mounts: Vec<String>,
+    /// The default container image tag to use for Docker runtime commands.
+    /// Example: "mirror.gcr.io/yeicor/colmap-openmvs:latest"
+    #[serde(default)]
+    pub docker_default_image_tag: Option<String>,
     /// Path to the settings.json file. Can be overridden via COLMAP_SETTINGS_PATH environment variable.
     /// Defaults to projects_folder/settings.json if not specified.
     #[serde(default)]
@@ -308,4 +312,17 @@ pub enum TaskEvent {
     Completed,
     /// The task failed
     Failed(String),
+}
+
+/// Status of a running or recently completed pipeline for a project
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectRunStatus {
+    /// Whether a pipeline is currently running for this project
+    pub is_running: bool,
+    /// Whether the active pipeline is a dry-run (true) or actual run (false)
+    pub is_dry_run: bool,
+    /// Current progress as a percentage (0.0..=1.0), None if not started or not available
+    pub progress: Option<f32>,
+    /// The task ID of the active/last pipeline run, empty string if no active task
+    pub task_id: String,
 }

@@ -28,6 +28,7 @@ pub fn TasksPanel() -> Element {
     // Track which task IDs already have a background subscription started from
     // this component so we never start duplicates.
     let mut bg_subscribed: Signal<HashSet<String>> = use_signal(HashSet::new);
+    let mut prev_task_count: Signal<usize> = use_signal(|| 0);
 
     // Re-run whenever the task list changes.  Start a background drive_task
     // for every Running task not yet subscribed from here.
@@ -45,6 +46,21 @@ pub fn TasksPanel() -> Element {
             // No component callback – just keep TasksCtx alive.
             drive_task(task_id, tasks_ctx, |_| {});
         }
+    });
+
+    // Auto-scroll drawer to bottom when a new task is added while panel is open
+    use_effect(move || {
+        let current_count = tasks_ctx.read().tasks.len();
+        if panel_open() && current_count > prev_task_count() {
+            // New task added - scroll to top (which shows bottom in column-reverse)
+            let _ = dioxus::document::eval(
+                "setTimeout(() => { \
+                    const body = document.querySelector('.tasks-drawer-body'); \
+                    if (body) body.scrollTop = 0; \
+                }, 0)",
+            );
+        }
+        prev_task_count.set(current_count);
     });
 
     let state = tasks_ctx.read();
@@ -149,17 +165,24 @@ fn TaskCard(entry: TaskEntry, tasks_ctx: TasksCtx) -> Element {
         None
     };
 
-    // Last 50 log lines, in chronological order.
+    // Logs in chronological order (oldest first), last 50 lines only.
     let log_lines: Vec<String> = entry
         .logs
         .iter()
-        .rev()
-        .take(50)
+        .skip(entry.logs.len().saturating_sub(50))
         .cloned()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
         .collect();
+
+    // Auto-scroll effect: when logs change and container is open, scroll to bottom
+    let log_lines_for_effect = log_lines.clone();
+    use_effect(move || {
+        if logs_open() && !log_lines_for_effect.is_empty() {
+            // Use setTimeout to ensure DOM is updated first
+            let _ = dioxus::document::eval(
+                "setTimeout(() => { const logs = document.querySelector('.task-card-logs'); if (logs) logs.scrollTop = logs.scrollHeight; }, 0)"
+            );
+        }
+    });
 
     rsx! {
         div {
@@ -217,7 +240,7 @@ fn TaskCard(entry: TaskEntry, tasks_ctx: TasksCtx) -> Element {
             }
 
             // ── Progress bar (running only) ──────────────────────────────
-            if let Some(p) = entry.progress {
+            if let Some(p) = entry.display_progress() {
                 if entry.is_running() {
                     div { class: "task-card-progress-track",
                         div {

@@ -218,10 +218,8 @@ pub async fn batch_resize_images(
         Err(anyhow!("Max dimension must be between 64 and 8192 pixels"))?
     }
 
-    let task_id = {
-        let mut registry = crate::task_registry::TASK_REGISTRY.lock().unwrap();
-        registry.create_task(TaskKind::BatchResize, project_name.clone())
-    };
+    let task_id = crate::task_registry::TASK_REGISTRY
+        .create_task(TaskKind::BatchResize, project_name.clone());
     info!(task_id = %task_id, project_name = %project_name, "Batch resize task created");
 
     let task_id_clone = task_id.clone();
@@ -263,10 +261,8 @@ pub async fn download_demo_images(project_name: String) -> dioxus::Result<String
     debug!(project_name = %project_name, "Starting demo image download");
     validate_project_name(&project_name)?;
 
-    let task_id = {
-        let mut registry = crate::task_registry::TASK_REGISTRY.lock().unwrap();
-        registry.create_task(TaskKind::DownloadDemo, project_name.clone())
-    };
+    let task_id = crate::task_registry::TASK_REGISTRY
+        .create_task(TaskKind::DownloadDemo, project_name.clone());
     info!(task_id = %task_id, project_name = %project_name, "Demo download task created");
 
     let task_id_clone = task_id.clone();

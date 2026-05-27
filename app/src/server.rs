@@ -8,7 +8,7 @@ use dioxus::{
 
 use colmap_openmvs_api::{
     ConfigSchema, ImageTagInfo, LoadedProjectConfig, OutputFile, PreparedImageInfo, Project,
-    RuntimeInfo, SavedProjectConfig, Settings, TaskEvent, TaskInfo,
+    ProjectRunStatus, RuntimeInfo, SavedProjectConfig, Settings, TaskEvent, TaskInfo,
 };
 
 #[cfg(feature = "server")]
@@ -248,6 +248,37 @@ pub async fn cancel_task(task_id: String) -> Result<()> {
 #[post("/projects/:project_name/pipeline")]
 pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String> {
     Ok(backend::run_pipeline(project_name, dry_run).await?)
+}
+
+#[get("/projects/:project_name/run-status")]
+pub async fn get_project_run_status(project_name: String) -> Result<ProjectRunStatus> {
+    backend::get_project_run_status(project_name).await
+}
+
+// ---------------------------------------------------------------------------
+// Docker runtime
+// ---------------------------------------------------------------------------
+
+#[get("/runtimes/docker/info")]
+pub async fn get_docker_runtime_info() -> Result<RuntimeInfo> {
+    #[cfg(feature = "server")]
+    ensure_android_startup().await;
+    backend::get_docker_runtime_info().await
+}
+
+#[get("/runtimes/docker/images")]
+pub async fn list_docker_images() -> Result<Vec<PreparedImageInfo>> {
+    backend::list_docker_images().await
+}
+
+#[post("/runtimes/docker/images/prepare")]
+pub async fn prepare_docker_image(image: String) -> Result<String> {
+    backend::prepare_docker_image(image).await
+}
+
+#[delete("/runtimes/docker/images/remove")]
+pub async fn remove_docker_image(image_tag: String) -> Result<()> {
+    backend::remove_docker_image(image_tag).await
 }
 
 // ---------------------------------------------------------------------------

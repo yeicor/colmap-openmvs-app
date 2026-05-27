@@ -1,10 +1,12 @@
 use colmap_openmvs_api::PrepareProgress;
 use tracing::{debug, error, info};
 
+mod docker;
 mod image_manager;
 mod proot;
 mod registry;
 
+pub use docker::Docker;
 pub use image_manager::{ImageConfig, ImageManager};
 pub use proot::PRoot;
 pub use registry::{ImageDigest, ImageTag, RegistryClient, RemoteImage, UpdateInfo, Version};
@@ -325,5 +327,10 @@ impl RuntimeFactory {
     pub fn proot_with_dir(runtime_dir: PathBuf) -> PRoot {
         debug!(runtime_dir = %runtime_dir.display(), "Creating PRoot runtime with custom directory");
         PRoot::new_default_images(runtime_dir)
+    }
+
+    /// Create a [`Docker`] runtime using the system `docker` binary.
+    pub fn docker() -> Docker {
+        Docker::new()
     }
 }

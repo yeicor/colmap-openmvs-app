@@ -46,6 +46,13 @@ pub struct TaskEntry {
     /// Used by [`drive_task`] to deduplicate log lines when multiple
     /// subscribers replay the same event history concurrently.
     pub logs_cursor: usize,
+    /// For pipeline tasks: number of actual pipeline stages (excludes Config/Tool Discovery).
+    /// Used to calculate global progress correctly.
+    pub total_pipeline_stages: Option<u32>,
+    /// For pipeline tasks: which stage is currently running (1-based, or 0 for Config/Tool Discovery).
+    pub current_stage_num: Option<u32>,
+    /// For pipeline tasks: progress within the current stage (0.0..=1.0).
+    pub stage_progress: Option<f32>,
 }
 
 impl TaskEntry {
@@ -58,14 +65,49 @@ impl TaskEntry {
             logs: Vec::new(),
             progress: None,
             logs_cursor: 0,
+            total_pipeline_stages: None,
+            current_stage_num: None,
+            stage_progress: None,
+        }
+    }
+
+    /// Calculate global pipeline progress (0.0..=1.0) based on current stage and stage progress.
+    /// Config and Tool Discovery stages (stage_num=0) are not counted toward progress.
+    pub fn compute_pipeline_progress(&self) -> Option<f32> {
+        if let (Some(total), Some(current), Some(stage_prog)) = (
+            self.total_pipeline_stages,
+            self.current_stage_num,
+            self.stage_progress,
+        ) {
+            if total == 0 {
+                return None;
+            }
+            // Config/Tool Discovery is stage_num=0, doesn't count
+            if current == 0 {
+                return Some(0.0);
+            }
+            // Calculate: previous stages are complete (100%), current stage is at stage_prog%
+            let previous_stages = (current - 1) as f32; // Stages before current (1-indexed)
+            let current_stage_contribution = stage_prog;
+            let global_progress = (previous_stages + current_stage_contribution) / total as f32;
+            Some(global_progress.clamp(0.0, 1.0))
+        } else {
+            None
         }
     }
 
     pub fn is_running(&self) -> bool {
         matches!(self.state, TaskState::Running)
     }
+
     pub fn is_terminal(&self) -> bool {
         !self.is_running()
+    }
+
+    /// Get the progress to display. For pipeline tasks, use computed progress.
+    /// For other tasks, use the stored progress.
+    pub fn display_progress(&self) -> Option<f32> {
+        self.compute_pipeline_progress().or(self.progress)
     }
 }
 
@@ -267,8 +309,40 @@ pub fn apply_event_to_entry(entry: &mut TaskEntry, event: &TaskEvent, stream_pos
                 entry.progress = Some(*completed as f32 / *total_files as f32);
             }
         }
+        TaskEvent::PipelineRemainingGroups(groups) => {
+            // Count non-Config/Tool-Discovery stages (those with pipeline_stage_num > 0)
+            // This will be refined when we see actual stage starts.
+            entry.total_pipeline_stages = Some(groups.len() as u32);
+        }
+        TaskEvent::PipelineStageStarted {
+            stage_index: _,
+            pipeline_stage_num,
+            total_stages,
+            stage_status,
+            ..
+        } => {
+            // Store total stages count
+            if *total_stages > 0 {
+                entry.total_pipeline_stages = Some(*total_stages);
+            }
+
+            // Update current stage and initialize stage progress
+            if let Some(stage_num) = pipeline_stage_num {
+                entry.current_stage_num = Some(*stage_num);
+                // For cached/skipped stages, progress is 1.0. For running stages, start at 0.0
+                entry.stage_progress = Some(match stage_status {
+                    colmap_openmvs_api::PipelineStageStatus::Cached | colmap_openmvs_api::PipelineStageStatus::Skipped => 1.0,
+                    colmap_openmvs_api::PipelineStageStatus::Run => 0.0,
+                });
+            } else {
+                // Config/Tool Discovery
+                entry.current_stage_num = Some(0);
+                entry.stage_progress = Some(1.0);
+            }
+        }
         TaskEvent::PipelineStageProgress { progress, .. } => {
-            entry.progress = Some(*progress);
+            // Update progress within current stage
+            entry.stage_progress = Some(*progress);
         }
         _ => {}
     }

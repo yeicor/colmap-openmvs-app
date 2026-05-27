@@ -311,6 +311,7 @@ fn default_settings() -> Settings {
         proot_images_dir: default_proot_images_dir(),
         default_image_tag,
         custom_mounts: Vec::new(),
+        docker_default_image_tag: None,
         settings_file_path: None,
     }
 }
@@ -427,32 +428,38 @@ pub async fn get_settings() -> Result<Settings> {
 pub async fn update_settings(new_settings: Settings) -> Result<()> {
     debug!(projects_folder = %new_settings.projects_folder, "Updating settings");
 
-    let mut settings = SETTINGS.write().await;
-    *settings = new_settings.clone();
+    // Compute everything we need from new_settings BEFORE taking the write lock,
+    // so the lock is held only for the in-memory swap and released before any I/O.
+    let projects_folder = new_settings.projects_folder.clone();
+    let path = get_effective_settings_path(&new_settings);
+    let json_result = serde_json::to_string_pretty(&new_settings);
 
-    // Persist to disk
-    debug!(folder = %settings.projects_folder, "Creating projects folder");
-    if let Err(e) = std::fs::create_dir_all(&settings.projects_folder) {
-        error!(folder = %settings.projects_folder, error = %e, "Failed to create projects folder");
+    // Hold the write lock ONLY to swap the in-memory value — released immediately.
+    {
+        let mut settings = SETTINGS.write().await;
+        *settings = new_settings;
     }
 
-    // Determine the effective settings file path
-    let path = get_effective_settings_path(&settings);
+    // All I/O happens after the write lock is released, so readers are never
+    // blocked by slow disk operations.
+    debug!(folder = %projects_folder, "Creating projects folder");
+    if let Err(e) = tokio::fs::create_dir_all(&projects_folder).await {
+        error!(folder = %projects_folder, error = %e, "Failed to create projects folder");
+    }
 
-    // Ensure the directory for settings file exists
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
                 error!(dir = %parent.display(), error = %e, "Failed to create settings directory");
             }
         }
     }
 
     debug!(path = %path.display(), "Serializing settings for persistence");
-    match serde_json::to_string_pretty(&new_settings) {
+    match json_result {
         Ok(json) => {
             debug!(path = %path.display(), json_len = json.len(), "Writing settings to disk");
-            if let Err(e) = std::fs::write(&path, json) {
+            if let Err(e) = tokio::fs::write(&path, &json).await {
                 error!(path = %path.display(), error = %e, "Failed to write settings to disk");
             } else {
                 info!(path = %path.display(), "Settings persisted to disk successfully");
