@@ -44,11 +44,22 @@ pub fn App() -> Element {
     // build.rs downloads all files; asset!() ensures they are copied into the
     // bundle and returns the (possibly fingerprinted) serving URL.
     {
-        let three_url = asset!("/assets/lib/three/three.module.js").to_string();
-        // with_minify(false) → dx skips esbuild for this file (bare 'three' import
-        // inside it would otherwise cause esbuild ERROR logs and a fallback copy).
+        let three_url = asset!(
+            "/assets/lib/three/three.module.js",
+            AssetOptions::js().with_minify(false)
+        )
+        .to_string();
+        // with_minify(false) → dx skips esbuild for these files. Without it
+        // esbuild may reformat them into a non-module (IIFE/CJS) format, which
+        // causes `import('three')` to fail with "Importing a module script
+        // failed". Files with bare 'three' imports would also ERROR in esbuild.
         let buf_geo_url = asset!(
             "/assets/lib/utils/BufferGeometryUtils.js",
+            AssetOptions::js().with_minify(false)
+        )
+        .to_string();
+        let skeleton_url = asset!(
+            "/assets/lib/utils/SkeletonUtils.js",
             AssetOptions::js().with_minify(false)
         )
         .to_string();
@@ -60,7 +71,8 @@ pub fn App() -> Element {
                 m.textContent = JSON.stringify({{
                     imports: {{
                         three: '{three_url}',
-                        '/utils/BufferGeometryUtils.js': '{buf_geo_url}'
+                        '/utils/BufferGeometryUtils.js': '{buf_geo_url}',
+                        '/utils/SkeletonUtils.js': '{skeleton_url}'
                     }}
                 }});
                 document.head.insertBefore(m, document.head.firstChild);

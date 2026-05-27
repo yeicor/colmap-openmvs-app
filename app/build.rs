@@ -102,11 +102,12 @@ fn main() {
         &trackball_path,
     );
 
-    // BufferGeometryUtils — a transitive dependency of GLTFLoader.
-    // GLTFLoader.js contains `from '../utils/BufferGeometryUtils.js'`.
-    // After dx flattens assets, that relative path resolves to
-    // `/utils/BufferGeometryUtils.js` in the browser; the importmap in App.rs
-    // maps that to the real (hashed) asset URL.
+    // Transitive dependencies of GLTFLoader:
+    //   GLTFLoader.js → '../utils/BufferGeometryUtils.js'
+    //   GLTFLoader.js → '../utils/SkeletonUtils.js'
+    // After dx flattens assets, those relative paths resolve to
+    // `/utils/BufferGeometryUtils.js` and `/utils/SkeletonUtils.js` in the
+    // browser; the importmap in App.rs maps them to their (hashed) asset URLs.
     let utils_dir = lib_dir.join("utils");
     fs::create_dir_all(&utils_dir).expect("Failed to create assets/lib/utils/");
     download_if_absent(
@@ -114,6 +115,12 @@ fn main() {
             "https://cdn.jsdelivr.net/npm/three@{three_version}/examples/jsm/utils/BufferGeometryUtils.js"
         ),
         &utils_dir.join("BufferGeometryUtils.js"),
+    );
+    download_if_absent(
+        &format!(
+            "https://cdn.jsdelivr.net/npm/three@{three_version}/examples/jsm/utils/SkeletonUtils.js"
+        ),
+        &utils_dir.join("SkeletonUtils.js"),
     );
 
     // ── Write marker (only after all downloads succeed) ────────────────────────

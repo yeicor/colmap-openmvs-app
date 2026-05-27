@@ -15,8 +15,6 @@ TARGET_ARCH="${TARGET_ARCH:-aarch64-linux-android}"
 ARCH_ABI="${ARCH_ABI:-arm64-v8a}"
 SKIP_DX=0
 SKIP_EMBED=0
-EMBED_DEMO_IMAGES=1
-DISABLE_NETWORK=1
 
 for arg in "$@"; do
     case "$arg" in
@@ -24,8 +22,6 @@ for arg in "$@"; do
         --image=*)    DOCKER_IMAGE="${arg#*=}" ;;
         --skip-dx)              SKIP_DX=1 ;;
         --skip-embed)           SKIP_EMBED=1 ;;
-        --skip-demo-images)     EMBED_DEMO_IMAGES=0 ;;
-        --no-disable-network)   DISABLE_NETWORK=0 ;;
         --help|-h)
             grep '^#' "$0" | head -20 | sed 's/^# \?//'
             exit 0 ;;
@@ -44,8 +40,6 @@ echo "   BUILD_MODE           : $BUILD_MODE"
 echo "   DOCKER_IMAGE         : $DOCKER_IMAGE"
 echo "   TARGET_ARCH          : $TARGET_ARCH"
 echo "   ARCH_ABI             : $ARCH_ABI"
-echo "   EMBED_DEMO_IMAGES    : $EMBED_DEMO_IMAGES"
-echo "   DISABLE_NETWORK      : $DISABLE_NETWORK"
 echo "=================================================================="
 
 # Capitalise mode name for Gradle (e.g. debug→Debug, release→Release)
@@ -161,32 +155,6 @@ if [ ! -f "$CACHE_DIR/libtalloc.so.2" ]; then
 else
     echo "libtalloc already cached."
 fi
-
-# =============================================================================
-# STEP 2B — Download demo images if requested
-# =============================================================================
-if [ "$EMBED_DEMO_IMAGES" -eq 1 ] && [ "$SKIP_EMBED" -eq 0 ]; then
-
-echo ""
-echo "─── Step 2B: Demo images from eth3d ──────────────────────────────────"
-
-DEMO_URL="https://www.eth3d.net/data/door_dslr_jpg.7z"
-# DEMO_FILE is declared at the top
-
-if [ ! -f "$DEMO_FILE" ]; then
-    echo "Downloading demo images from: $DEMO_URL"
-    curl -fSL -o "$DEMO_FILE" "$DEMO_URL"
-    if [ ! -f "$DEMO_FILE" ]; then
-        echo "ERROR: Failed to download demo images" >&2
-        exit 1
-    fi
-    FILE_SIZE=$(du -h "$DEMO_FILE" | cut -f1)
-    echo "Demo images downloaded: $FILE_SIZE"
-else
-    echo "Demo images already cached."
-fi
-
-fi  # end EMBED_DEMO_IMAGES==1 && SKIP_EMBED==0
 
 # =============================================================================
 # STEP 3 — Export Docker image rootfs (linux/arm64) if not cached
@@ -312,13 +280,6 @@ for f in "$CACHE_DIR/rootfs_files"/*; do
 done
 # manifest → librootfs-manifest.so (auto-included by AGP)
 cp "$CACHE_DIR/embedded_rootfs_manifest.json" "$JNILIB_DIR/librootfs-manifest.so"
-
-# demo images → libdemo-images.so (auto-included by AGP) if available
-if [ "$EMBED_DEMO_IMAGES" -eq 1 ] && [ -f "$DEMO_FILE" ]; then
-    echo "Embedding demo images..."
-    cp "$DEMO_FILE" "$JNILIB_DIR/libdemo-images.so"
-    echo "Demo images embedded"
-fi
 
 # ===== Patch libproot.so with patchelf =======================================
 echo ""
