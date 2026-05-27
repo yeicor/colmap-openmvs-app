@@ -353,81 +353,10 @@ fn load_settings_from_disk() -> Settings {
     debug!(path = %path.display(), "Loading settings from disk");
 
     match std::fs::read_to_string(&path) {
-        Ok(contents) => match serde_json::from_str::<serde_json::Value>(&contents) {
-            Ok(mut value) => {
-                // Handle migration from old proot_folder to new split format
-                // `.map(str::to_owned)` clones the value immediately, releasing the
-                // immutable borrow on `value` before we mutably index into it below.
-                if let Some(old_proot_folder) = value
-                    .get("proot_folder")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_owned)
-                {
-                    info!(path = %path.display(), "Migrating old proot_folder to split format");
-                    if value.get("proot_binary_dir").is_none() {
-                        value["proot_binary_dir"] =
-                            serde_json::Value::String(default_proot_binary_dir());
-                    }
-                    if value.get("proot_images_dir").is_none() {
-                        value["proot_images_dir"] =
-                            serde_json::Value::String(old_proot_folder.to_string());
-                    }
-                    if let Some(obj) = value.as_object_mut() {
-                        obj.remove("proot_folder");
-                    }
-                } else {
-                    // Fresh migration: add any missing fields with their defaults
-                    if value.get("proot_binary_dir").is_none() {
-                        info!(path = %path.display(), "Adding missing proot_binary_dir to settings");
-                        value["proot_binary_dir"] =
-                            serde_json::Value::String(default_proot_binary_dir());
-                    }
-                    if value.get("proot_images_dir").is_none() {
-                        info!(path = %path.display(), "Adding missing proot_images_dir to settings");
-                        value["proot_images_dir"] =
-                            serde_json::Value::String(default_proot_images_dir());
-                    }
-                }
-
-                // Migrate from separate default_image_tag and docker_default_image_tag to unified format
-                if let Some(obj) = value.as_object_mut() {
-                    let proot_tag = obj
-                        .remove("default_image_tag")
-                        .and_then(|v| v.as_str().map(str::to_owned));
-                    let docker_tag = obj
-                        .remove("docker_default_image_tag")
-                        .and_then(|v| v.as_str().map(str::to_owned));
-
-                    // Prefer docker tag if it's set and different, otherwise use proot tag
-                    if let Some(tag) = docker_tag {
-                        info!(path = %path.display(), "Migrating docker_default_image_tag to unified format");
-                        obj.insert(
-                            "default_image_tag".to_string(),
-                            serde_json::Value::String(format!("docker:{}", tag)),
-                        );
-                    } else if let Some(tag) = proot_tag {
-                        info!(path = %path.display(), "Migrating default_image_tag to unified format");
-                        obj.insert(
-                            "default_image_tag".to_string(),
-                            serde_json::Value::String(format!("proot:{}", tag)),
-                        );
-                    }
-                }
-
-                // Remove proot_custom_command if it exists (migrating away from it)
-                if let Some(obj) = value.as_object_mut() {
-                    obj.remove("proot_custom_command");
-                }
-                match serde_json::from_value::<Settings>(value) {
-                    Ok(settings) => {
-                        info!(path = %path.display(), "Settings loaded successfully from disk");
-                        settings
-                    }
-                    Err(e) => {
-                        error!(path = %path.display(), error = %e, "Failed to parse settings file, using defaults");
-                        default_settings()
-                    }
-                }
+        Ok(contents) => match serde_json::from_str::<Settings>(&contents) {
+            Ok(settings) => {
+                info!(path = %path.display(), "Settings loaded successfully from disk");
+                settings
             }
             Err(e) => {
                 error!(path = %path.display(), error = %e, "Failed to parse settings file, using defaults");

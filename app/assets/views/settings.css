@@ -208,11 +208,32 @@
     min-width: 0;
 }
 
+#settings .rt-option-name-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    line-height: 1.2;
+}
+
 #settings .rt-option-name {
     font-weight: 700;
     font-size: 0.95rem;
     color: var(--secondary-color);
     line-height: 1.2;
+}
+
+#settings .rt-option-default-mark {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    background: var(--primary-success-color);
+    color: var(--secondary-success-color);
+    border: 1px solid var(--secondary-success-color);
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
 }
 
 /* Selection dot (right side) */

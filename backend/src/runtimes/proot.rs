@@ -1285,7 +1285,7 @@ impl Runtime for PRoot {
         #[cfg(target_os = "android")]
         {
             return Err(anyhow::anyhow!(
-                "Cannot delete the embedded proot binary — \\n                 it is part of the application package and managed by Android."
+                "Cannot delete the embedded proot binary — it is part of the application package and managed by Android."
             ));
         }
 
@@ -1295,8 +1295,12 @@ impl Runtime for PRoot {
             let runtime_proot = self.runtime_dir.join("proot");
 
             // Use canonicalized paths for comparison to avoid issues with symlinks or relative paths
-            let proot_bin_canon = tokio::fs::canonicalize(&proot_bin).await.unwrap_or_else(|_| std::path::PathBuf::from(&proot_bin));
-            let runtime_proot_canon = tokio::fs::canonicalize(&runtime_proot).await.unwrap_or(runtime_proot.clone());
+            let proot_bin_canon = tokio::fs::canonicalize(&proot_bin)
+                .await
+                .unwrap_or_else(|_| std::path::PathBuf::from(&proot_bin));
+            let runtime_proot_canon = tokio::fs::canonicalize(&runtime_proot)
+                .await
+                .unwrap_or(runtime_proot.clone());
 
             if proot_bin_canon == runtime_proot_canon {
                 tokio::fs::remove_file(&runtime_proot)

@@ -15,7 +15,7 @@ use crate::task_manager::{drive_task, start_task, TasksCtx};
 use crate::Route;
 use chrono::{DateTime, Duration, Utc};
 use colmap_openmvs_api::{
-    ImageTagInfo, PreparedImageInfo, RuntimeInfo, Settings, TaskEvent, TaskKind, TaskState,
+    ImageTagInfo, PreparedImageInfo, RuntimeInfo, TaskEvent, TaskKind, TaskState,
 };
 use dioxus::document::eval;
 use dioxus::prelude::*;
@@ -279,17 +279,39 @@ fn RuntimeTab() -> Element {
     let proot_info = use_signal(|| None::<RuntimeInfo>);
     let docker_info = use_signal(|| None::<RuntimeInfo>);
     let mut active_runtime = use_signal(|| "proot".to_string());
+    let proot_has_default = use_signal(|| false);
+    let docker_has_default = use_signal(|| false);
 
-    // Load both statuses concurrently on mount
+    // Load both statuses and default image info concurrently on mount
     use_effect(move || {
         let mut pi = proot_info;
         let mut di = docker_info;
+        let mut ar = active_runtime;
+        let mut phd = proot_has_default;
+        let mut dhd = docker_has_default;
         spawn(async move {
+            // Load runtime info
             if let Ok(info) = get_runtime_info().await {
                 pi.set(Some(info));
             }
             if let Ok(info) = get_docker_runtime_info().await {
                 di.set(Some(info));
+            }
+
+            // Load settings to get the selected runtime and default image info
+            if let Ok(settings) = get_settings().await {
+                let (runtime, _tag) = settings.parse_default_image();
+
+                // Set which runtimes have defaults
+                if let Some(rt) = runtime {
+                    if rt == "proot" {
+                        phd.set(true);
+                    } else if rt == "docker" {
+                        dhd.set(true);
+                    }
+                    // Set active runtime to the one with the default
+                    ar.set(rt.to_string());
+                }
             }
         });
     });
@@ -326,7 +348,12 @@ fn RuntimeTab() -> Element {
 
                     div { class: "rt-option-icon", Icon { icon: BsHdd } }
                     div { class: "rt-option-body",
-                        span { class: "rt-option-name", "PRoot" }
+                        div { class: "rt-option-name-row",
+                            span { class: "rt-option-name", "PRoot" }
+                            if proot_has_default() {
+                                span { class: "rt-option-default-mark", "✓ Default" }
+                            }
+                        }
                         span { class: "{proot_cls}", "{proot_label}" }
                     }
                     // Active indicator dot
@@ -343,7 +370,12 @@ fn RuntimeTab() -> Element {
 
                     div { class: "rt-option-icon", Icon { icon: BsBox } }
                     div { class: "rt-option-body",
-                        span { class: "rt-option-name", "Docker" }
+                        div { class: "rt-option-name-row",
+                            span { class: "rt-option-name", "Docker" }
+                            if docker_has_default() {
+                                span { class: "rt-option-default-mark", "✓ Default" }
+                            }
+                        }
                         span { class: "{docker_cls}", "{docker_label}" }
                     }
                     div { class: "rt-option-dot" }
