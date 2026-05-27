@@ -25,15 +25,25 @@ async fn find_proot_binary(runtime_dir: &Path) -> RuntimeResult<String> {
     // Strategy 1: Look for 'libproot.so' in runtime_dir (Android APK asset, *.so naming)
     let embedded_proot = runtime_dir.join("libproot.so");
     if embedded_proot.exists() {
-        info!(path = %embedded_proot.display(), "find_proot_binary: found embedded libproot.so");
-        return Ok(embedded_proot.to_string_lossy().into_owned());
+        let abs_path = embedded_proot
+            .canonicalize()
+            .unwrap_or_else(|_| embedded_proot.clone())
+            .to_string_lossy()
+            .into_owned();
+        info!(path = %abs_path, "find_proot_binary: found embedded libproot.so");
+        return Ok(abs_path);
     }
 
     // Strategy 2: Look for plain 'proot' in runtime_dir (runtime-downloaded binary)
     let downloaded_proot = runtime_dir.join("proot");
     if downloaded_proot.exists() {
-        info!(path = %downloaded_proot.display(), "find_proot_binary: found downloaded proot");
-        return Ok(downloaded_proot.to_string_lossy().into_owned());
+        let abs_path = downloaded_proot
+            .canonicalize()
+            .unwrap_or_else(|_| downloaded_proot.clone())
+            .to_string_lossy()
+            .into_owned();
+        info!(path = %abs_path, "find_proot_binary: found downloaded proot");
+        return Ok(abs_path);
     }
 
     // Strategy 3: Try direct execution (proot might be in system PATH)
@@ -44,15 +54,22 @@ async fn find_proot_binary(runtime_dir: &Path) -> RuntimeResult<String> {
         .await
         .is_ok()
     {
+        // Try to get the absolute path from which::which()
+        if let Ok(abs_path_buf) = which::which("proot") {
+            let abs_path = abs_path_buf.to_string_lossy().into_owned();
+            info!(path = %abs_path, "find_proot_binary: direct execution succeeded, resolved to absolute path");
+            return Ok(abs_path);
+        }
         info!("find_proot_binary: direct execution succeeded, 'proot' is in system PATH");
         return Ok("proot".to_string());
     }
 
     // Strategy 4: Fall back to which (may be cached, least reliable)
     info!("find_proot_binary: attempting lookup via which::which()");
-    if which::which("proot").is_ok() {
-        info!("find_proot_binary: which::which() found proot");
-        return Ok("proot".to_string());
+    if let Ok(abs_path_buf) = which::which("proot") {
+        let abs_path = abs_path_buf.to_string_lossy().into_owned();
+        info!(path = %abs_path, "find_proot_binary: which::which() found proot");
+        return Ok(abs_path);
     }
 
     // All strategies failed

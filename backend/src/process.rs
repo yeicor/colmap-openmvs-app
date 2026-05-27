@@ -6,6 +6,7 @@ use tracing::{debug, info, trace, warn};
 #[cfg(target_os = "windows")]
 mod platform {
     use super::*;
+    use std::convert::Infallible;
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
@@ -54,7 +55,7 @@ mod platform {
                     if snapshot.is_invalid() {
                         return;
                     }
-                    let result = (|| {
+                    let result: Result<(), Infallible> = (|| {
                         let mut pids_ref = pids;
                         let mut entry = PROCESSENTRY32W {
                             dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,

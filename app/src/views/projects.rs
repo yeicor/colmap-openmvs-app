@@ -1,5 +1,4 @@
-use crate::mycomponents::PageHeaderButton;
-use crate::mycomponents::{Banner, BannerType};
+use crate::mycomponents::{Banner, BannerType, PageHeaderButton, TasksPanel};
 use crate::server::{create_project, delete_project, get_projects, rename_project};
 use crate::Route;
 use crate::{
@@ -42,6 +41,7 @@ pub fn ProjectsSidebar() -> Element {
             }
         }
         Outlet::<Route> {}
+        TasksPanel {}
     }
 }
 

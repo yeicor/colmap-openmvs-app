@@ -299,13 +299,31 @@ async fn launch_glb_viewer(b64: &str, fname_safe: &str) {
     let b64_esc = js_escape(b64);
     let fname_esc = js_escape(fname_safe);
 
+    // asset!() with with_minify(false) → dx copies these files verbatim without
+    // invoking esbuild (which would ERROR on the bare 'three' import). The
+    // importmap injected in App resolves 'three' and the BufferGeometryUtils
+    // relative import at runtime.
+    let gltf_url = asset!(
+        "/assets/lib/three/GLTFLoader.js",
+        AssetOptions::js().with_minify(false)
+    )
+    .to_string();
+    let trackball_url = asset!(
+        "/assets/lib/three/TrackballControls.js",
+        AssetOptions::js().with_minify(false)
+    )
+    .to_string();
+
     let js = format!(
         r#"(async () => {{
     console.log('[3D Viewer] Starting viewer setup...');
     try {{
-        const THREE = await import('https://esm.sh/three@0.169.0');
-        const {{ GLTFLoader }} = await import('https://esm.sh/three@0.169.0/examples/jsm/loaders/GLTFLoader.js');
-        const {{ TrackballControls }} = await import('https://esm.sh/three@0.169.0/examples/jsm/controls/TrackballControls.js');
+        // three.js and its addons are vendored locally by build.rs.
+        // 'three' is resolved to the local asset via the importmap in App.
+        // GLTFLoader/TrackballControls are loaded from their asset!() URLs.
+        const THREE = await import('three');
+        const {{ GLTFLoader }} = await import('{gltf_url}');
+        const {{ TrackballControls }} = await import('{trackball_url}');
         console.log('[3D Viewer] Libraries loaded');
 
         const b64 = '{}';

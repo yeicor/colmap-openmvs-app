@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "eruda": "3.4.1",
+    "three": "0.169.0"
+  }
+}

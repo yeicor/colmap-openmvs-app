@@ -1,0 +1,412 @@
+//! Global task management.
+//!
+//! All long-running background tasks (image preparation, demo download, batch
+//! resize, pipeline runs) register themselves here.  The [`TasksCtx`] signal
+//! lives at the `App` level so it outlives any individual component.
+//!
+//! # Why this exists
+//! Dioxus `spawn` futures are scoped to the component that calls them.  When a
+//! user navigates away, the component unmounts and the subscription is dropped –
+//! even though the server task is still running.  This module solves that by:
+//!
+//! 1. Keeping a persistent task list in [`TasksCtx`] (provided at `App` level).
+//! 2. [`drive_task`] auto-reconnects when the SSE stream closes unexpectedly
+//!    instead of treating stream-end as success.
+//! 3. [`TasksPanel`](crate::mycomponents::tasks_panel) in `ProjectsSidebar`
+//!    (always mounted) re-subscribes to any task that lost its component
+//!    subscription, so the panel stays live.
+
+use crate::server::{get_task_info, subscribe_task_events};
+use colmap_openmvs_api::{
+    DemoProgressEvent, PrepareProgress, ResizeProgressEvent, TaskEvent, TaskKind, TaskState,
+};
+use dioxus::prelude::*;
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+pub const MAX_LOG_LINES: usize = 500;
+
+// ---------------------------------------------------------------------------
+// Data model
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TaskEntry {
+    pub id: String,
+    pub label: String,
+    pub kind: TaskKind,
+    pub state: TaskState,
+    /// Recent log lines (capped at [`MAX_LOG_LINES`]).
+    pub logs: Vec<String>,
+    /// Overall 0.0..=1.0 progress; `None` if unknown.
+    pub progress: Option<f32>,
+    /// How many stream events have been written into `logs` so far.
+    /// Used by [`drive_task`] to deduplicate log lines when multiple
+    /// subscribers replay the same event history concurrently.
+    pub logs_cursor: usize,
+}
+
+impl TaskEntry {
+    pub fn new(id: String, label: String, kind: TaskKind) -> Self {
+        Self {
+            id,
+            label,
+            kind,
+            state: TaskState::Running,
+            logs: Vec::new(),
+            progress: None,
+            logs_cursor: 0,
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        matches!(self.state, TaskState::Running)
+    }
+    pub fn is_terminal(&self) -> bool {
+        !self.is_running()
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct TasksState {
+    pub tasks: Vec<TaskEntry>,
+}
+
+impl TasksState {
+    pub fn running_count(&self) -> usize {
+        self.tasks.iter().filter(|t| t.is_running()).count()
+    }
+
+    /// Register a new Running task.  No-op if the `id` is already present.
+    pub fn register(&mut self, id: String, label: String, kind: TaskKind) {
+        if self.tasks.iter().any(|t| t.id == id) {
+            return;
+        }
+        self.tasks.push(TaskEntry::new(id, label, kind));
+    }
+
+    /// Remove old terminal tasks, keeping at most `MAX_TERMINAL` recent ones.
+    pub fn gc(&mut self) {
+        const MAX_TERMINAL: usize = 10;
+        let terminal_count = self.tasks.iter().filter(|t| t.is_terminal()).count();
+        if terminal_count > MAX_TERMINAL {
+            let to_drop = terminal_count - MAX_TERMINAL;
+            let mut dropped = 0usize;
+            self.tasks.retain(|t| {
+                if t.is_terminal() && dropped < to_drop {
+                    dropped += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+    }
+}
+
+/// Global context type.  Provide this once at `App` level with
+/// `use_context_provider(|| Signal::new(TasksState::default()))`.
+pub type TasksCtx = Signal<TasksState>;
+
+// ---------------------------------------------------------------------------
+// Event → log line
+// ---------------------------------------------------------------------------
+
+/// Convert a [`TaskEvent`] to a human-readable log line, or `None` for events
+/// that don't produce visible output (keep-alives, progress-only events, etc.).
+pub fn event_to_log_line(event: &TaskEvent) -> Option<String> {
+    match event {
+        TaskEvent::Log(msg) if !msg.contains("Keep-alive") => Some(msg.clone()),
+
+        TaskEvent::PrepareProgress(PrepareProgress::Downloading {
+            downloaded_bytes,
+            total_bytes,
+        }) => {
+            let mb = *downloaded_bytes as f64 / 1_048_576.0;
+            Some(if let Some(total) = total_bytes {
+                format!("↓ {:.1}/{:.1} MB", mb, *total as f64 / 1_048_576.0)
+            } else {
+                format!("↓ {:.1} MB", mb)
+            })
+        }
+        TaskEvent::PrepareProgress(PrepareProgress::ExtractingLayer { layer, progress }) => {
+            Some(format!("⚙ {} {:.0}%", layer, progress * 100.0))
+        }
+        TaskEvent::PrepareProgress(PrepareProgress::Error { message }) => {
+            Some(format!("✗ {}", message))
+        }
+
+        TaskEvent::DemoProgress(DemoProgressEvent::DownloadProgress {
+            downloaded_bytes,
+            total_bytes,
+        }) => {
+            let mb = *downloaded_bytes as f64 / 1_048_576.0;
+            Some(format!(
+                "↓ demo {:.1}/{:.1} MB",
+                mb,
+                *total_bytes as f64 / 1_048_576.0
+            ))
+        }
+        TaskEvent::DemoProgress(DemoProgressEvent::ExtractionProgress {
+            last_file,
+            total_files,
+            ..
+        }) => Some(format!(
+            "⚙ {} files{}",
+            total_files,
+            last_file
+                .as_deref()
+                .map(|f| format!(": {}", f))
+                .unwrap_or_default()
+        )),
+        TaskEvent::DemoProgress(DemoProgressEvent::Error { message }) => {
+            Some(format!("✗ {}", message))
+        }
+
+        TaskEvent::ResizeProgress(ResizeProgressEvent::ResizeProgress {
+            name,
+            completed,
+            total_files,
+        }) => Some(format!("⚙ {}/{} {}", completed, total_files, name)),
+        TaskEvent::ResizeProgress(ResizeProgressEvent::Error { message }) => {
+            Some(format!("✗ {}", message))
+        }
+
+        TaskEvent::PipelineLog {
+            stage_name, line, ..
+        } => Some(format!("[{}] {}", stage_name, line)),
+        TaskEvent::PipelineStageStarted {
+            stage_name,
+            stage_status,
+            ..
+        } => {
+            use colmap_openmvs_api::PipelineStageStatus;
+            let icon = match stage_status {
+                PipelineStageStatus::Cached => "↩",
+                PipelineStageStatus::Skipped => "⊘",
+                PipelineStageStatus::Run => "▶",
+            };
+            Some(format!("{} {}", icon, stage_name))
+        }
+        TaskEvent::PipelineStageCompleted { stage_name, .. } => Some(format!("✓ {}", stage_name)),
+
+        TaskEvent::Completed => Some("✓ Done".to_string()),
+        TaskEvent::Failed(msg) => Some(format!("✗ {}", msg)),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Internal: apply an event to a TaskEntry
+// ---------------------------------------------------------------------------
+
+/// Apply a single event to a [`TaskEntry`].
+///
+/// `stream_pos` is the 1-based index of this event in the full replayed stream.
+/// Log lines are only appended when `stream_pos > entry.logs_cursor` so that
+/// concurrent subscribers (component + sidebar background) never produce
+/// duplicate entries.
+pub fn apply_event_to_entry(entry: &mut TaskEntry, event: &TaskEvent, stream_pos: usize) {
+    // State / progress updates are always idempotent.
+    match event {
+        TaskEvent::Completed => {
+            entry.state = TaskState::Completed;
+            entry.progress = Some(1.0);
+        }
+        TaskEvent::Failed(msg) => {
+            entry.state = TaskState::Failed(msg.clone());
+        }
+        TaskEvent::PrepareProgress(PrepareProgress::Downloading {
+            downloaded_bytes,
+            total_bytes,
+        }) => {
+            if let Some(total) = total_bytes {
+                if *total > 0 {
+                    entry.progress = Some(*downloaded_bytes as f32 / *total as f32);
+                }
+            }
+        }
+        TaskEvent::PrepareProgress(PrepareProgress::ExtractingLayer { progress, .. }) => {
+            entry.progress = Some(*progress);
+        }
+        TaskEvent::DemoProgress(DemoProgressEvent::DownloadProgress {
+            downloaded_bytes,
+            total_bytes,
+        }) => {
+            if *total_bytes > 0 {
+                entry.progress = Some(*downloaded_bytes as f32 / *total_bytes as f32);
+            }
+        }
+        TaskEvent::ResizeProgress(ResizeProgressEvent::ResizeProgress {
+            completed,
+            total_files,
+            ..
+        }) => {
+            if *total_files > 0 {
+                entry.progress = Some(*completed as f32 / *total_files as f32);
+            }
+        }
+        TaskEvent::PipelineStageProgress { progress, .. } => {
+            entry.progress = Some(*progress);
+        }
+        _ => {}
+    }
+
+    // Log update – deduplicated.
+    if stream_pos > entry.logs_cursor {
+        entry.logs_cursor = stream_pos;
+        if let Some(line) = event_to_log_line(event) {
+            entry.logs.push(line);
+            if entry.logs.len() > MAX_LOG_LINES {
+                // Drop oldest quarter to amortise the cost.
+                entry.logs.drain(0..MAX_LOG_LINES / 4);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/// Register a new task in the global context and start streaming its events.
+///
+/// * Updates [`TasksCtx`] with progress, state, and log lines.
+/// * Calls `on_event` for each *new* event so the calling component can update
+///   its local UI state (banners, progress text, etc.).
+/// * Handles automatic reconnection when the SSE stream drops unexpectedly.
+///
+/// The subscription is scoped to the spawning component.  [`TasksPanel`] in
+/// `ProjectsSidebar` provides a persistent background subscription that kicks
+/// in when the component unmounts.
+///
+/// [`TasksPanel`]: crate::mycomponents::TasksPanel
+pub fn start_task<F: FnMut(TaskEvent) + 'static>(
+    task_id: String,
+    label: String,
+    kind: TaskKind,
+    mut tasks: TasksCtx,
+    on_event: F,
+) {
+    tasks.write().register(task_id.clone(), label, kind);
+    drive_task(task_id, tasks, on_event);
+}
+
+/// Subscribe to an already-registered task and drive its event stream.
+///
+/// Unlike [`start_task`], this does **not** call `register` – use it when
+/// reconnecting to a task that already has an entry in [`TasksCtx`] (e.g.
+/// on component remount or from the background sidebar subscription).
+///
+/// ## Reconnection
+/// When the SSE stream closes without a terminal event the function queries
+/// [`get_task_info`] to determine the actual task state:
+/// - Still `Running` → reconnects immediately (preserving cursor).
+/// - `Completed` / `Failed` → synthesises the terminal event, calls
+///   `on_event`, then exits.
+///
+/// ## Deduplication
+/// `on_event` is only called for events that are *new* relative to the
+/// previous connection, so replayed history never fires the callback twice.
+pub fn drive_task<F: FnMut(TaskEvent) + 'static>(
+    task_id: String,
+    mut tasks: TasksCtx,
+    mut on_event: F,
+) {
+    spawn(async move {
+        // Per-instance cursor: how many events have already triggered on_event.
+        // Preserved across reconnections so replayed history is skipped.
+        let mut on_event_cursor = 0usize;
+
+        'outer: loop {
+            let mut stream_len = 0usize;
+
+            match subscribe_task_events(task_id.clone()).await {
+                Ok(mut stream) => loop {
+                    match stream.recv().await {
+                        Some(Ok(event)) => {
+                            stream_len += 1;
+                            let is_terminal =
+                                matches!(event, TaskEvent::Completed | TaskEvent::Failed(_));
+
+                            // Update global context (log dedup via entry.logs_cursor).
+                            {
+                                let mut state = tasks.write();
+                                if let Some(entry) =
+                                    state.tasks.iter_mut().find(|t| t.id == task_id)
+                                {
+                                    apply_event_to_entry(entry, &event, stream_len);
+                                }
+                            }
+
+                            // Call on_event only for new events.
+                            if stream_len > on_event_cursor {
+                                on_event_cursor = stream_len;
+                                on_event(event);
+                            }
+
+                            if is_terminal {
+                                tasks.write().gc();
+                                break 'outer;
+                            }
+                        }
+                        // Stream closed or errored – fall through to reconnect logic.
+                        Some(Err(_)) | None => break,
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        task_id = %task_id,
+                        error = %e,
+                        "subscribe_task_events failed; checking task state before retry"
+                    );
+                }
+            }
+
+            // Stream ended without a terminal event.
+            // Ask the server for the authoritative task state.
+            match get_task_info(task_id.clone()).await {
+                Ok(Some(info)) if info.state == TaskState::Running => {
+                    tracing::debug!(
+                        task_id = %task_id,
+                        "task still running after stream drop; reconnecting"
+                    );
+                    continue 'outer;
+                }
+                Ok(Some(info)) => {
+                    // Task has reached a terminal state while we were disconnected.
+                    let terminal = match info.state {
+                        TaskState::Completed => TaskEvent::Completed,
+                        TaskState::Failed(msg) => TaskEvent::Failed(msg),
+                        TaskState::Running => continue 'outer, // shouldn't happen
+                    };
+                    {
+                        let mut state = tasks.write();
+                        if let Some(entry) = state.tasks.iter_mut().find(|t| t.id == task_id) {
+                            // Use logs_cursor + 1 so this synthetic event is treated as new.
+                            let pos = entry.logs_cursor + 1;
+                            apply_event_to_entry(entry, &terminal, pos);
+                        }
+                    }
+                    on_event(terminal);
+                    tasks.write().gc();
+                    break 'outer;
+                }
+                Ok(None) => {
+                    tracing::warn!(task_id = %task_id, "task not found in registry; stopping");
+                    break 'outer;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        task_id = %task_id,
+                        error = %e,
+                        "get_task_info failed; stopping subscription"
+                    );
+                    break 'outer;
+                }
+            }
+        }
+    });
+}

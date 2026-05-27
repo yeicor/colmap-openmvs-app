@@ -490,6 +490,61 @@ async fn download_demo_images_stream(
     std::fs::create_dir_all(&images_path)
         .map_err(|e| anyhow!("Failed to create images folder: {}", e))?;
 
+    // On Android, the demo images archive is embedded as `libdemo-images.so`
+    // in the APK's jniLibs directory (copied there by build_android.sh).
+    // Read it directly to avoid requiring a network connection.
+    #[cfg(target_os = "android")]
+    let bytes: Vec<u8> = {
+        let embedded = crate::settings::get_android_native_lib_dir()
+            .map(|d| std::path::PathBuf::from(d).join("libdemo-images.so"));
+        if let Some(path) = embedded.filter(|p| p.exists()) {
+            info!(path = %path.display(), "Using embedded demo images archive");
+            let total = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            if total > 0 {
+                let _ = tx.unbounded_send(DemoProgressEvent::DownloadProgress {
+                    downloaded_bytes: 0,
+                    total_bytes: total,
+                });
+            }
+            let data = std::fs::read(&path)
+                .map_err(|e| anyhow!("Failed to read embedded demo images: {}", e))?;
+            let _ = tx.unbounded_send(DemoProgressEvent::DownloadProgress {
+                downloaded_bytes: data.len() as u64,
+                total_bytes: data.len() as u64,
+            });
+            data
+        } else {
+            warn!("Embedded demo images not found; falling back to network download");
+            fetch_demo_images_bytes(&tx).await?
+        }
+    };
+
+    #[cfg(not(target_os = "android"))]
+    let bytes: Vec<u8> = fetch_demo_images_bytes(&tx).await?;
+
+    let (progress_tx, progress_rx) = mpsc::channel();
+    let images_path_clone = images_path.clone();
+    let bytes_clone = bytes.clone();
+
+    std::thread::spawn(move || {
+        extract_jpg_from_7z_memory_with_events(
+            std::io::Cursor::new(&bytes_clone),
+            &images_path_clone,
+            progress_tx,
+        );
+    });
+
+    for event in progress_rx.iter() {
+        let _ = tx.unbounded_send(event);
+    }
+
+    Ok(())
+}
+
+/// Download the demo images archive from the remote server, streaming progress.
+async fn fetch_demo_images_bytes(
+    tx: &futures::channel::mpsc::UnboundedSender<DemoProgressEvent>,
+) -> dioxus::Result<Vec<u8>> {
     let url = "https://www.eth3d.net/data/door_dslr_jpg.7z";
 
     let client = reqwest::Client::new();
@@ -519,23 +574,7 @@ async fn download_demo_images_stream(
         });
     }
 
-    let (progress_tx, progress_rx) = mpsc::channel();
-    let images_path_clone = images_path.clone();
-    let bytes_clone = bytes.clone();
-
-    std::thread::spawn(move || {
-        extract_jpg_from_7z_memory_with_events(
-            std::io::Cursor::new(&bytes_clone),
-            &images_path_clone,
-            progress_tx,
-        );
-    });
-
-    for event in progress_rx.iter() {
-        let _ = tx.unbounded_send(event);
-    }
-
-    Ok(())
+    Ok(bytes)
 }
 
 async fn batch_resize_images_stream(

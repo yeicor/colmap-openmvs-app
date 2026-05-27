@@ -6,3 +6,6 @@ pub use page_header::{BackButton, PageHeader, PageHeaderButton};
 
 mod help;
 pub use help::Help;
+
+mod tasks_panel;
+pub use tasks_panel::TasksPanel;

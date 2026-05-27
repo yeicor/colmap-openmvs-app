@@ -1,2 +1,6 @@
 # Ignore build artifacts
 /target/
+/devstorage/
+
+# Vendored JS assets — downloaded automatically by app/build.rs on build
+/app/assets/lib/

@@ -11,7 +11,9 @@ pub static SETTINGS: dioxus::fullstack::Lazy<RwLock<Settings>> =
     });
 
 pub(crate) fn default_projects_folder() -> String {
-    if cfg!(target_os = "android") {
+    if cfg!(debug_assertions) {
+        "./devstorage/projects".to_string()
+    } else if cfg!(target_os = "android") {
         "/data/data/com.github.yeicor.colmap_openmvs_app/files/projects".to_string()
     } else if cfg!(target_os = "ios") {
         "~/Documents/projects".to_string()
@@ -176,7 +178,10 @@ pub fn default_proot_binary_dir() -> String {
     }
     #[cfg(not(target_os = "android"))]
     {
-        if cfg!(target_os = "ios") {
+        // Debug builds use relative path for easier local development; release builds use platform-specific app data dirs.
+        if cfg!(debug_assertions) {
+            "./devstorage".to_string()
+        } else if cfg!(target_os = "ios") {
             "~/Library/Application Support/colmap_openmvs".to_string()
         } else if cfg!(target_os = "windows") {
             match std::env::var("APPDATA") {
@@ -199,7 +204,9 @@ pub fn default_proot_binary_dir() -> String {
 
 /// Directory for large PRoot runtime images (user configurable, but on Android defaults to app files).
 pub fn default_proot_images_dir() -> String {
-    if cfg!(target_os = "android") {
+    if cfg!(debug_assertions) {
+        "./devstorage/proot-images".to_string()
+    } else if cfg!(target_os = "android") {
         "/data/data/com.github.yeicor.colmap_openmvs_app/files/proot-images".to_string()
     } else if cfg!(target_os = "ios") {
         "~/Documents/proot-images".to_string()

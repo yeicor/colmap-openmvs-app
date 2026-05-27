@@ -7,13 +7,13 @@ use crate::mycomponents::{Banner, BannerType, PageHeader};
 use crate::server::{
     delete_runtime_binary, download_runtime_version, get_available_runtime_versions,
     get_runtime_info, get_settings, get_task_info, list_available_image_tags, list_runtime_images,
-    list_tasks, prepare_runtime_image, remove_runtime_image, subscribe_task_events,
-    update_settings,
+    list_tasks, prepare_runtime_image, remove_runtime_image, update_settings,
 };
+use crate::task_manager::{drive_task, start_task, TasksCtx};
 use crate::Route;
 use chrono::{DateTime, Duration, Utc};
 use colmap_openmvs_api::{
-    ImageTagInfo, PrepareProgress, PreparedImageInfo, RuntimeInfo, Settings, TaskEvent, TaskState,
+    ImageTagInfo, PreparedImageInfo, RuntimeInfo, Settings, TaskEvent, TaskKind, TaskState,
 };
 use dioxus::document::eval;
 use dioxus::prelude::*;
@@ -86,39 +86,6 @@ fn DateBadge(date: String) -> Element {
             "📅 {rel}"
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// localStorage helpers (gracefully no-ops on server / SSR)
-// ---------------------------------------------------------------------------
-
-/// Store a task ID in localStorage.  Key is sanitised to avoid JS injection.
-fn ls_set_task_id(context_key: &str, task_id: &str) {
-    let safe_key = context_key.replace(['\'', '\\'], "_");
-    let safe_val = task_id.replace(['\'', '\\'], "_");
-    let _ = eval(&format!(
-        "try {{ localStorage.setItem('colmap_task_{safe_key}', '{safe_val}'); }} catch(e) {{}}"
-    ));
-}
-
-/// Read a task ID from localStorage (async – must be awaited inside spawn).
-async fn ls_get_task_id(context_key: &str) -> Option<String> {
-    let safe_key = context_key.replace(['\'', '\\'], "_");
-    let js = eval(&format!(
-        "return (localStorage.getItem('colmap_task_{safe_key}') || '');"
-    ));
-    js.await
-        .ok()
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .filter(|s| !s.is_empty())
-}
-
-/// Remove a task ID from localStorage.
-fn ls_clear_task_id(context_key: &str) {
-    let safe_key = context_key.replace(['\'', '\\'], "_");
-    let _ = eval(&format!(
-        "try {{ localStorage.removeItem('colmap_task_{safe_key}'); }} catch(e) {{}}"
-    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -614,7 +581,6 @@ fn runtime_proot_settings_tab() -> Element {
             match get_settings().await {
                 Ok(s) => {
                     proot_images_dir.set(s.proot_images_dir);
-
                 }
                 Err(e) => error.set(format!("Failed to load settings: {}", e)),
             }
@@ -746,8 +712,65 @@ fn runtime_proot_settings_tab() -> Element {
 // Images tab  (container image management)
 // ---------------------------------------------------------------------------
 
+/// Build the event callback for a prepare-image task.
+/// Free function so it can be called at any scope without ownership issues.
+fn build_prepare_cb(
+    tag: String,
+    mut ready_tags: Signal<Vec<PreparedImageInfo>>,
+    mut prepare_status: Signal<String>,
+    mut preparing: Signal<bool>,
+    mut preparing_tag: Signal<String>,
+    mut error: Signal<String>,
+    mut success: Signal<String>,
+) -> impl FnMut(TaskEvent) + 'static {
+    move |event: TaskEvent| match event {
+        TaskEvent::PrepareProgress(colmap_openmvs_api::PrepareProgress::Downloading {
+            downloaded_bytes,
+            total_bytes,
+        }) => {
+            let mb = downloaded_bytes as f64 / 1_048_576.0;
+            prepare_status.set(if let Some(total) = total_bytes {
+                format!("{:.1}/{:.1} MB", mb, total as f64 / 1_048_576.0)
+            } else {
+                format!("{:.1} MB", mb)
+            });
+        }
+        TaskEvent::PrepareProgress(colmap_openmvs_api::PrepareProgress::ExtractingLayer {
+            layer,
+            progress,
+        }) => {
+            prepare_status.set(format!("Layer {} {:.0}%", layer, progress * 100.0));
+        }
+        TaskEvent::PrepareProgress(colmap_openmvs_api::PrepareProgress::Error { message }) => {
+            error.set(format!("Preparation failed: {}", message));
+            prepare_status.set(String::new());
+            preparing.set(false);
+            preparing_tag.set(String::new());
+        }
+        TaskEvent::Completed => {
+            success.set(format!("Tag '{}' prepared successfully!", tag));
+            prepare_status.set(String::new());
+            preparing.set(false);
+            preparing_tag.set(String::new());
+            spawn(async move {
+                if let Ok(imgs) = list_runtime_images().await {
+                    ready_tags.set(imgs);
+                }
+            });
+        }
+        TaskEvent::Failed(msg) => {
+            error.set(format!("Preparation failed: {}", msg));
+            prepare_status.set(String::new());
+            preparing.set(false);
+            preparing_tag.set(String::new());
+        }
+        _ => {}
+    }
+}
+
 #[component]
 fn RuntimeImagesTab() -> Element {
+    let mut tasks_ctx = use_context::<TasksCtx>();
     let mut ready_tags = use_signal(Vec::<PreparedImageInfo>::new);
     let mut available_tags = use_signal(Vec::<ImageTagInfo>::new);
     let mut preparing = use_signal(|| false);
@@ -760,90 +783,9 @@ fn RuntimeImagesTab() -> Element {
     let mut projects_folder = use_signal(String::new);
     let mut proot_binary_dir = use_signal(String::new);
     let mut proot_images_dir = use_signal(String::new);
-
-    // Task being prepared – tag name only (for the "already preparing" guard)
     let mut preparing_tag = use_signal(String::new);
 
     const COLMAP_IMAGE: &str = "mirror.gcr.io/yeicor/colmap-openmvs";
-
-    // ── Helper: subscribe to a prepare task and drive the UI state ──────────
-    let drive_prepare_stream = move |tag: String, task_id: String| {
-        spawn(async move {
-            match subscribe_task_events(task_id.clone()).await {
-                Ok(mut stream) => {
-                    while let Some(Ok(event)) = stream.recv().await {
-                        match event {
-                            TaskEvent::PrepareProgress(PrepareProgress::Downloading {
-                                downloaded_bytes,
-                                total_bytes,
-                            }) => {
-                                let mb = downloaded_bytes as f64 / 1_048_576.0;
-                                prepare_status.set(if let Some(total) = total_bytes {
-                                    format!("{:.1}/{:.1} MB", mb, total as f64 / 1_048_576.0)
-                                } else {
-                                    format!("{:.1} MB", mb)
-                                });
-                            }
-                            TaskEvent::PrepareProgress(PrepareProgress::ExtractingLayer {
-                                layer,
-                                progress,
-                            }) => {
-                                prepare_status.set(format!(
-                                    "Layer {} {:.0}%",
-                                    layer,
-                                    progress * 100.0
-                                ));
-                            }
-                            TaskEvent::PrepareProgress(PrepareProgress::Error { message }) => {
-                                error.set(format!("Preparation failed: {}", message));
-                                prepare_status.set(String::new());
-                                preparing.set(false);
-                                preparing_tag.set(String::new());
-                                ls_clear_task_id("prepare");
-                                return;
-                            }
-                            TaskEvent::Completed => {
-                                success.set(format!("Tag '{}' prepared successfully!", tag));
-                                prepare_status.set(String::new());
-                                if let Ok(imgs) = list_runtime_images().await {
-                                    ready_tags.set(imgs);
-                                }
-                                preparing.set(false);
-                                preparing_tag.set(String::new());
-                                ls_clear_task_id("prepare");
-                                return;
-                            }
-                            TaskEvent::Failed(msg) => {
-                                error.set(format!("Preparation failed: {}", msg));
-                                prepare_status.set(String::new());
-                                preparing.set(false);
-                                preparing_tag.set(String::new());
-                                ls_clear_task_id("prepare");
-                                return;
-                            }
-                            _ => {}
-                        }
-                    }
-                    // Stream ended without explicit Completed event – treat as success
-                    success.set(format!("Tag '{}' prepared successfully!", tag));
-                    prepare_status.set(String::new());
-                    if let Ok(imgs) = list_runtime_images().await {
-                        ready_tags.set(imgs);
-                    }
-                    preparing.set(false);
-                    preparing_tag.set(String::new());
-                    ls_clear_task_id("prepare");
-                }
-                Err(e) => {
-                    error.set(format!("Failed to subscribe to preparation events: {}", e));
-                    prepare_status.set(String::new());
-                    preparing.set(false);
-                    preparing_tag.set(String::new());
-                    ls_clear_task_id("prepare");
-                }
-            }
-        });
-    };
 
     // ── On mount: load images + available tags, then reconnect any running task ──
     use_effect(move || {
@@ -878,7 +820,6 @@ fn RuntimeImagesTab() -> Element {
                                 projects_folder.set(settings.projects_folder);
                                 proot_binary_dir.set(settings.proot_binary_dir);
                                 proot_images_dir.set(settings.proot_images_dir);
-
                             }
                         }
                     } else if let Ok(settings) = get_settings().await {
@@ -886,7 +827,6 @@ fn RuntimeImagesTab() -> Element {
                         projects_folder.set(settings.projects_folder);
                         proot_binary_dir.set(settings.proot_binary_dir);
                         proot_images_dir.set(settings.proot_images_dir);
-
                     }
                     ready_tags.set(imgs);
                 }
@@ -902,22 +842,15 @@ fn RuntimeImagesTab() -> Element {
             tags_loading.set(false);
 
             // ── Reconnect to any in-progress prepare task ──────────────────
-            // 1. Try localStorage first (survives browser close/reopen)
-            let stored_id = ls_get_task_id("prepare").await;
-            // 2. Fall back to server-side task list (survives tab navigation)
-            let reconnect_id = if let Some(id) = stored_id {
-                Some(id)
-            } else {
-                list_tasks(Some("PrepareImage".to_string()), None)
-                    .await
-                    .ok()
-                    .and_then(|tasks| {
-                        tasks
-                            .into_iter()
-                            .find(|t| t.state == TaskState::Running)
-                            .map(|t| t.id)
-                    })
-            };
+            let reconnect_id = list_tasks(Some("PrepareImage".to_string()), None)
+                .await
+                .ok()
+                .and_then(|tasks| {
+                    tasks
+                        .into_iter()
+                        .find(|t| t.state == TaskState::Running)
+                        .map(|t| t.id)
+                });
 
             if let Some(task_id) = reconnect_id {
                 if let Ok(Some(info)) = get_task_info(task_id.clone()).await {
@@ -932,14 +865,28 @@ fn RuntimeImagesTab() -> Element {
                         preparing.set(true);
                         preparing_tag.set(tag.clone());
                         prepare_status.set("Reconnecting…".to_string());
-                        drive_prepare_stream(tag, task_id.clone());
+                        // Register in global context (no-op if already present)
+                        let label = format!("Preparing {}", tag);
+                        tasks_ctx
+                            .write()
+                            .register(task_id.clone(), label, TaskKind::PrepareImage);
+                        let cb = build_prepare_cb(
+                            tag,
+                            ready_tags,
+                            prepare_status,
+                            preparing,
+                            preparing_tag,
+                            error,
+                            success,
+                        );
+                        drive_task(task_id, tasks_ctx, cb);
                     }
                 }
             }
         });
     });
 
-    // ── Start a new prepare task ────────────────────────────────────────────
+    // ── Start a new prepare task ───────────────────────────────────────
     let mut handle_prepare = move |tag: String| {
         if tag.is_empty() || preparing() {
             return;
@@ -951,11 +898,20 @@ fn RuntimeImagesTab() -> Element {
         success.set(String::new());
 
         let full_image = format!("{}:{}", COLMAP_IMAGE, tag);
+        let label = format!("Preparing {}", tag);
         spawn(async move {
             match prepare_runtime_image(full_image.clone()).await {
                 Ok(task_id) => {
-                    ls_set_task_id("prepare", &task_id);
-                    drive_prepare_stream(tag, task_id);
+                    let cb = build_prepare_cb(
+                        tag,
+                        ready_tags,
+                        prepare_status,
+                        preparing,
+                        preparing_tag,
+                        error,
+                        success,
+                    );
+                    start_task(task_id, label, TaskKind::PrepareImage, tasks_ctx, cb);
                 }
                 Err(e) => {
                     error.set(format!("Failed to start preparation: {}", e));

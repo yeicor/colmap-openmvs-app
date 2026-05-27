@@ -1,10 +1,11 @@
-//! Android startup tasks view for validating and repairing settings
+//! Android startup tasks view for validating and repairing settings.
 
+use colmap_openmvs_api::TaskEvent;
 use colmap_openmvs_api::TaskState;
 use dioxus::prelude::*;
 use std::collections::VecDeque;
 
-use crate::server::{get_task_info, repair_android_settings};
+use crate::server::{repair_android_settings, subscribe_task_events};
 
 #[derive(Clone)]
 struct LogEntry {
@@ -18,40 +19,35 @@ pub fn StartupTasks() -> Element {
     let mut task_state = use_signal(|| None::<TaskState>);
     let mut is_completed = use_signal(|| false);
 
-    // Auto-start the repair task on mount
-    {
-        let mut tid = task_id;
-        let mut lg = logs;
-        let mut ts = task_state;
-        let ic = is_completed;
-
-        use_effect(move || {
-            if tid().is_none() {
-                spawn(async move {
-                    match repair_android_settings().await {
-                        Ok(id) => {
-                            tid.set(Some(id.clone()));
-                            poll_task_status(id, lg, ts, ic).await;
-                        }
-                        Err(e) => {
-                            let err_msg = format!("Failed to start repair: {}", e);
-                            lg.with_mut(|l| l.push_back(LogEntry { message: err_msg }));
-                            ts.set(Some(TaskState::Failed(
-                                "Failed to start repair".to_string(),
-                            )));
-                        }
+    // Auto-start the repair task on mount, then stream its events.
+    use_effect(move || {
+        if task_id().is_none() {
+            spawn(async move {
+                match repair_android_settings().await {
+                    Ok(id) => {
+                        task_id.set(Some(id.clone()));
+                        stream_task_events(id, logs, task_state, is_completed).await;
                     }
-                });
-            }
-        });
-    }
+                    Err(e) => {
+                        logs.with_mut(|l| {
+                            l.push_back(LogEntry {
+                                message: format!("Failed to start repair: {}", e),
+                            })
+                        });
+                        task_state.set(Some(TaskState::Failed(
+                            "Failed to start repair".to_string(),
+                        )));
+                    }
+                }
+            });
+        }
+    });
 
     let is_running = match task_state() {
         Some(TaskState::Running) => true,
         None => task_id().is_some(),
         _ => false,
     };
-
     let is_failed = matches!(task_state(), Some(TaskState::Failed(_)));
     let completed = is_completed();
 
@@ -63,8 +59,7 @@ pub fn StartupTasks() -> Element {
     };
 
     let on_continue = move |_: Event<MouseData>| {
-        let navigator = use_navigator();
-        navigator.push("/");
+        use_navigator().push("/");
     };
 
     rsx! {
@@ -78,56 +73,45 @@ pub fn StartupTasks() -> Element {
 
             div {
                 class: "startup-logs",
-                {logs.read().iter().map(|entry| {
-                    rsx! {
-                        div {
-                            class: "log-line",
-                            "{entry.message}"
-                        }
-                    }
-                })}
+                for entry in logs.read().iter() {
+                    div { class: "log-line", "{entry.message}" }
+                }
             }
 
             div {
                 class: "startup-buttons",
-                {if completed {
-                    rsx! {
-                        button {
-                            class: "btn btn-primary",
-                            onclick: on_continue,
-                            "Continue"
-                        }
+                if completed {
+                    button {
+                        class: "btn btn-primary",
+                        onclick: on_continue,
+                        "Continue"
                     }
                 } else if is_failed {
-                    rsx! {
-                        button {
-                            class: "btn btn-secondary",
-                            onclick: on_retry,
-                            "Retry"
-                        }
-                        button {
-                            class: "btn btn-primary",
-                            onclick: on_continue,
-                            "Skip"
-                        }
+                    button {
+                        class: "btn btn-secondary",
+                        onclick: on_retry,
+                        "Retry"
+                    }
+                    button {
+                        class: "btn btn-primary",
+                        onclick: on_continue,
+                        "Skip"
                     }
                 } else if is_running {
-                    rsx! {
-                        div {
-                            class: "spinner",
-                            "Please wait..."
-                        }
+                    div {
+                        class: "spinner",
+                        "Please wait..."
                     }
-                } else {
-                    rsx! {}
-                }}
+                }
             }
         }
     }
 }
 
-async fn poll_task_status(
-    task_id: String,
+/// Subscribe to a repair task's event stream and update signals as events arrive.
+/// Handles keep-alives by ignoring them.
+async fn stream_task_events(
+    id: String,
     mut logs: Signal<VecDeque<LogEntry>>,
     mut task_state: Signal<Option<TaskState>>,
     mut is_completed: Signal<bool>,
@@ -135,55 +119,55 @@ async fn poll_task_status(
     logs.with_mut(|l| {
         l.push_back(LogEntry {
             message: "Android settings validation starting...".to_string(),
-        });
+        })
     });
 
-    loop {
-        // Poll for task status
-        match get_task_info(task_id.clone()).await {
-            Ok(Some(info)) => {
-                match &info.state {
-                    TaskState::Completed => {
+    match subscribe_task_events(id).await {
+        Ok(mut stream) => {
+            while let Some(Ok(event)) = stream.recv().await {
+                match event {
+                    TaskEvent::Log(msg) if msg.contains("Keep-alive") => {
+                        // ignore heartbeats
+                    }
+                    TaskEvent::Log(msg) => {
+                        logs.with_mut(|l| l.push_back(LogEntry { message: msg }));
+                    }
+                    TaskEvent::Completed => {
                         logs.with_mut(|l| {
                             l.push_back(LogEntry {
                                 message: "Android settings repair completed successfully."
                                     .to_string(),
-                            });
+                            })
                         });
                         task_state.set(Some(TaskState::Completed));
                         is_completed.set(true);
-                        break;
+                        return;
                     }
-                    TaskState::Failed(msg) => {
+                    TaskEvent::Failed(msg) => {
                         logs.with_mut(|l| {
                             l.push_back(LogEntry {
                                 message: format!("Error: {}", msg),
-                            });
+                            })
                         });
-                        task_state.set(Some(TaskState::Failed(msg.clone())));
-                        break;
+                        task_state.set(Some(TaskState::Failed(msg)));
+                        return;
                     }
-                    TaskState::Running => {
-                        // Continue polling
-                    }
+                    _ => {}
                 }
             }
-            Ok(None) => {
-                logs.with_mut(|l| {
-                    l.push_back(LogEntry {
-                        message: "Task not found".to_string(),
-                    });
-                });
-                task_state.set(Some(TaskState::Failed("Task not found".to_string())));
-                break;
-            }
-            Err(e) => {
-                logs.with_mut(|l| {
-                    l.push_back(LogEntry {
-                        message: format!("Error checking status: {}", e),
-                    });
-                });
-            }
+            // Stream ended without terminal event – fall back to completed.
+            task_state.set(Some(TaskState::Completed));
+            is_completed.set(true);
+        }
+        Err(e) => {
+            logs.with_mut(|l| {
+                l.push_back(LogEntry {
+                    message: format!("Failed to subscribe to events: {}", e),
+                })
+            });
+            task_state.set(Some(TaskState::Failed(
+                "Event subscription failed".to_string(),
+            )));
         }
     }
 }
