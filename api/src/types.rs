@@ -22,6 +22,15 @@ pub struct Settings {
     /// Example: "mirror.gcr.io/yeicor/colmap-openmvs:latest"
     #[serde(default)]
     pub default_image_tag: Option<String>,
+    /// Custom mounts for PRoot runtime (for CUDA, debuggers, etc.)
+    /// Format: "host_path:container_path" or "host_path" (defaults to same path in container)
+    /// Example: "/usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1"
+    #[serde(default)]
+    pub custom_mounts: Vec<String>,
+    /// Path to the settings.json file. Can be overridden via COLMAP_SETTINGS_PATH environment variable.
+    /// Defaults to projects_folder/settings.json if not specified.
+    #[serde(default)]
+    pub settings_file_path: Option<String>,
 }
 
 /// Events emitted during demo image download

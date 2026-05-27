@@ -1088,6 +1088,47 @@ impl Runtime for PRoot {
                 mount.container_path
             ));
         }
+
+        // Add custom mounts from settings
+        let settings = crate::settings::get_settings()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to load settings: {}", e))?;
+        trace!(
+            custom_mounts_len = settings.custom_mounts.len(),
+            "run: adding custom mounts"
+        );
+
+        for mount_spec in &settings.custom_mounts {
+            // Parse mount_spec: "host_path:container_path" or "host_path"
+            let (host_path, container_path) = if mount_spec.contains(':') {
+                let parts: Vec<&str> = mount_spec.splitn(2, ':').collect();
+                (parts[0].to_string(), parts[1].to_string())
+            } else {
+                (mount_spec.clone(), mount_spec.clone())
+            };
+
+            // Verify host path exists
+            if std::path::Path::new(&host_path).exists() {
+                debug!(host_path = %host_path, container_path = %container_path, "run: adding custom mount");
+                cmd.arg("-b")
+                    .arg(format!("{}:{}", host_path, container_path));
+            } else {
+                warn!(host_path = %host_path, "run: skipping custom mount, host path does not exist");
+            }
+        }
+
+        // Add CUDA mounts if the image requires it (heuristic: image name contains "cuda")
+        if image.contains("cuda") {
+            debug!("run: CUDA support enabled, detecting and adding CUDA mounts");
+            warn!("run: CUDA support on proot runtime will probably not work...");
+            let cuda_paths = crate::settings::detect_cuda_paths();
+            for (cuda_path_k, cuda_path_v) in cuda_paths.iter() {
+                debug!(host = %cuda_path_k, container = %cuda_path_v, "run: adding CUDA mount");
+                cmd.arg("-b")
+                    .arg(&format!("{}:{}", cuda_path_v, cuda_path_v));
+            }
+        }
+
         cmd.arg("-R").arg(&rootfs_dir);
 
         if let Some(workdir) = &metadata.working_dir {

@@ -1,7 +1,7 @@
 use colmap_openmvs_api::Settings;
 use dioxus::Result;
-use std::convert::Infallible;
 use std::path::PathBuf;
+use std::{collections::HashMap, convert::Infallible};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
@@ -167,6 +167,73 @@ pub fn read_embedded_image_tag_public() -> Option<String> {
     }
 }
 
+// ─── CUDA detection ──────────────────────────────────────────────────────────
+
+/// Detect CUDA libraries on the system
+/// Returns a list of CUDA mount paths that can be added to containers
+pub fn detect_cuda_paths() -> HashMap<String, String> {
+    use glob::glob;
+    let mut cuda_mounts = Vec::new();
+
+    // CUDA runtime directories (add if directory exists)
+    let cuda_dirs = vec!["/usr/local/cuda/lib64", "/usr/local/cuda/lib"];
+    for dir in cuda_dirs {
+        if std::path::Path::new(dir).is_dir() {
+            cuda_mounts.push(dir.to_string());
+        }
+    }
+
+    // CUDA libraries and compat libraries (glob patterns)
+    let cuda_lib_globs = vec![
+        // Standard Ubuntu/Debian libraries
+        "/usr/lib/**/libcuda.so*",
+        "/usr/lib/**/libcudart.so*",
+        "/usr/lib/**/libcublas.so*",
+        "/usr/lib/**/libcufft.so*",
+        "/usr/lib/**/libcudnn.so*",
+        "/usr/lib/**/libnvrtc.so*",
+        "/usr/lib/**/libnvidia-ml.so*",
+        // Compat libraries
+        "/usr/lib/**/libcuda-compat.so*",
+        "/usr/lib/**/libcuda-compat.so.*",
+        // Misc
+        "/dev/nvidia*",
+        "/proc/driver/nvidia*",
+        "/usr/bin/nvidia*",
+    ];
+    for pattern in cuda_lib_globs {
+        if let Ok(paths) = glob(pattern) {
+            for entry in paths.flatten() {
+                if entry.exists() {
+                    cuda_mounts.push(entry.display().to_string());
+                }
+            }
+        }
+    }
+    cuda_mounts.sort();
+    cuda_mounts.dedup();
+    // Map host CUDA files to /usr/lib/x86_64-linux-gnu/*.so in the container
+    let mut cuda_map = HashMap::new();
+    for host_path in cuda_mounts {
+        let mut map_as_is = true;
+        if host_path.starts_with("/usr/lib")
+            && (host_path.ends_with(".so") || host_path.contains(".so."))
+        {
+            // Only map .so files
+            if let Some(filename) = std::path::Path::new(&host_path).file_name() {
+                let container_path =
+                    format!("/usr/lib/x86_64-linux-gnu/{}", filename.to_string_lossy());
+                cuda_map.insert(host_path.clone(), container_path);
+                map_as_is = false;
+            }
+        }
+        if map_as_is {
+            cuda_map.insert(host_path.clone(), host_path); // Directories are mounted as-is
+        }
+    }
+    cuda_map
+}
+
 // ─── Platform defaults ────────────────────────────────────────────────────────
 
 /// Directory for the PRoot binary itself (non-modifiable on Android, embedded in JNI libs).
@@ -243,17 +310,46 @@ fn default_settings() -> Settings {
         proot_binary_dir: default_proot_binary_dir(),
         proot_images_dir: default_proot_images_dir(),
         default_image_tag,
+        custom_mounts: Vec::new(),
+        settings_file_path: None,
     }
 }
 
 // ─── Persistence ─────────────────────────────────────────────────────────────
 
+/// Resolve the effective settings file path, checking environment variable first.
+pub fn get_effective_settings_path(settings: &Settings) -> PathBuf {
+    // Check for environment variable override
+    if let Ok(env_path) = std::env::var("COLMAP_SETTINGS_PATH") {
+        debug!(env_path = %env_path, "Using COLMAP_SETTINGS_PATH environment variable");
+        return PathBuf::from(env_path);
+    }
+
+    // Use configured path if set
+    if let Some(ref path) = settings.settings_file_path {
+        debug!(configured_path = %path, "Using configured settings_file_path");
+        return PathBuf::from(path);
+    }
+
+    // Default: projects_folder/settings.json
+    let default_path = PathBuf::from(&settings.projects_folder).join("settings.json");
+    debug!(default_path = %default_path.display(), "Using default settings path");
+    default_path
+}
+
 pub fn settings_file_path(projects_folder: &str) -> PathBuf {
+    // Check for environment variable override
+    if let Ok(env_path) = std::env::var("COLMAP_SETTINGS_PATH") {
+        return PathBuf::from(env_path);
+    }
+
+    // Default: projects_folder/settings.json
     PathBuf::from(projects_folder).join("settings.json")
 }
 
 fn load_settings_from_disk() -> Settings {
-    let path = settings_file_path(&default_projects_folder());
+    let default_projects = default_projects_folder();
+    let path = settings_file_path(&default_projects);
     debug!(path = %path.display(), "Loading settings from disk");
 
     match std::fs::read_to_string(&path) {
@@ -332,27 +428,38 @@ pub async fn update_settings(new_settings: Settings) -> Result<()> {
     debug!(projects_folder = %new_settings.projects_folder, "Updating settings");
 
     let mut settings = SETTINGS.write().await;
-    *settings = new_settings;
+    *settings = new_settings.clone();
 
     // Persist to disk
     debug!(folder = %settings.projects_folder, "Creating projects folder");
     if let Err(e) = std::fs::create_dir_all(&settings.projects_folder) {
         error!(folder = %settings.projects_folder, error = %e, "Failed to create projects folder");
-    } else {
-        let path = settings_file_path(&settings.projects_folder);
-        debug!(path = %path.display(), "Serializing settings for persistence");
-        match serde_json::to_string_pretty(&*settings) {
-            Ok(json) => {
-                debug!(path = %path.display(), json_len = json.len(), "Writing settings to disk");
-                if let Err(e) = std::fs::write(&path, json) {
-                    error!(path = %path.display(), error = %e, "Failed to write settings to disk");
-                } else {
-                    info!(path = %path.display(), "Settings persisted to disk successfully");
-                }
+    }
+
+    // Determine the effective settings file path
+    let path = get_effective_settings_path(&settings);
+
+    // Ensure the directory for settings file exists
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                error!(dir = %parent.display(), error = %e, "Failed to create settings directory");
             }
-            Err(e) => {
-                error!(error = %e, "Failed to serialize settings");
+        }
+    }
+
+    debug!(path = %path.display(), "Serializing settings for persistence");
+    match serde_json::to_string_pretty(&new_settings) {
+        Ok(json) => {
+            debug!(path = %path.display(), json_len = json.len(), "Writing settings to disk");
+            if let Err(e) = std::fs::write(&path, json) {
+                error!(path = %path.display(), error = %e, "Failed to write settings to disk");
+            } else {
+                info!(path = %path.display(), "Settings persisted to disk successfully");
             }
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to serialize settings");
         }
     }
 

@@ -396,7 +396,8 @@ pub async fn repair_android_settings() -> Result<String> {
 /// Repair invalid Android settings paths and trigger runtime setup.
 /// This is a no-op on non-Android platforms.
 pub async fn repair_android_settings_impl() -> anyhow::Result<()> {
-    let _changed = AndroidSettingsValidation::repair_paths().await?;
-    tracing::info!(changed = _changed, "Android settings repair completed");
+    if AndroidSettingsValidation::repair_paths().await? {
+        tracing::info!("Android settings repair completed");
+    }
     Ok(())
 }

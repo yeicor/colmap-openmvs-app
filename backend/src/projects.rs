@@ -20,10 +20,25 @@ pub async fn get_projects() -> DioxusResult<Vec<Project>> {
 
     let mut projects = Vec::new();
 
+    // Get the effective settings file path to filter it out from projects
+    let settings_path = crate::settings::get_effective_settings_path(&settings);
+
     match std::fs::read_dir(projects_path) {
         Ok(entries) => {
             for entry in entries.flatten() {
                 if let Ok(path) = entry.path().canonicalize() {
+                    // Skip if this is the settings file
+                    if path == settings_path
+                        || path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| n == "settings.json")
+                            .unwrap_or(false)
+                    {
+                        debug!(path = %path.display(), "Skipping settings file from project list");
+                        continue;
+                    }
+
                     if path.is_dir() {
                         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                             debug!(project_name = %name, project_path = %path.display(), "Found project");

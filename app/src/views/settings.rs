@@ -18,7 +18,7 @@ use colmap_openmvs_api::{
 use dioxus::document::eval;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
-    BsBoxSeam, BsDownload, BsFolder, BsGear, BsTerminal, BsTrash3,
+    BsDownload, BsFolder, BsGear, BsTerminal, BsTrash3,
 };
 use dioxus_free_icons::Icon;
 
@@ -128,12 +128,6 @@ pub fn SettingsView() -> Element {
                         Icon { icon: BsTerminal }
                         span { class: "tab-label", " Runtime" }
                     }
-                    TabTrigger {
-                        value: "images".to_string(),
-                        index: 2usize,
-                        Icon { icon: BsBoxSeam }
-                        span { class: "tab-label", " Images" }
-                    }
                 }
 
                 if active_tab() == Some("general".to_string()) {
@@ -150,13 +144,7 @@ pub fn SettingsView() -> Element {
                         RuntimeTab {}
                     }
                 }
-                if active_tab() == Some("images".to_string()) {
-                    TabContent {
-                        value: "images".to_string(),
-                        index: 2usize,
-                        RuntimeImagesTab {}
-                    }
-                }
+
             }
         }
     }
@@ -169,6 +157,7 @@ pub fn SettingsView() -> Element {
 #[component]
 fn GeneralTab() -> Element {
     let mut projects_folder = use_signal(String::new);
+    let mut settings_file_path = use_signal(String::new);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(String::new);
     let mut success = use_signal(String::new);
@@ -181,6 +170,7 @@ fn GeneralTab() -> Element {
             match get_settings().await {
                 Ok(s) => {
                     projects_folder.set(s.projects_folder);
+                    settings_file_path.set(s.settings_file_path.unwrap_or_default());
                 }
                 Err(e) => error.set(format!("Failed to load settings: {}", e)),
             }
@@ -197,9 +187,15 @@ fn GeneralTab() -> Element {
                 error.set("Projects folder path cannot be empty".to_string());
                 return;
             }
+            let settings_path = if settings_file_path().trim().is_empty() {
+                None
+            } else {
+                Some(settings_file_path().trim().to_string())
+            };
             match get_settings().await {
                 Ok(mut settings) => {
                     settings.projects_folder = projects;
+                    settings.settings_file_path = settings_path;
                     match update_settings(settings).await {
                         Ok(_) => {
                             success.set("Settings saved successfully!".to_string());
@@ -218,6 +214,7 @@ fn GeneralTab() -> Element {
             match get_settings().await {
                 Ok(s) => {
                     projects_folder.set(s.projects_folder);
+                    settings_file_path.set(s.settings_file_path.unwrap_or_default());
                     has_changed.set(false);
                     error.set(String::new());
                 }
@@ -280,6 +277,52 @@ fn GeneralTab() -> Element {
                             variant: ButtonVariant::Secondary,
                             onclick: move |_| {
                                 eval("document.querySelector('#projects-folder-input').click()");
+                            },
+                            Icon { icon: BsFolder }
+                        }
+                    }
+                }
+
+                div {
+                    class: "form-group",
+                    label { "Settings File Path (optional)" }
+                    div {
+                        class: "form-group-help",
+                        small { "Leave empty to use projects_folder/settings.json. Can be overridden with COLMAP_SETTINGS_PATH environment variable." }
+                    }
+                    div {
+                        class: "folder-row",
+                        input {
+                            r#type: "text",
+                            value: "{settings_file_path}",
+                            placeholder: "Leave empty to use projects_folder/settings.json",
+                            class: "folder-input",
+                            oninput: move |evt| {
+                                settings_file_path.set(evt.value());
+                                has_changed.set(true);
+                                error.set(String::new());
+                                success.set(String::new());
+                            },
+                        }
+                        input {
+                            r#type: "file",
+                            style: "display: none;",
+                            id: "settings-file-input",
+                            onchange: move |evt| {
+                                if let Some(file) = evt.files().into_iter().next() {
+                                    settings_file_path.set(
+                                        file.path().to_str().expect("Invalid path").to_string(),
+                                    );
+                                    has_changed.set(true);
+                                    error.set(String::new());
+                                    success.set(String::new());
+                                }
+                            }
+                        }
+                        Button {
+                            variant: ButtonVariant::Secondary,
+                            onclick: move |_| {
+                                eval("document.querySelector('#settings-file-input').click()");
                             },
                             Icon { icon: BsFolder }
                         }
@@ -349,12 +392,20 @@ fn RuntimeTab() -> Element {
                             onclick: move |_| active_proot_subtab.set(Some("management".to_string())),
                             "Management"
                         }
+                        button {
+                            class: if active_proot_subtab() == Some("images".to_string()) { "proot-subtrigger active" } else { "proot-subtrigger" },
+                            onclick: move |_| active_proot_subtab.set(Some("images".to_string())),
+                            "Images"
+                        }
                     }
                     if active_proot_subtab() == Some("settings".to_string()) {
                         runtime_proot_settings_tab {}
                     }
                     if active_proot_subtab() == Some("management".to_string()) {
                         runtime_proot_tab {}
+                    }
+                    if active_proot_subtab() == Some("images".to_string()) {
+                        runtime_images_tab {}
                     }
                 }
             }
@@ -769,7 +820,7 @@ fn build_prepare_cb(
 }
 
 #[component]
-fn RuntimeImagesTab() -> Element {
+fn runtime_images_tab() -> Element {
     let mut tasks_ctx = use_context::<TasksCtx>();
     let mut ready_tags = use_signal(Vec::<PreparedImageInfo>::new);
     let mut available_tags = use_signal(Vec::<ImageTagInfo>::new);
@@ -807,6 +858,8 @@ fn RuntimeImagesTab() -> Element {
                                     proot_binary_dir: settings.proot_binary_dir.clone(),
                                     proot_images_dir: proot,
                                     default_image_tag: Some(tag.clone()),
+                                    custom_mounts: settings.custom_mounts.clone(),
+                                    settings_file_path: settings.settings_file_path.clone(),
                                 })
                                 .await
                                 {
@@ -949,6 +1002,8 @@ fn RuntimeImagesTab() -> Element {
                 proot_binary_dir: binary_dir,
                 proot_images_dir: proot,
                 default_image_tag: Some(tag.clone()),
+                custom_mounts: Vec::new(),
+                settings_file_path: None,
             })
             .await
             {
@@ -973,6 +1028,8 @@ fn RuntimeImagesTab() -> Element {
                 proot_binary_dir: binary_dir,
                 proot_images_dir: proot,
                 default_image_tag: None,
+                custom_mounts: Vec::new(),
+                settings_file_path: None,
             })
             .await
             {
@@ -997,11 +1054,10 @@ fn RuntimeImagesTab() -> Element {
             on_close: move |_| success.set(String::new()),
         }
 
-        // ── Header with runtime info + in-progress indicator ───────────────
-        div {
-            class: "images-header",
-            p { class: "images-info", "For: PRoot runtime" }
-            if !prepare_status().is_empty() {
+        // ── Header with in-progress indicator ───────────────────────────────
+        if !prepare_status().is_empty() {
+            div {
+                class: "images-header",
                 p { class: "prepare-progress", "⟳ Preparing '{preparing_tag}': {prepare_status}" }
             }
         }

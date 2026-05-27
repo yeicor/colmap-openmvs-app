@@ -19,9 +19,11 @@ use colmap_openmvs_api::TaskState;
 use dioxus::prelude::*;
 use std::collections::HashSet;
 
+const MAX_TASKS: usize = 20;
+
 #[component]
 pub fn TasksPanel() -> Element {
-    let tasks_ctx = use_context::<TasksCtx>();
+    let mut tasks_ctx = use_context::<TasksCtx>();
     let mut panel_open = use_signal(|| false);
     // Track which task IDs already have a background subscription started from
     // this component so we never start duplicates.
@@ -46,13 +48,17 @@ pub fn TasksPanel() -> Element {
     });
 
     let state = tasks_ctx.read();
-    let tasks_snap: Vec<TaskEntry> = state.tasks.clone();
+    let mut tasks_snap: Vec<TaskEntry> = state.tasks.clone();
     let running = state.running_count();
+    let completed_count = tasks_snap.iter().filter(|t| t.is_terminal()).count();
     drop(state);
 
     if tasks_snap.is_empty() {
         return rsx! {};
     }
+
+    // Reverse to show newest tasks first
+    tasks_snap.reverse();
 
     rsx! {
         // ── Floating badge button ─────────────────────────────────────────
@@ -74,15 +80,29 @@ pub fn TasksPanel() -> Element {
             }
             div {
                 class: "tasks-drawer",
-                // Header
+                // Header with action buttons
                 div {
                     class: "tasks-drawer-header",
                     h3 { class: "tasks-drawer-title", "Background Tasks" }
-                    button {
-                        class: "tasks-drawer-close",
-                        title: "Close",
-                        onclick: move |_| panel_open.set(false),
-                        "✕"
+                    div { class: "tasks-drawer-actions",
+                        // Forget completed button
+                        if completed_count > 0 {
+                            button {
+                                class: "tasks-drawer-action-btn tasks-drawer-action-forget-completed",
+                                title: "Forget all completed tasks",
+                                onclick: move |_| {
+                                    tasks_ctx.write().forget_completed();
+                                },
+                                "🗑 Completed"
+                            }
+                        }
+                        // Close button
+                        button {
+                            class: "tasks-drawer-close",
+                            title: "Close",
+                            onclick: move |_| panel_open.set(false),
+                            "✕"
+                        }
                     }
                 }
                 // Task list
@@ -92,7 +112,13 @@ pub fn TasksPanel() -> Element {
                         p { class: "tasks-empty", "No tasks yet." }
                     }
                     for entry in tasks_snap.iter() {
-                        TaskCard { entry: entry.clone() }
+                        TaskCard { entry: entry.clone(), tasks_ctx }
+                    }
+                    // Overflow indicator
+                    if tasks_snap.len() >= MAX_TASKS {
+                        div { class: "tasks-overflow-notice",
+                            "⚠ Oldest tasks will be removed when limit is reached"
+                        }
                     }
                 }
             }
@@ -105,10 +131,11 @@ pub fn TasksPanel() -> Element {
 // ---------------------------------------------------------------------------
 
 #[component]
-fn TaskCard(entry: TaskEntry) -> Element {
+fn TaskCard(entry: TaskEntry, tasks_ctx: TasksCtx) -> Element {
     // Auto-expand running tasks; collapsed by default once done.
     let mut logs_open = use_signal(|| entry.is_running());
     let task_id = entry.id.clone();
+    let task_id_forget = entry.id.clone();
 
     let (status_cls, status_icon, status_label) = match &entry.state {
         TaskState::Running => ("task-card--running", "⟳", "Running"),
@@ -152,23 +179,40 @@ fn TaskCard(entry: TaskEntry) -> Element {
                     }
                 }
 
-                // Cancel button (running tasks only)
-                if entry.is_running() {
-                    button {
-                        class: "task-card-cancel",
-                        title: "Cancel task",
-                        onclick: move |evt| {
-                            evt.stop_propagation();
-                            let tid = task_id.clone();
-                            spawn(async move { let _ = cancel_task(tid).await; });
-                        },
-                        "⏹"
+                // Action buttons
+                div { class: "task-card-actions",
+                    // Cancel button (running tasks only)
+                    if entry.is_running() {
+                        button {
+                            class: "task-card-action-btn task-card-cancel",
+                            title: "Cancel task",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                let tid = task_id.clone();
+                                spawn(async move { let _ = cancel_task(tid).await; });
+                            },
+                            "⏹"
+                        }
                     }
-                }
 
-                span {
-                    class: "task-card-chevron",
-                    if logs_open() { "▾" } else { "▸" }
+                    // Forget button (completed/failed tasks only)
+                    if entry.is_terminal() {
+                        button {
+                            class: "task-card-action-btn task-card-forget",
+                            title: "Forget this task",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                let tid = task_id_forget.clone();
+                                tasks_ctx.write().forget_task(&tid);
+                            },
+                            "✕"
+                        }
+                    }
+
+                    span {
+                        class: "task-card-chevron",
+                        if logs_open() { "▾" } else { "▸" }
+                    }
                 }
             }
 

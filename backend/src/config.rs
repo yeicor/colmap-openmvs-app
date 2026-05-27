@@ -47,22 +47,17 @@ pub async fn get_image_config(image_tag: String) -> anyhow::Result<ConfigSchema>
         Err(_) => None,
     };
 
-    // Get help output from colmap
-    let colmap_help = get_tool_help(&rt, &image_tag, "colmap").await?;
-    let colmap_schema: HelpSchema = serde_saphyr::from_str::<HelpSchema>(&colmap_help)
+    // Get help output
+    let full_help = get_tool_help(&rt, &image_tag, "ignored").await?;
+    let full_help_schema: HelpSchema = serde_saphyr::from_str::<HelpSchema>(&full_help)
         .map_err(|e| anyhow::anyhow!("Failed to parse colmap help output: {}", e))?;
-
-    // Get help output from openmvs
-    let openmvs_help = get_tool_help(&rt, &image_tag, "openmvs").await?;
-    let openmvs_schema: HelpSchema = serde_saphyr::from_str::<HelpSchema>(&openmvs_help)
-        .map_err(|e| anyhow::anyhow!("Failed to parse openmvs help output: {}", e))?;
 
     // Extract tools and build help text map
     let mut all_tools = Vec::new();
     let mut help_map: HashMap<String, String> = HashMap::new();
 
     // Process COLMAP
-    for (cmd_name, cmd_help) in &colmap_schema.tools.colmap {
+    for (cmd_name, cmd_help) in &full_help_schema.tools.colmap {
         let parameters = parse_help_text(&cmd_help.help)?;
         all_tools.push(ToolConfig {
             tool: "colmap".to_string(),
@@ -80,7 +75,7 @@ pub async fn get_image_config(image_tag: String) -> anyhow::Result<ConfigSchema>
     }
 
     // Process OpenMVS
-    for (cmd_name, cmd_help) in &openmvs_schema.tools.openmvs {
+    for (cmd_name, cmd_help) in &full_help_schema.tools.openmvs {
         let parameters = parse_help_text(&cmd_help.help)?;
         all_tools.push(ToolConfig {
             tool: "openmvs".to_string(),
@@ -99,10 +94,9 @@ pub async fn get_image_config(image_tag: String) -> anyhow::Result<ConfigSchema>
 
     // Build environment_variables list from top-level, preserving order
     // Merge both colmap and openmvs top-level env vars
-    let environment_variables: Vec<EnvVarWithHelp> = colmap_schema
+    let environment_variables: Vec<EnvVarWithHelp> = full_help_schema
         .environment_variables
         .iter()
-        .chain(openmvs_schema.environment_variables.iter())
         .map(|name| {
             let help = help_map.get(name).cloned();
             EnvVarWithHelp {
@@ -124,19 +118,19 @@ pub async fn get_image_config(image_tag: String) -> anyhow::Result<ConfigSchema>
 async fn get_tool_help(
     rt: &dyn crate::runtimes::Runtime,
     image_tag: &str,
-    tool: &str,
+    ignored: &str,
 ) -> anyhow::Result<String> {
-    let args = vec![tool.to_string(), "--help".to_string()];
+    let args = vec![ignored.to_string(), "--help".to_string()];
 
     let mut handle = rt.run(image_tag, &args, &[], &[]).await?;
 
     let stdout = handle
         .take_stdout()
-        .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout from {} --help", tool))?;
+        .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout from {} --help", ignored))?;
 
     let stderr = handle
         .take_stderr()
-        .ok_or_else(|| anyhow::anyhow!("Failed to capture stderr from {} --help", tool))?;
+        .ok_or_else(|| anyhow::anyhow!("Failed to capture stderr from {} --help", ignored))?;
 
     // Read from stdout
     let mut output = Vec::new();
@@ -157,7 +151,7 @@ async fn get_tool_help(
         let stderr_str = String::from_utf8_lossy(&stderr_output);
         return Err(anyhow::anyhow!(
             "{} --help failed with exit code {}\nstdout:\n{}\nstderr:\n{}",
-            tool,
+            ignored,
             code,
             stdout_str,
             stderr_str

@@ -84,7 +84,8 @@ impl TasksState {
         if self.tasks.iter().any(|t| t.id == id) {
             return;
         }
-        self.tasks.push(TaskEntry::new(id, label, kind));
+        self.tasks.insert(0, TaskEntry::new(id, label, kind));
+        self.enforce_max_tasks(20);
     }
 
     /// Remove old terminal tasks, keeping at most `MAX_TERMINAL` recent ones.
@@ -102,6 +103,24 @@ impl TasksState {
                     true
                 }
             });
+        }
+    }
+
+    /// Forget a single task by ID.
+    pub fn forget_task(&mut self, id: &str) {
+        self.tasks.retain(|t| t.id != id);
+    }
+
+    /// Forget all completed and failed tasks.
+    pub fn forget_completed(&mut self) {
+        self.tasks.retain(|t| t.is_running());
+    }
+
+    /// Enforce maximum task limit (keep newest tasks).
+    /// Tasks are sorted with newest at the beginning.
+    pub fn enforce_max_tasks(&mut self, max_tasks: usize) {
+        if self.tasks.len() > max_tasks {
+            self.tasks.truncate(max_tasks);
         }
     }
 }
