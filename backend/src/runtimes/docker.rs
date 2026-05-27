@@ -272,6 +272,14 @@ impl Runtime for Docker {
         let mut cmd = Command::new("docker");
         cmd.arg("run").arg("--rm").arg("-i");
 
+        // Try to set --user to current uid:gid if possible
+        #[cfg(unix)]
+        {
+            let uid = unsafe { libc::geteuid() };
+            let gid = unsafe { libc::getegid() };
+            cmd.arg("--user").arg(format!("{}:{}", uid, gid));
+        }
+
         for mount in mounts {
             cmd.arg("-v").arg(format!(
                 "{}:{}",

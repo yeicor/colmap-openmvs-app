@@ -384,9 +384,33 @@ fn RuntimeTab() -> Element {
 
             // ── Selected runtime panel ────────────────────────────────────────
             if active_runtime() == "proot" {
-                ProotPanel {}
+                ProotPanel {
+                    on_default_changed: move |_| {
+                        let mut phd = proot_has_default;
+                        let mut dhd = docker_has_default;
+                        spawn(async move {
+                            if let Ok(settings) = get_settings().await {
+                                let (runtime, _tag) = settings.parse_default_image();
+                                phd.set(runtime == Some("proot"));
+                                dhd.set(runtime == Some("docker"));
+                            }
+                        });
+                    }
+                }
             } else {
-                DockerPanel {}
+                DockerPanel {
+                    on_default_changed: move |_| {
+                        let mut phd = proot_has_default;
+                        let mut dhd = docker_has_default;
+                        spawn(async move {
+                            if let Ok(settings) = get_settings().await {
+                                let (runtime, _tag) = settings.parse_default_image();
+                                phd.set(runtime == Some("proot"));
+                                dhd.set(runtime == Some("docker"));
+                            }
+                        });
+                    }
+                }
             }
         }
     }
@@ -397,7 +421,7 @@ fn RuntimeTab() -> Element {
 // ---------------------------------------------------------------------------
 
 #[component]
-fn ProotPanel() -> Element {
+fn ProotPanel(on_default_changed: EventHandler<()>) -> Element {
     let mut runtime_info = use_signal(|| None::<RuntimeInfo>);
     let mut available_versions = use_signal(Vec::<String>::new);
     let mut selected_version = use_signal(String::new);
@@ -621,7 +645,7 @@ fn ProotPanel() -> Element {
                 // ── Images card ──────────────────────────────────────────────
                 div { class: "runtime-card",
                     div { class: "runtime-card-title", "Images" }
-                    RuntimeImagesSection { runtime_type: "proot".to_string() }
+                    RuntimeImagesSection { runtime_type: "proot".to_string(), on_default_changed }
                 }
             }
         }
@@ -633,7 +657,7 @@ fn ProotPanel() -> Element {
 // ---------------------------------------------------------------------------
 
 #[component]
-fn DockerPanel() -> Element {
+fn DockerPanel(on_default_changed: EventHandler<()>) -> Element {
     let mut runtime_info = use_signal(|| None::<RuntimeInfo>);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(String::new);
@@ -688,7 +712,7 @@ fn DockerPanel() -> Element {
                 // ── Images card ───────────────────────────────────────────────
                 div { class: "runtime-card",
                     div { class: "runtime-card-title", "Images" }
-                    RuntimeImagesSection { runtime_type: "docker".to_string() }
+                    RuntimeImagesSection { runtime_type: "docker".to_string(), on_default_changed }
                 }
             }
         }
@@ -762,7 +786,7 @@ fn build_prepare_cb(
 }
 
 #[component]
-fn RuntimeImagesSection(runtime_type: String) -> Element {
+fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<()>) -> Element {
     // Store runtime_type in a signal so closures can capture it without moving a String.
     let rt_signal = use_signal(|| runtime_type.clone());
     let rt = runtime_type.clone();
@@ -944,6 +968,7 @@ fn RuntimeImagesSection(runtime_type: String) -> Element {
                         Ok(_) => {
                             default_image_tag.set(tag.clone());
                             success.set(format!("Default set to '{}'", tag));
+                            on_default_changed.call(());
                         }
                         Err(e) => error.set(format!("Failed: {}", e)),
                     }
@@ -962,6 +987,7 @@ fn RuntimeImagesSection(runtime_type: String) -> Element {
                         Ok(_) => {
                             default_image_tag.set(String::new());
                             success.set("Default cleared.".to_string());
+                            on_default_changed.call(());
                         }
                         Err(e) => error.set(format!("Failed: {}", e)),
                     }

@@ -26,7 +26,7 @@ RUN curl -sSL https://dioxus.dev/install.sh | bash
 ENV PATH="/root/.dx/bin:$PATH"
 
 # Build the server binary with fullstack features using Dioxus CLI
-RUN dx build --server --release
+RUN dx build --web --features server --release
 
 # Stage 2: Runtime
 FROM debian:sid-slim

@@ -44,6 +44,9 @@ pub use task_registry::{
 mod pipeline;
 pub use pipeline::run_pipeline;
 
+mod theme;
+pub use theme::get_dark_mode;
+
 mod process;
 pub use process::kill_process_tree;
 
@@ -92,21 +95,24 @@ fn walk_for_outputs(
         Err(_) => return Ok(()),
     };
 
+    let is_root_dir = dir == root;
+
     for entry in entries.flatten() {
         let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
         if path.is_dir() {
+            // Skip the images directory at the project root (those are inputs, not outputs)
+            if is_root_dir && name == "images" {
+                continue;
+            }
             walk_for_outputs(root, &path, out)?;
         } else if path.is_file() {
-            let file_name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(n) => n.to_string(),
-                None => continue,
-            };
-
-            let is_ply = file_name.ends_with(".ply");
-            let is_points3d = file_name == "points3D.bin";
-            let is_database = file_name == "database.db";
-
-            if !is_ply && !is_points3d && !is_database {
+            // Skip config/settings files at the project root level
+            if is_root_dir && (name == "config.sh" || name == "settings.json") {
                 continue;
             }
 
@@ -121,13 +127,21 @@ fn walk_for_outputs(
                 .to_string_lossy()
                 .replace('\\', "/");
 
-            let is_viewable = is_ply || is_points3d;
+            let is_viewable = name.ends_with(".ply") || name == "points3D.bin";
+
+            let modified_at = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
 
             out.push(OutputFile {
                 relative_path: relative,
-                name: file_name,
+                name,
                 size: metadata.len(),
                 is_viewable,
+                modified_at,
             });
         }
     }
@@ -202,4 +216,44 @@ pub async fn delete_project_output(
     } else {
         Err(anyhow::anyhow!("Path does not exist").into())
     }
+}
+
+/// Delete all output files/directories in a project, preserving only the
+/// `images/` input directory and the `config.sh` configuration file.
+pub async fn clear_project_outputs(project_name: String) -> DioxusResult<()> {
+    let project_path = {
+        let projects = get_projects().await?;
+        projects
+            .into_iter()
+            .find(|p| p.name == project_name)
+            .map(|p| p.path)
+            .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
+    };
+
+    let root = std::path::Path::new(&project_path);
+    let entries = std::fs::read_dir(root)
+        .map_err(|e| anyhow::anyhow!("Failed to read project directory: {}", e))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        // Preserve input images and project configuration
+        if name == "images" || name == "config.sh" {
+            continue;
+        }
+
+        if path.is_dir() {
+            tokio::fs::remove_dir_all(&path).await.map_err(|e| {
+                anyhow::anyhow!("Failed to delete directory {}: {}", path.display(), e)
+            })?;
+        } else if path.is_file() {
+            tokio::fs::remove_file(&path)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to delete file {}: {}", path.display(), e))?;
+        }
+    }
+
+    debug!("Cleared all outputs for project: {}", project_name);
+    Ok(())
 }

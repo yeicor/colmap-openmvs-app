@@ -307,8 +307,36 @@ pub async fn get_project_output_for_viewer(
     backend::get_project_output_for_viewer(project_name, relative_path).await
 }
 
-/// Delete an output file.
+/// Delete an output file or directory.
 #[post("/projects/:project_name/outputs/delete")]
 pub async fn delete_project_output(project_name: String, relative_path: String) -> Result<()> {
     backend::delete_project_output(project_name, relative_path).await
+}
+
+/// Delete all output files/directories, preserving only `images/` and `config.sh`.
+#[post("/projects/:project_name/outputs/clear")]
+pub async fn clear_project_outputs(project_name: String) -> Result<()> {
+    backend::clear_project_outputs(project_name).await
+}
+
+// ---------------------------------------------------------------------------
+// Theme / color-scheme detection
+// ---------------------------------------------------------------------------
+
+/// Returns the server-side color-scheme preference.
+///
+/// * `None`        – no override; let the browser's `prefers-color-scheme`
+///                   CSS media query decide.
+/// * `Some(false)` – force light mode.
+/// * `Some(true)`  – force dark mode.
+///
+/// On Android the WebView may not propagate `prefers-color-scheme` reliably,
+/// so the server probes the system UI mode.  Currently defaults to
+/// `Some(false)` (light) on Android until JNI detection is wired up.
+#[get("/theme/dark-mode")]
+pub async fn get_dark_mode() -> Result<Option<bool>> {
+    #[cfg(feature = "server")]
+    return Ok(backend::get_dark_mode().await?);
+    #[cfg(not(feature = "server"))]
+    Ok(None)
 }

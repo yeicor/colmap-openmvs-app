@@ -4,7 +4,7 @@ sub_package = "colmap-openmvs-app"
 [bundle]
 identifier = "com.github.yeicor.colmap_openmvs_app"
 publisher = "Yeicor"
-icon = ["app/assets/icon.png"]
+icon = ["app/assets/icon.png", "app/assets/icon.icns", "app/assets/icon.ico"]
 
 [permissions]
 camera = { description = "Required to capture photos for 3D reconstruction." }
