@@ -12,9 +12,17 @@ RUN apt-get update && apt-get install -y curl nodejs npm && rm -rf /var/lib/apt/
 RUN curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/DioxusLabs/dioxus/refs/heads/main/.github/install.sh | bash
 COPY --from=planner /app/recipe.json recipe.json
 # Mount target as a cache volume for build caching
-RUN cargo chef cook --${BUILD_TYPE} --recipe-path recipe.json
+RUN if [ "$BUILD_TYPE" = "debug" ]; then \
+    cargo chef cook --recipe-path recipe.json; \
+  else \
+    cargo chef cook --$BUILD_TYPE --recipe-path recipe.json; \
+  fi
 COPY . .
-RUN /usr/local/cargo/bin/dx bundle --web --${BUILD_TYPE} && ls
+RUN if [ "$BUILD_TYPE" = "debug" ]; then \
+    /usr/local/cargo/bin/dx bundle --web; \
+  else \
+    /usr/local/cargo/bin/dx bundle --web --$BUILD_TYPE; \
+  fi && ls
 
 FROM chef AS runtime
 COPY --from=builder /app/target/dx/colmap-openmvs-app/${BUILD_TYPE}/web /usr/local/app
