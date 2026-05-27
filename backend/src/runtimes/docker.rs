@@ -291,6 +291,8 @@ impl Runtime for Docker {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        info!(cmd = ?cmd, "docker run: starting container");
+
         let child = cmd
             .spawn()
             .map_err(|e| anyhow::anyhow!("Failed to spawn `docker run`: {}", e))?;

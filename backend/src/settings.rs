@@ -11,10 +11,10 @@ pub static SETTINGS: dioxus::fullstack::Lazy<RwLock<Settings>> =
     });
 
 pub(crate) fn default_projects_folder() -> String {
-    if cfg!(debug_assertions) {
-        "./devstorage/projects".to_string()
-    } else if cfg!(target_os = "android") {
+    if cfg!(target_os = "android") {
         "/data/data/com.github.yeicor.colmap_openmvs_app/files/projects".to_string()
+    } else if cfg!(debug_assertions) {
+        "./devstorage/projects".to_string()
     } else if cfg!(target_os = "ios") {
         "~/Documents/projects".to_string()
     } else if cfg!(target_os = "windows") {
@@ -271,10 +271,10 @@ pub fn default_proot_binary_dir() -> String {
 
 /// Directory for large PRoot runtime images (user configurable, but on Android defaults to app files).
 pub fn default_proot_images_dir() -> String {
-    if cfg!(debug_assertions) {
-        "./devstorage/proot-images".to_string()
-    } else if cfg!(target_os = "android") {
+    if cfg!(target_os = "android") {
         "/data/data/com.github.yeicor.colmap_openmvs_app/files/proot-images".to_string()
+    } else if cfg!(debug_assertions) {
+        "./devstorage/proot-images".to_string()
     } else if cfg!(target_os = "ios") {
         "~/Documents/proot-images".to_string()
     } else if cfg!(target_os = "windows") {
@@ -301,7 +301,7 @@ pub fn default_proot_images_dir() -> String {
 fn default_settings() -> Settings {
     // On Android, try to auto-detect the embedded image tag from jniLibs metadata.
     #[cfg(target_os = "android")]
-    let default_image_tag = read_embedded_image_tag();
+    let default_image_tag = read_embedded_image_tag().map(|tag| format!("proot:{}", tag));
     #[cfg(not(target_os = "android"))]
     let default_image_tag = None;
 
@@ -311,7 +311,6 @@ fn default_settings() -> Settings {
         proot_images_dir: default_proot_images_dir(),
         default_image_tag,
         custom_mounts: Vec::new(),
-        docker_default_image_tag: None,
         settings_file_path: None,
     }
 }
@@ -389,6 +388,32 @@ fn load_settings_from_disk() -> Settings {
                             serde_json::Value::String(default_proot_images_dir());
                     }
                 }
+
+                // Migrate from separate default_image_tag and docker_default_image_tag to unified format
+                if let Some(obj) = value.as_object_mut() {
+                    let proot_tag = obj
+                        .remove("default_image_tag")
+                        .and_then(|v| v.as_str().map(str::to_owned));
+                    let docker_tag = obj
+                        .remove("docker_default_image_tag")
+                        .and_then(|v| v.as_str().map(str::to_owned));
+
+                    // Prefer docker tag if it's set and different, otherwise use proot tag
+                    if let Some(tag) = docker_tag {
+                        info!(path = %path.display(), "Migrating docker_default_image_tag to unified format");
+                        obj.insert(
+                            "default_image_tag".to_string(),
+                            serde_json::Value::String(format!("docker:{}", tag)),
+                        );
+                    } else if let Some(tag) = proot_tag {
+                        info!(path = %path.display(), "Migrating default_image_tag to unified format");
+                        obj.insert(
+                            "default_image_tag".to_string(),
+                            serde_json::Value::String(format!("proot:{}", tag)),
+                        );
+                    }
+                }
+
                 // Remove proot_custom_command if it exists (migrating away from it)
                 if let Some(obj) = value.as_object_mut() {
                     obj.remove("proot_custom_command");

@@ -324,21 +324,24 @@ fn spawn_fetch_config(
         debug!(project_name = %project_name, "Starting config load");
 
         let image_tag = match crate::server::get_settings().await {
-            Ok(settings) => match settings.default_image_tag {
-                Some(tag) if !tag.trim().is_empty() => {
-                    debug!(project_name = %project_name, image_tag = %tag, "Using default image tag");
-                    tag
+            Ok(settings) => {
+                let (_runtime, image) = settings.parse_default_image();
+                match image {
+                    Some(tag) if !tag.trim().is_empty() => {
+                        debug!(project_name = %project_name, image_tag = %tag, "Using default image tag");
+                        tag.to_string()
+                    }
+                    _ => {
+                        error!(project_name = %project_name, "No default image configured");
+                        error.set(Some(
+                            "No default image configured. Go to Settings → Images and set one."
+                                .to_string(),
+                        ));
+                        loading.set(false);
+                        return;
+                    }
                 }
-                _ => {
-                    error!(project_name = %project_name, "No default image configured");
-                    error.set(Some(
-                        "No default image configured. Go to Settings → Images and set one."
-                            .to_string(),
-                    ));
-                    loading.set(false);
-                    return;
-                }
-            },
+            }
             Err(e) => {
                 error!(project_name = %project_name, error = %e, "Failed to load settings");
                 error.set(Some(format!("Failed to load settings: {}", e)));

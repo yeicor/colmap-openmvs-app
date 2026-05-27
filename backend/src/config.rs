@@ -35,9 +35,56 @@ struct CommandHelp {
 }
 
 /// Parse configuration from a prepared container image by running help commands.
+/// Uses the runtime specified in the default_image_tag from settings.
 pub async fn get_image_config(image_tag: String) -> anyhow::Result<ConfigSchema> {
-    let rt = RuntimeFactory::proot().await;
+    let settings = crate::settings::get_settings()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to retrieve settings: {:?}", e))?
+        .clone();
+    let (runtime, _) = settings.parse_default_image();
 
+    tracing::debug!(
+        image_tag = %image_tag,
+        default_image_tag = ?settings.default_image_tag,
+        parsed_runtime = ?runtime,
+        "get_image_config: Settings loaded and parsed"
+    );
+
+    match runtime {
+        Some("docker") => {
+            tracing::debug!("get_image_config: Selected Docker runtime");
+            get_image_config_with_docker(image_tag).await
+        }
+        Some(other) => {
+            tracing::debug!(runtime = %other, "get_image_config: Selected runtime from prefix");
+            get_image_config_with_proot(image_tag).await
+        }
+        None => {
+            tracing::debug!(
+                "get_image_config: No runtime prefix in default_image_tag, using PRoot"
+            );
+            get_image_config_with_proot(image_tag).await
+        }
+    }
+}
+
+/// Parse configuration using PRoot runtime.
+async fn get_image_config_with_proot(image_tag: String) -> anyhow::Result<ConfigSchema> {
+    let rt = RuntimeFactory::proot().await;
+    get_image_config_impl(&rt, image_tag).await
+}
+
+/// Parse configuration using Docker runtime.
+async fn get_image_config_with_docker(image_tag: String) -> anyhow::Result<ConfigSchema> {
+    let rt = RuntimeFactory::docker();
+    get_image_config_impl(&rt, image_tag).await
+}
+
+/// Shared implementation for getting image configuration from any runtime.
+async fn get_image_config_impl(
+    rt: &dyn Runtime,
+    image_tag: String,
+) -> anyhow::Result<ConfigSchema> {
     // First, try to get the image build date from the list of prepared images
     let build_date = match rt.list_images().await {
         Ok(images) => images
@@ -48,7 +95,7 @@ pub async fn get_image_config(image_tag: String) -> anyhow::Result<ConfigSchema>
     };
 
     // Get help output
-    let full_help = get_tool_help(&rt, &image_tag, "ignored").await?;
+    let full_help = get_tool_help(rt, &image_tag, "ignored").await?;
     let full_help_schema: HelpSchema = serde_saphyr::from_str::<HelpSchema>(&full_help)
         .map_err(|e| anyhow::anyhow!("Failed to parse colmap help output: {}", e))?;
 

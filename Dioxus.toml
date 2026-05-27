@@ -9,3 +9,4 @@ icon = ["app/assets/icon.png"]
 [permissions]
 camera = { description = "Required to capture photos for 3D reconstruction." }
 photos = { description = "Required to access photos for 3D reconstruction.", access = "read" }
+internet = { description = "Required for internal hot-reload functionality." }

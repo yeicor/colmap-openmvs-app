@@ -10,7 +10,7 @@ use tracing::{debug, error, info, span, Level};
 use crate::{
     line_reader::LineReader,
     process::kill_process_tree,
-    runtimes::{Mount, Runtime, RuntimeFactory},
+    runtimes::{Mount, RuntimeFactory},
     settings::get_settings,
     task_registry::TASK_REGISTRY,
 };
@@ -37,11 +37,20 @@ pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String>
 
     debug!("Starting pipeline execution");
     let settings = get_settings().await.map_err(|e| anyhow::anyhow!("{}", e))?;
-    let image_tag = settings.default_image_tag.ok_or_else(|| {
-        error!("No default image configured");
-        anyhow::anyhow!("No default image configured")
-    })?;
-    debug!(image_tag = %image_tag, "Using container image");
+    let (runtime, image_tag) = settings.parse_default_image();
+    let runtime = runtime
+        .ok_or_else(|| {
+            error!("No runtime in default image configured");
+            anyhow::anyhow!("No runtime in default image configured")
+        })?
+        .to_string();
+    let image_tag = image_tag
+        .ok_or_else(|| {
+            error!("No default image configured");
+            anyhow::anyhow!("No default image configured")
+        })?
+        .to_string();
+    debug!(runtime = %runtime, image_tag = %image_tag, "Using runtime and container image");
 
     let project_path = {
         let projects = crate::projects::get_projects()
@@ -69,8 +78,14 @@ pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String>
 
     let task_id_clone = task_id.clone();
     tokio::spawn(async move {
-        if let Err(e) =
-            run_pipeline_task(task_id_clone.clone(), image_tag, project_path, dry_run).await
+        if let Err(e) = run_pipeline_task(
+            task_id_clone.clone(),
+            runtime,
+            image_tag,
+            project_path,
+            dry_run,
+        )
+        .await
         {
             error!(error = %e, "Pipeline task failed");
             crate::task_registry::publish_event(&task_id_clone, TaskEvent::Failed(e.to_string()));
@@ -86,15 +101,25 @@ pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String>
 
 async fn run_pipeline_task(
     task_id: String,
+    runtime: String,
     image_tag: String,
     project_path: String,
     dry_run: bool,
 ) -> Result<()> {
-    let span = span!(Level::DEBUG, "run_pipeline_task", task_id = %task_id, project_path = %project_path, dry_run = %dry_run);
+    let span = span!(Level::DEBUG, "run_pipeline_task", task_id = %task_id, runtime = %runtime, project_path = %project_path, dry_run = %dry_run);
     let _enter = span.enter();
 
     info!("Starting pipeline container");
-    let rt = RuntimeFactory::proot().await;
+    let rt: Box<dyn crate::runtimes::Runtime> = match runtime.as_str() {
+        "docker" => {
+            debug!("Using Docker runtime");
+            Box::new(RuntimeFactory::docker())
+        }
+        _ => {
+            debug!("Using PRoot runtime");
+            Box::new(RuntimeFactory::proot().await)
+        }
+    };
 
     // Mount the project directory at /work inside the container.
     let mounts = vec![Mount {

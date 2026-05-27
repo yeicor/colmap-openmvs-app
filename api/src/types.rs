@@ -18,8 +18,10 @@ pub struct Settings {
     pub proot_binary_dir: String,
     /// Directory containing large PRoot runtime images
     pub proot_images_dir: String,
-    /// The default container image tag to use for all runtime commands (e.g. running --help in Config tab).
-    /// Example: "mirror.gcr.io/yeicor/colmap-openmvs:latest"
+    /// The default container image tag to use for all runtime commands.
+    /// Format: "runtime:tag" where runtime is "proot" or "docker"
+    /// Example: "proot:mirror.gcr.io/yeicor/colmap-openmvs:latest"
+    /// or "docker:mirror.gcr.io/yeicor/colmap-openmvs:latest"
     #[serde(default)]
     pub default_image_tag: Option<String>,
     /// Custom mounts for PRoot runtime (for CUDA, debuggers, etc.)
@@ -27,14 +29,34 @@ pub struct Settings {
     /// Example: "/usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1"
     #[serde(default)]
     pub custom_mounts: Vec<String>,
-    /// The default container image tag to use for Docker runtime commands.
-    /// Example: "mirror.gcr.io/yeicor/colmap-openmvs:latest"
-    #[serde(default)]
-    pub docker_default_image_tag: Option<String>,
     /// Path to the settings.json file. Can be overridden via COLMAP_SETTINGS_PATH environment variable.
     /// Defaults to projects_folder/settings.json if not specified.
     #[serde(default)]
     pub settings_file_path: Option<String>,
+}
+
+impl Settings {
+    /// Parse the runtime and image tag from the default_image_tag setting.
+    /// Returns (runtime, tag) or (None, None) if not set.
+    pub fn parse_default_image(&self) -> (Option<&str>, Option<&str>) {
+        match &self.default_image_tag {
+            Some(s) => match s.split_once(':') {
+                Some((runtime, tag)) => (Some(runtime), Some(tag)),
+                None => (None, Some(s.as_str())),
+            },
+            None => (None, None),
+        }
+    }
+
+    /// Set the default image tag with a runtime prefix.
+    pub fn set_default_image(&mut self, runtime: &str, tag: &str) {
+        self.default_image_tag = Some(format!("{}:{}", runtime, tag));
+    }
+
+    /// Clear the default image tag.
+    pub fn clear_default_image(&mut self) {
+        self.default_image_tag = None;
+    }
 }
 
 /// Events emitted during demo image download

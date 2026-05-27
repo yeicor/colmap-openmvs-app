@@ -757,12 +757,13 @@ fn RuntimeImagesSection(runtime_type: String) -> Element {
 
             // Load current default tag from settings
             if let Ok(s) = get_settings().await {
-                let tag = if rt_inner == "docker" {
-                    s.docker_default_image_tag.unwrap_or_default()
-                } else {
-                    s.default_image_tag.unwrap_or_default()
-                };
-                default_image_tag.set(tag);
+                let (settings_runtime, tag) = s.parse_default_image();
+                // Only use this default if it's for the current runtime
+                if settings_runtime == Some(rt_inner.as_str()) {
+                    if let Some(tag_str) = tag {
+                        default_image_tag.set(tag_str.to_string());
+                    }
+                }
             }
 
             // Load prepared/pulled images
@@ -774,20 +775,6 @@ fn RuntimeImagesSection(runtime_type: String) -> Element {
 
             match images_result {
                 Ok(imgs) => {
-                    // Auto-select default if exactly one image and no default set
-                    if imgs.len() == 1 && default_image_tag().is_empty() {
-                        let tag = imgs[0].tag.clone();
-                        if let Ok(mut s) = get_settings().await {
-                            if rt_inner == "docker" {
-                                s.docker_default_image_tag = Some(tag.clone());
-                            } else {
-                                s.default_image_tag = Some(tag.clone());
-                            }
-                            if update_settings(s).await.is_ok() {
-                                default_image_tag.set(tag);
-                            }
-                        }
-                    }
                     ready_tags.set(imgs);
                 }
                 Err(e) => error.set(format!("Failed to load images: {}", e)),
@@ -920,11 +907,7 @@ fn RuntimeImagesSection(runtime_type: String) -> Element {
         spawn(async move {
             match get_settings().await {
                 Ok(mut s) => {
-                    if rt_sd == "docker" {
-                        s.docker_default_image_tag = Some(tag.clone());
-                    } else {
-                        s.default_image_tag = Some(tag.clone());
-                    }
+                    s.set_default_image(&rt_sd, &tag);
                     match update_settings(s).await {
                         Ok(_) => {
                             default_image_tag.set(tag.clone());
@@ -939,15 +922,10 @@ fn RuntimeImagesSection(runtime_type: String) -> Element {
     };
 
     let handle_unset_default = move |_| {
-        let rt_ud = rt_signal();
         spawn(async move {
             match get_settings().await {
                 Ok(mut s) => {
-                    if rt_ud == "docker" {
-                        s.docker_default_image_tag = None;
-                    } else {
-                        s.default_image_tag = None;
-                    }
+                    s.clear_default_image();
                     match update_settings(s).await {
                         Ok(_) => {
                             default_image_tag.set(String::new());
