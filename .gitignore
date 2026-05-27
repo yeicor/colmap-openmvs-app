@@ -4,7 +4,6 @@
 
 # npm — populated by `npm install` (run automatically by app/build.rs)
 node_modules/
-package-lock.json
 
 # Generated JS assets (produced by app/build.rs, not for committing)
 /app/assets/viewer3d.bundle.*
