@@ -5,7 +5,6 @@ use image::{DynamicImage, ImageDecoder, ImageReader};
 use once_cell::sync::Lazy;
 use tracing::{debug, error, info, warn};
 
-use sevenz_rust2::decompress_with_extract_fn;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -257,8 +256,17 @@ pub async fn batch_resize_images(
 }
 
 /// Download demo images with streaming progress events
-pub async fn download_demo_images(project_name: String) -> dioxus::Result<String> {
-    debug!(project_name = %project_name, "Starting demo image download");
+/// Available demo dataset sources from GitHub
+const DEMO_SOURCES: &[(&str, &str, &str)] = &[
+    ("ET", "snavely/bundler_sfm", "examples/ET"),
+    ("kermit", "snavely/bundler_sfm", "examples/kermit"),
+];
+
+pub async fn download_demo_images(
+    project_name: String,
+    source_id: String,
+) -> dioxus::Result<String> {
+    debug!(project_name = %project_name, source_id = %source_id, "Starting demo image download");
     validate_project_name(&project_name)?;
 
     let task_id = crate::task_registry::TASK_REGISTRY
@@ -270,8 +278,13 @@ pub async fn download_demo_images(project_name: String) -> dioxus::Result<String
     tokio::spawn(async move {
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<DemoProgressEvent>();
         let proj = project_name_clone.clone();
+        let src = source_id.clone();
         tokio::spawn(async move {
-            let _ = download_demo_images_stream(proj, tx).await;
+            if let Err(e) = download_github_images_stream(proj, src, tx.clone()).await {
+                let _ = tx.unbounded_send(DemoProgressEvent::Error {
+                    message: format!("Download failed: {}", e),
+                });
+            }
         });
         while let Some(event) = rx.next().await {
             let is_error = matches!(event, DemoProgressEvent::Error { .. });
@@ -297,6 +310,135 @@ pub async fn download_demo_images(project_name: String) -> dioxus::Result<String
     });
 
     Ok(task_id)
+}
+
+#[derive(serde::Deserialize)]
+struct GitHubEntry {
+    name: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+    download_url: Option<String>,
+}
+
+async fn download_github_images_stream(
+    project_name: String,
+    source_id: String,
+    tx: futures::channel::mpsc::UnboundedSender<DemoProgressEvent>,
+) -> dioxus::Result<()> {
+    let source = DEMO_SOURCES
+        .iter()
+        .find(|(id, _, _)| *id == source_id)
+        .ok_or_else(|| anyhow!("Unknown demo source: {}", source_id))?;
+
+    let (_, repo, path) = *source;
+
+    let settings = crate::get_settings().await?;
+    let images_path = Path::new(&settings.projects_folder)
+        .join(&project_name)
+        .join("images")
+        .to_path_buf();
+
+    let lock = lock_for_image_path(&images_path).await;
+    let _guard = lock.lock().await;
+
+    std::fs::create_dir_all(&images_path)
+        .map_err(|e| anyhow!("Failed to create images folder: {}", e))?;
+
+    let _ = tx.unbounded_send(DemoProgressEvent::FetchingFileList);
+
+    let api_url = format!("https://api.github.com/repos/{}/contents/{}", repo, path);
+    let client = reqwest::Client::builder()
+        .user_agent("colmap-openmvs-app/1.0")
+        .build()
+        .map_err(|e| anyhow!("Failed to build HTTP client: {}", e))?;
+
+    let response = client
+        .get(&api_url)
+        .send()
+        .await
+        .map_err(|e| anyhow!("Failed to fetch GitHub directory listing: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        let _ = tx.unbounded_send(DemoProgressEvent::Error {
+            message: format!("GitHub API returned {}: {}", status, body),
+        });
+        return Ok(());
+    }
+
+    let entries: Vec<GitHubEntry> = response
+        .json()
+        .await
+        .map_err(|e| anyhow!("Failed to parse GitHub API response: {}", e))?;
+
+    let jpg_files: Vec<GitHubEntry> = entries
+        .into_iter()
+        .filter(|e| e.entry_type == "file" && e.name.to_lowercase().ends_with(".jpg"))
+        .collect();
+
+    if jpg_files.is_empty() {
+        let _ = tx.unbounded_send(DemoProgressEvent::Error {
+            message: "No JPEG images found in the selected dataset".to_string(),
+        });
+        return Ok(());
+    }
+
+    let total = jpg_files.len();
+    info!(total = total, source_id = %source_id, "Found images to download");
+
+    for (idx, entry) in jpg_files.into_iter().enumerate() {
+        let download_url = match entry.download_url {
+            Some(url) => url,
+            None => {
+                warn!(name = %entry.name, "No download URL for file, skipping");
+                continue;
+            }
+        };
+
+        let _ = tx.unbounded_send(DemoProgressEvent::DownloadProgress {
+            filename: entry.name.clone(),
+            downloaded: idx,
+            total,
+        });
+
+        let data = match client.get(&download_url).send().await {
+            Ok(resp) => match resp.bytes().await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    let _ = tx.unbounded_send(DemoProgressEvent::Error {
+                        message: format!("Failed to read {}: {}", entry.name, e),
+                    });
+                    return Ok(());
+                }
+            },
+            Err(e) => {
+                let _ = tx.unbounded_send(DemoProgressEvent::Error {
+                    message: format!("Failed to download {}: {}", entry.name, e),
+                });
+                return Ok(());
+            }
+        };
+
+        let dest = images_path.join(&entry.name);
+        if let Err(e) = tokio::fs::write(&dest, &data).await {
+            let _ = tx.unbounded_send(DemoProgressEvent::Error {
+                message: format!("Failed to save {}: {}", entry.name, e),
+            });
+            return Ok(());
+        }
+
+        info!(name = %entry.name, progress = idx + 1, total = total, "Downloaded demo image");
+    }
+
+    // Signal completion
+    let _ = tx.unbounded_send(DemoProgressEvent::DownloadProgress {
+        filename: String::new(),
+        downloaded: total,
+        total,
+    });
+
+    Ok(())
 }
 
 /// Helper function to resize a single image file
@@ -378,199 +520,6 @@ async fn resize_image_file(image_path: &Path, max_dimension: u32) -> dioxus::Res
 
     info!(image_path = %image_path.display(), "Image resized successfully");
     Ok(true)
-}
-
-fn extract_jpg_from_7z_memory_with_events<R: std::io::Read + std::io::Seek>(
-    reader: R,
-    dest_path: &std::path::Path,
-    tx: std::sync::mpsc::Sender<DemoProgressEvent>,
-) {
-    use std::sync::{Arc, Mutex};
-
-    let extracted_count = Arc::new(Mutex::new(0usize));
-    let total_bytes = Arc::new(Mutex::new(0u64));
-
-    let canonical_dest = match dest_path.canonicalize() {
-        Ok(path) => path,
-        Err(e) => {
-            let _ = tx.send(DemoProgressEvent::Error {
-                message: format!("Failed to resolve extraction directory: {}", e),
-            });
-            return;
-        }
-    };
-
-    let result = decompress_with_extract_fn(reader, dest_path, |file_entry, reader, _| {
-        if !file_entry.is_directory && is_image_file(&file_entry.name) {
-            if let Some(file_name) = std::path::Path::new(&file_entry.name)
-                .file_name()
-                .and_then(|n| n.to_str())
-            {
-                let dest_file = canonical_dest.join(file_name);
-
-                if !dest_file.starts_with(&canonical_dest) {
-                    eprintln!(
-                        "[Demo Images] Security check failed: path traversal for '{}'",
-                        file_name
-                    );
-                    return Ok(true);
-                }
-
-                if let Some(parent) = dest_file.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-
-                match std::fs::File::create(&dest_file) {
-                    Ok(mut output) => match std::io::copy(reader, &mut output) {
-                        Ok(bytes_written) => {
-                            let count = *extracted_count.lock().unwrap() + 1;
-                            let bytes = *total_bytes.lock().unwrap() + bytes_written;
-                            *extracted_count.lock().unwrap() = count;
-                            *total_bytes.lock().unwrap() = bytes;
-
-                            let _ = tx.send(DemoProgressEvent::ExtractionProgress {
-                                last_file: Some(file_name.to_string()),
-                                total_files: count,
-                                total_bytes: bytes,
-                            });
-
-                            Ok(true)
-                        }
-                        Err(e) => {
-                            eprintln!("[Demo Images] Error copying '{}': {}", file_name, e);
-                            Ok(true)
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!(
-                            "[Demo Images] Error creating '{}': {}",
-                            dest_file.display(),
-                            e
-                        );
-                        Ok(true)
-                    }
-                }
-            } else {
-                Ok(true)
-            }
-        } else {
-            Ok(true)
-        }
-    });
-
-    match result {
-        Ok(_) => {}
-        Err(e) => {
-            let _ = tx.send(DemoProgressEvent::Error {
-                message: format!("Extraction failed: {}", e),
-            });
-        }
-    }
-}
-
-async fn download_demo_images_stream(
-    project_name: String,
-    tx: futures::channel::mpsc::UnboundedSender<DemoProgressEvent>,
-) -> dioxus::Result<()> {
-    use std::sync::mpsc;
-
-    let settings = crate::get_settings().await?;
-    let images_path = Path::new(&settings.projects_folder)
-        .join(&project_name)
-        .join("images")
-        .to_path_buf();
-
-    let lock = lock_for_image_path(&images_path).await;
-    let _guard = lock.lock().await;
-
-    std::fs::create_dir_all(&images_path)
-        .map_err(|e| anyhow!("Failed to create images folder: {}", e))?;
-
-    // On Android, the demo images archive is embedded as `libdemo-images.so`
-    // in the APK's jniLibs directory (copied there by build_android.sh).
-    // Read it directly to avoid requiring a network connection.
-    #[cfg(target_os = "android")]
-    let bytes: Vec<u8> = {
-        let embedded = crate::settings::get_android_native_lib_dir()
-            .map(|d| std::path::PathBuf::from(d).join("libdemo-images.so"));
-        if let Some(path) = embedded.filter(|p| p.exists()) {
-            info!(path = %path.display(), "Using embedded demo images archive");
-            let total = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            if total > 0 {
-                let _ = tx.unbounded_send(DemoProgressEvent::DownloadProgress {
-                    downloaded_bytes: 0,
-                    total_bytes: total,
-                });
-            }
-            let data = std::fs::read(&path)
-                .map_err(|e| anyhow!("Failed to read embedded demo images: {}", e))?;
-            let _ = tx.unbounded_send(DemoProgressEvent::DownloadProgress {
-                downloaded_bytes: data.len() as u64,
-                total_bytes: data.len() as u64,
-            });
-            data
-        } else {
-            warn!("Embedded demo images not found; falling back to network download");
-            fetch_demo_images_bytes(&tx).await?
-        }
-    };
-
-    #[cfg(not(target_os = "android"))]
-    let bytes: Vec<u8> = fetch_demo_images_bytes(&tx).await?;
-
-    let (progress_tx, progress_rx) = mpsc::channel();
-    let images_path_clone = images_path.clone();
-    let bytes_clone = bytes.clone();
-
-    std::thread::spawn(move || {
-        extract_jpg_from_7z_memory_with_events(
-            std::io::Cursor::new(&bytes_clone),
-            &images_path_clone,
-            progress_tx,
-        );
-    });
-
-    for event in progress_rx.iter() {
-        let _ = tx.unbounded_send(event);
-    }
-
-    Ok(())
-}
-
-/// Download the demo images archive from the remote server, streaming progress.
-async fn fetch_demo_images_bytes(
-    tx: &futures::channel::mpsc::UnboundedSender<DemoProgressEvent>,
-) -> dioxus::Result<Vec<u8>> {
-    let url = "https://www.eth3d.net/data/door_dslr_jpg.7z";
-
-    let client = reqwest::Client::new();
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| anyhow!("Failed to download demo images from {}: {}", url, e))?;
-
-    let total_size = response.content_length().unwrap_or(0);
-
-    if total_size > 0 {
-        let _ = tx.unbounded_send(DemoProgressEvent::DownloadProgress {
-            downloaded_bytes: 0,
-            total_bytes: total_size,
-        });
-    }
-
-    let mut bytes_stream = response.bytes_stream();
-    let mut bytes = vec![];
-
-    while let Some(item) = bytes_stream.next().await {
-        bytes.extend_from_slice(&item?);
-        let _ = tx.unbounded_send(DemoProgressEvent::DownloadProgress {
-            downloaded_bytes: bytes.len() as u64,
-            total_bytes: total_size,
-        });
-    }
-
-    Ok(bytes)
 }
 
 async fn batch_resize_images_stream(

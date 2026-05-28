@@ -105,9 +105,9 @@ pub async fn batch_resize_images(project_name: String, max_dimension: u32) -> Re
     backend::batch_resize_images(project_name, max_dimension).await
 }
 
-#[post("/api/projects/{project_name}/images/demo")]
-pub async fn download_demo_images(project_name: String) -> Result<String> {
-    backend::download_demo_images(project_name).await
+#[post("/api/projects/{project_name}/images/demo/{source_id}")]
+pub async fn download_demo_images(project_name: String, source_id: String) -> Result<String> {
+    backend::download_demo_images(project_name, source_id).await
 }
 
 // ---------------------------------------------------------------------------

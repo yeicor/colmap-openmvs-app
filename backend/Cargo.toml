@@ -32,8 +32,7 @@ regex = { version = "1.10" }
 # Image processing for image resizing
 image = { version = "0.25.10" }
 
-# 7z archive extraction for demo images
-sevenz-rust2 = { version = "0.21", default-features = false, features = ["util"] }
+
 
 # XZ compression for proot
 xz2 = { version = "0.1" }

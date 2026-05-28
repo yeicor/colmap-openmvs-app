@@ -11,8 +11,8 @@ use dioxus::document::eval;
 use dioxus::fullstack::get_server_url;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
-    BsArrowsFullscreen, BsCheckAll, BsImage, BsStar, BsTextareaResize, BsTrash3, BsUpload,
-    BsXCircle,
+    BsArrowsFullscreen, BsBoxArrowUpRight, BsCheckAll, BsCloudDownload, BsImage, BsStar,
+    BsTextareaResize, BsTrash3, BsUpload, BsXCircle,
 };
 use dioxus_free_icons::Icon;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,26 +37,22 @@ fn build_demo_cb(
     mut demo_loading: Signal<bool>,
 ) -> impl FnMut(TaskEvent) + 'static {
     move |event: TaskEvent| match event {
-        TaskEvent::DemoProgress(colmap_openmvs_api::DemoProgressEvent::DownloadProgress {
-            downloaded_bytes,
-            total_bytes: tb,
-        }) => {
-            info_message.set(Some(format!(
-                "Downloading… ({:.1}/{:.1} MB)",
-                downloaded_bytes as f64 / 1e6,
-                tb as f64 / 1e6
-            )));
+        TaskEvent::DemoProgress(colmap_openmvs_api::DemoProgressEvent::FetchingFileList) => {
+            info_message.set(Some("Fetching file list…".to_string()));
         }
-        TaskEvent::DemoProgress(colmap_openmvs_api::DemoProgressEvent::ExtractionProgress {
-            total_files: f,
-            total_bytes: b,
-            ..
+        TaskEvent::DemoProgress(colmap_openmvs_api::DemoProgressEvent::DownloadProgress {
+            filename,
+            downloaded,
+            total: t,
         }) => {
-            if f > 0 {
+            if filename.is_empty() {
+                info_message.set(Some(format!("Downloaded {} / {} images.", downloaded, t)));
+            } else {
                 info_message.set(Some(format!(
-                    "Extracting… ({} files, {:.1} MB)",
-                    f,
-                    b as f64 / 1e6
+                    "Downloading… ({}/{}: {})",
+                    downloaded + 1,
+                    t,
+                    filename
                 )));
             }
         }
@@ -136,6 +132,7 @@ pub fn ImagesTab(project_name: String) -> Element {
     let mut image_paths = use_signal(Vec::<String>::new);
     let mut selected_images = use_signal(Vec::<String>::new);
     let mut demo_loading = use_signal(|| false);
+    let mut demo_dialog_open = use_signal(|| false);
     let mut resize_loading = use_signal(|| false);
     let mut resize_dialog_open = use_signal(|| false);
     let mut resize_max_dimension = use_signal(|| 1024u32);
@@ -259,11 +256,14 @@ pub fn ImagesTab(project_name: String) -> Element {
         }
     };
 
-    let on_load_demo = {
+    // Factory that creates per-dataset onclick handlers; all signals are Copy so the
+    // only thing we need to clone is the project_name String.
+    let make_demo_handler = |source_id: &'static str| {
         let project_name = project_name.clone();
         move |_| {
             demo_loading.set(true);
-            info_message.set(Some("Starting download...".to_string()));
+            demo_dialog_open.set(false);
+            info_message.set(Some(format!("Starting {} dataset download…", source_id)));
             let project_name = project_name.clone();
             let cb = build_demo_cb(
                 project_name.clone(),
@@ -273,7 +273,11 @@ pub fn ImagesTab(project_name: String) -> Element {
                 demo_loading,
             );
             spawn(async move {
-                let task_id = match crate::server::download_demo_images(project_name.clone()).await
+                let task_id = match crate::server::download_demo_images(
+                    project_name.clone(),
+                    source_id.to_string(),
+                )
+                .await
                 {
                     Ok(id) => id,
                     Err(e) => {
@@ -287,6 +291,8 @@ pub fn ImagesTab(project_name: String) -> Element {
             });
         }
     };
+    let on_load_demo_et = make_demo_handler("ET");
+    let on_load_demo_kermit = make_demo_handler("kermit");
 
     let on_clear_all = {
         let project_name = project_name.clone();
@@ -431,6 +437,107 @@ pub fn ImagesTab(project_name: String) -> Element {
                 on_close: move |_| info_message.set(None),
             }
 
+            // ── Demo dataset selector modal ─────────────────────────────────────
+            if demo_dialog_open() {
+                div {
+                    class: "demo-selector-overlay",
+                    onclick: move |_| demo_dialog_open.set(false),
+
+                    div {
+                        class: "demo-selector-modal",
+                        onclick: move |evt| evt.stop_propagation(),
+
+                        div {
+                            class: "demo-selector-header",
+                            h2 { class: "demo-selector-title", Icon { icon: BsStar } " Download Demo Image Datasets" }
+                            button {
+                                class: "demo-close-btn",
+                                title: "Close",
+                                onclick: move |_| demo_dialog_open.set(false),
+                                "×"
+                            }
+                        }
+
+                        div {
+                            class: "demo-cards",
+
+                            // ── E.T. card ──────────────────────────────────────
+                            div {
+                                class: "demo-card",
+                                div {
+                                    class: "demo-card-body",
+                                    div { class: "demo-card-icon", "👽" }
+                                    div {
+                                        class: "demo-card-body-text",
+                                        h3 { class: "demo-card-title", "E.T." }
+                                        div {
+                                            class: "demo-card-meta",
+                                            span { class: "demo-card-author", "By Noah Snavely" }
+                                            span { class: "demo-card-license", "GPL" }
+                                        }
+                                    }
+                                }
+                                div {
+                                    class: "demo-card-actions",
+                                    a {
+                                        href: "https://github.com/snavely/bundler_sfm/tree/master/examples/ET",
+                                        target: "_blank",
+                                        rel: "noopener noreferrer",
+                                        class: "btn demo-source-link",
+                                        Icon { icon: BsBoxArrowUpRight }
+                                        "Source"
+                                    }
+                                    button {
+                                        class: "btn btn-secondary",
+                                        disabled: demo_loading() || uploading(),
+                                        onclick: on_load_demo_et,
+                                        Icon { icon: BsCloudDownload }
+                                        "Download"
+                                    }
+                                }
+                            }
+
+                            // ── Kermit card ────────────────────────────────────
+                            div {
+                                class: "demo-card",
+                                div {
+                                    class: "demo-card-body",
+                                    div { class: "demo-card-icon", "🐸" }
+                                    div {
+                                        class: "demo-card-body-text",
+                                        h3 { class: "demo-card-title", "Kermit" }
+                                        div {
+                                            class: "demo-card-meta",
+                                            span { class: "demo-card-author", "By Noah Snavely" }
+                                            span { class: "demo-card-license", "GPL" }
+                                        }
+                                    }
+                                }
+                                div {
+                                    class: "demo-card-actions",
+                                    a {
+                                        href: "https://github.com/snavely/bundler_sfm/tree/master/examples/kermit",
+                                        target: "_blank",
+                                        rel: "noopener noreferrer",
+                                        class: "btn demo-source-link",
+                                        Icon { icon: BsBoxArrowUpRight }
+                                        "Source"
+                                    }
+                                    button {
+                                        class: "btn btn-secondary",
+                                        disabled: demo_loading() || uploading(),
+                                        onclick: on_load_demo_kermit,
+                                        Icon { icon: BsCloudDownload }
+                                        "Download"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Fullscreen image viewer ───────────────────────────────────────
             {
                 if let Some(fullscreen_name) = fullscreen_image() {
                     let safe_fullscreen_name = fullscreen_name.clone();
@@ -491,7 +598,9 @@ pub fn ImagesTab(project_name: String) -> Element {
                             }
                         }
                     }
-                } else { rsx! {}}
+                } else {
+                    rsx! {}
+                }
             }
 
             div {
@@ -536,13 +645,13 @@ pub fn ImagesTab(project_name: String) -> Element {
 
                     button {
                         class: "btn btn-secondary",
-                        onclick: on_load_demo,
+                        onclick: move |_| demo_dialog_open.set(true),
                         disabled: demo_loading() || uploading(),
-                        title: "Download demo images from ETH3D (Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License)",
+                        title: "Choose and download demo images from bundler_sfm examples",
                         Icon { icon: BsStar }
                         span {
                             if demo_loading() {
-                                "Downloading..."
+                                "Downloading…"
                             } else {
                                 "Demo Images"
                             }

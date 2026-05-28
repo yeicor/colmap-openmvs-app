@@ -48,7 +48,6 @@ GRADLE_MODE="$(echo "${BUILD_MODE:0:1}" | tr '[:lower:]' '[:upper:]')${BUILD_MOD
 GRADLE_PROJECT="$SCRIPT_DIR/target/dx/colmap-openmvs-app/$BUILD_MODE/android/app"
 JNILIB_DIR="$GRADLE_PROJECT/app/src/main/jniLibs/$ARCH_ABI"
 CACHE_DIR="$SCRIPT_DIR/target/android-embed-cache"
-DEMO_FILE="$CACHE_DIR/door_dslr_jpg.7z"
 
 mkdir -p "$CACHE_DIR"
 
