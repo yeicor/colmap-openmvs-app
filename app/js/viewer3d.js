@@ -86,47 +86,45 @@ function createPopover(anchor, title, contentNode) {
 
   function position() {
     const r = anchor.getBoundingClientRect();
-    pop.style.left = `${r.left}px`;
+    pop.style.left = `${Math.min(r.left, window.innerWidth - 350)}px`;
     pop.style.top = `${r.bottom + 10}px`;
   }
 
-  function open() {
+  pop.open = function () {
+    closeAllPopovers();
     position();
     pop.classList.remove("hidden");
-  }
+  };
 
-  function close() {
+  pop.close = function () {
     pop.classList.add("hidden");
-  }
+  };
 
   anchor.addEventListener("click", (e) => {
     e.stopPropagation();
     if (pop.classList.contains("hidden")) {
-      closeAllPopovers();
-      open();
+      pop.open();
     } else {
-      close();
+      pop.close();
     }
   });
 
-  closeBtn.addEventListener("click", close);
+  closeBtn.addEventListener("click", () => pop.close());
 
   function outside(e) {
     if (!pop.contains(e.target) && !anchor.contains(e.target)) {
-      close();
+      pop.close();
     }
   }
 
   function keyHandler(e) {
-    if (e.key === "Escape") {
-      close();
-    }
+    if (e.key === "Escape") pop.close();
   }
 
   document.addEventListener("pointerdown", outside);
   document.addEventListener("keydown", keyHandler);
 
-  registerPopover(close);
+  registerPopover(() => pop.close());
   return pop;
 }
 
@@ -162,42 +160,45 @@ class ToastStack {
     card.querySelector("button").addEventListener("click", () => {
       card.remove();
     });
+
+    let timeout = setTimeout(() => card.remove(), 10000);
+    card.addEventListener("pointerenter", () => clearTimeout(timeout));
+    card.addEventListener("pointerleave", () => {
+      timeout = setTimeout(() => card.remove(), 10000);
+    });
+
     this.el.appendChild(card);
     return card;
   }
 }
 
-// ── Orbit controls (spherical coordinates, fixed up-vector) ──────────────
+// ── Trackball controls (based on three.js TrackballControls example) ─────
+// Free 360° rotation using the virtual-sphere technique.
 
-class OrbitControls {
+class TrackballControls {
   constructor(camera, domElement) {
     this.camera = camera;
     this.domElement = domElement;
-
     this.enabled = true;
 
-    this.rotateSpeed = 0.006;
-    this.zoomSpeed = 1.0;
-    this.panSpeed = 0.5;
+    this.rotateSpeed = 0.6;
+    this.zoomSpeed = 1.1;
+    this.panSpeed = 0.3;
+    this.damping = 0.2;
 
     this.target = new THREE.Vector3();
-
-    this.minDistance = 0.001;
-    this.maxDistance = Infinity;
-    this.minPolarAngle = 0;
-    this.maxPolarAngle = Math.PI;
-
     this.state = "none";
-    this.last = new THREE.Vector2();
-
-    this.spherical = new THREE.Spherical();
-    this.sphericalDelta = new THREE.Spherical();
-    this.panOffset = new THREE.Vector3();
-
+    this.movePrev = new THREE.Vector2();
+    this.moveCurr = new THREE.Vector2();
+    this.eye = new THREE.Vector3();
     this.inertia = true;
-    this.velocityTheta = 0;
-    this.velocityPhi = 0;
-    this.velocityPan = new THREE.Vector3();
+    this.lastAxis = new THREE.Vector3();
+    this.lastAngle = 0;
+
+    this.panStart = new THREE.Vector2();
+    this.panEnd = new THREE.Vector2();
+    this.tmpV = new THREE.Vector3();
+    this.tmpQ = new THREE.Quaternion();
 
     this.bind();
   }
@@ -216,21 +217,12 @@ class OrbitControls {
     this.domElement.removeEventListener("wheel", this.onWheel);
   }
 
-  saveSpherical() {
-    const offset = new THREE.Vector3().copy(this.camera.position).sub(this.target);
-    this.spherical.setFromVector3(offset);
-  }
-
-  applySpherical() {
-    const offset = new THREE.Vector3().setFromSpherical(this.spherical);
-    this.camera.position.copy(this.target).add(offset);
-    this.camera.lookAt(this.target);
-  }
-
   onPointerDown = (e) => {
     if (!this.enabled) return;
-    this.last.set(e.clientX, e.clientY);
-
+    this.movePrev.set(e.clientX, e.clientY);
+    this.moveCurr.copy(this.movePrev);
+    this.panStart.set(e.clientX, e.clientY);
+    this.panEnd.copy(this.panStart);
     if (e.button === 0) {
       this.state = "rotate";
     } else if (e.button === 1 || e.button === 2) {
@@ -239,115 +231,101 @@ class OrbitControls {
   };
 
   onPointerMove = (e) => {
-    if (!this.enabled) return;
-    if (this.state === "none") return;
-
-    const dx = e.clientX - this.last.x;
-    const dy = e.clientY - this.last.y;
-    this.last.set(e.clientX, e.clientY);
-
-    if (this.state === "rotate") {
-      this.rotate(dx, dy);
-    } else if (this.state === "pan") {
-      this.pan(dx, dy);
+    if (!this.enabled || this.state === "none") return;
+    this.moveCurr.set(e.clientX, e.clientY);
+    if (this.state === "pan") {
+      this.panEnd.copy(this.moveCurr);
     }
   };
 
   onPointerUp = () => {
+    this.movePrev.copy(this.moveCurr);
     this.state = "none";
   };
 
   onWheel = (e) => {
     e.preventDefault();
-    const factor = e.deltaY > 0 ? 1.05 : 0.95;
+    const factor = e.deltaY > 0 ? 1.0 + 0.1 * this.zoomSpeed : 1.0 - 0.1 * this.zoomSpeed;
     this.zoom(factor);
   };
 
-  rotate(dx, dy) {
-    const theta = -dx * this.rotateSpeed;
-    const phi = -dy * this.rotateSpeed;
+  rotateCamera() {
+    const dx = this.moveCurr.x - this.movePrev.x;
+    const dy = this.moveCurr.y - this.movePrev.y;
+    const angle = Math.sqrt(dx * dx + dy * dy);
+    if (angle < 1e-6) return;
 
-    this.sphericalDelta.theta += theta;
-    this.sphericalDelta.phi += phi;
+    this.eye.copy(this.camera.position).sub(this.target);
 
-    this.velocityTheta += theta * 0.3;
-    this.velocityPhi += phi * 0.3;
+    const eyeDir = this.eye.clone().normalize();
+    const upDir = this.camera.up.clone().normalize();
+    const sideDir = this.tmpV.crossVectors(upDir, eyeDir).normalize();
+
+    upDir.setLength(dy);
+    sideDir.setLength(dx);
+
+    const moveDir = upDir.add(sideDir);
+    const axis = this.tmpV.crossVectors(moveDir, this.eye).normalize();
+    if (axis.lengthSq() < 1e-10) return;
+
+    const rotAngle = angle * this.rotateSpeed;
+    this.tmpQ.setFromAxisAngle(axis, rotAngle);
+
+    this.eye.applyQuaternion(this.tmpQ);
+    this.camera.up.applyQuaternion(this.tmpQ);
+
+    this.lastAxis.copy(axis);
+    this.lastAngle = rotAngle;
+
+    this.movePrev.copy(this.moveCurr);
   }
 
-  pan(dx, dy) {
-    const offset = new THREE.Vector3().copy(this.camera.position).sub(this.target);
-    const dist = offset.length();
-    const factor = (2 * dist) / this.domElement.clientHeight;
+  panCamera() {
+    const dx = this.panEnd.x - this.panStart.x;
+    const dy = this.panEnd.y - this.panStart.y;
+    if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return;
 
-    const right = new THREE.Vector3();
-    right.crossVectors(this.camera.up, offset.normalize()).normalize();
+    this.eye.copy(this.camera.position).sub(this.target);
+    const dist = this.eye.length();
+    const factor = (2 * dist * this.panSpeed) / this.domElement.clientHeight;
 
-    const pan = new THREE.Vector3()
-      .copy(right).multiplyScalar(-dx * factor * this.panSpeed)
-      .add(new THREE.Vector3().copy(this.camera.up).multiplyScalar(dy * factor * this.panSpeed));
+    const eyeDir = this.eye.clone().normalize();
+    const right = this.tmpV.crossVectors(this.camera.up, eyeDir).normalize();
+    const up = this.tmpV.crossVectors(right, eyeDir).normalize();
 
-    this.panOffset.add(pan);
-    this.velocityPan.copy(pan);
+    const pan = right.multiplyScalar(-dx * factor).add(up.multiplyScalar(dy * factor));
+    this.camera.position.add(pan);
+    this.target.add(pan);
+
+    this.panStart.copy(this.panEnd);
   }
 
-  zoom(scale) {
-    const offset = new THREE.Vector3().copy(this.camera.position).sub(this.target);
-    const len = Math.max(this.minDistance, Math.min(this.maxDistance, offset.length() * scale));
-    offset.setLength(len);
-    this.camera.position.copy(this.target).add(offset);
-    this.camera.lookAt(this.target);
-
-    this.saveSpherical();
+  zoom(factor) {
+    this.eye.copy(this.camera.position).sub(this.target);
+    this.eye.multiplyScalar(factor);
+    if (this.eye.lengthSq() < 1e-6) this.eye.set(0, 0, 1e-3);
+    this.camera.position.copy(this.target).add(this.eye);
   }
 
   update() {
-    if (!this.enabled) return;
+    this.eye.subVectors(this.camera.position, this.target);
 
-    let needsUpdate = false;
-
-    if (this.state === "none") {
-      if (this.inertia) {
-        if (Math.abs(this.velocityTheta) > 1e-6 || Math.abs(this.velocityPhi) > 1e-6) {
-          this.sphericalDelta.theta += this.velocityTheta;
-          this.sphericalDelta.phi += this.velocityPhi;
-          this.velocityTheta *= 0.9;
-          this.velocityPhi *= 0.9;
-          needsUpdate = true;
-        }
-
-        if (this.velocityPan.lengthSq() > 1e-8) {
-          this.panOffset.add(this.velocityPan);
-          this.velocityPan.multiplyScalar(0.9);
-          needsUpdate = true;
-        }
+    if (this.state === "rotate") {
+      this.rotateCamera();
+    } else if (this.state === "pan") {
+      this.panCamera();
+    } else if (this.state === "none") {
+      // inertia
+      if (this.inertia && this.lastAngle) {
+        this.lastAngle *= Math.sqrt(1.0 - this.damping);
+        this.eye.copy(this.camera.position).sub(this.target);
+        this.tmpQ.setFromAxisAngle(this.lastAxis, this.lastAngle);
+        this.eye.applyQuaternion(this.tmpQ);
+        this.camera.up.applyQuaternion(this.tmpQ);
       }
-    } else {
-      this.velocityTheta = 0;
-      this.velocityPhi = 0;
-      this.velocityPan.set(0, 0, 0);
     }
 
-    if (this.sphericalDelta.theta !== 0 || this.sphericalDelta.phi !== 0) {
-      this.saveSpherical();
-
-      this.spherical.theta += this.sphericalDelta.theta;
-      this.spherical.phi = clamp(this.spherical.phi + this.sphericalDelta.phi, this.minPolarAngle, this.maxPolarAngle);
-
-      this.applySpherical();
-      this.sphericalDelta.set(0, 0, 0);
-      needsUpdate = true;
-    }
-
-    if (this.panOffset.lengthSq() > 0) {
-      this.target.add(this.panOffset);
-      this.camera.position.add(this.panOffset);
-      this.panOffset.set(0, 0, 0);
-      needsUpdate = true;
-    }
-
-    if (needsUpdate) {
-      this.camera.lookAt(this.target);
-    }
+    this.camera.position.copy(this.target).add(this.eye);
   }
 }
 
@@ -397,7 +375,7 @@ export class Viewer3D {
     this.camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.01, 10000);
     this.camera.position.set(2, 2, 2);
 
-    this.controls = new OrbitControls(this.camera, canvas);
+    this.controls = new TrackballControls(this.camera, canvas);
     this.controls.inertia = this.state.inertia;
 
     this.timer = new THREE.Timer();
@@ -427,6 +405,7 @@ export class Viewer3D {
 
     this.measurementMode = false;
     this.measurePoints = [];
+    this.raycastEnabled = false;
 
     this.toastStack = new ToastStack(container);
 
@@ -446,6 +425,7 @@ export class Viewer3D {
     this.dirLight = new THREE.DirectionalLight(0xffffff, 1.1);
     this.dirLight.position.set(4, 8, 6);
     this.scene.add(this.dirLight);
+    this.scene.add(this.dirLight.target);
 
     this.grid = new THREE.GridHelper(10, 20, 0x444444, 0x222222);
     this.axes = new THREE.AxesHelper(1.5);
@@ -507,11 +487,16 @@ export class Viewer3D {
       measureBtn.classList.toggle("active", this.measurementMode);
     });
 
+    const raycastBtn = createButton("🎯", "Pick", () => {
+      this.raycastEnabled = !this.raycastEnabled;
+      raycastBtn.classList.toggle("active", this.raycastEnabled);
+    });
+
     const statsBtn = createButton("ℹ", "Stats", () => {});
     const helpBtn = createButton("?", "Help", () => {});
 
     this.sections.view.append(homeBtn, gridBtn, axesBtn);
-    this.sections.tools.append(measureBtn);
+    this.sections.tools.append(measureBtn, raycastBtn);
     this.sections.info.append(statsBtn, helpBtn);
 
     // Stats popover
@@ -552,6 +537,10 @@ export class Viewer3D {
             <div class="v3d-help-item">
                 <b>Zoom</b>
                 <span>Mouse wheel</span>
+            </div>
+            <div class="v3d-help-item">
+                <b>Pick</b>
+                <span>Press <kbd>R</kbd></span>
             </div>
             <div class="v3d-help-item">
                 <b>Measure</b>
@@ -706,14 +695,14 @@ export class Viewer3D {
     });
     this._resizeObs.observe(this.container);
 
-    this.renderer.domElement.addEventListener("pointerdown", this.onPointerDown);
+    this.renderer.domElement.addEventListener("pointerdown", this.onPointerDown, { capture: true, passive: true });
     window.addEventListener("keydown", this.onKeyDown);
   }
 
   dispose() {
     if (this._resizeObs) this._resizeObs.disconnect();
     window.removeEventListener("keydown", this.onKeyDown);
-    this.renderer.domElement.removeEventListener("pointerdown", this.onPointerDown);
+    this.renderer.domElement.removeEventListener("pointerdown", this.onPointerDown, { capture: true });
     this.controls.dispose();
     this.renderer.dispose();
   }
@@ -732,13 +721,22 @@ export class Viewer3D {
       case "m":
         this.measurementMode = !this.measurementMode;
         return;
+      case "r":
+        this.raycastEnabled = !this.raycastEnabled;
+        return;
       case "i":
         e.preventDefault();
-        this.statsPopover.classList.toggle("hidden");
+        closeAllPopovers();
+        this.statsPopover.classList.contains("hidden")
+          ? this.statsPopover.open()
+          : this.statsPopover.close();
         return;
       case "?":
         e.preventDefault();
-        this.helpPopover.classList.toggle("hidden");
+        closeAllPopovers();
+        this.helpPopover.classList.contains("hidden")
+          ? this.helpPopover.open()
+          : this.helpPopover.close();
         return;
       case "escape":
         closeAllPopovers();
@@ -750,28 +748,33 @@ export class Viewer3D {
   onPointerDown = (e) => {
     if (e.button !== 0) return;
 
-    if (!this.measurementMode) {
-      this.performRaycast(e);
+    if (this.measurementMode) {
+      e.stopPropagation();
+      this.pointer.x = (e.offsetX / this.renderer.domElement.clientWidth) * 2 - 1;
+      this.pointer.y = -(e.offsetY / this.renderer.domElement.clientHeight) * 2 + 1;
+      this.raycaster.setFromCamera(this.pointer, this.camera);
+      const hits = this.raycaster.intersectObject(this.modelRoot, true);
+      if (!hits.length) return;
+
+      this.measurePoints.push(hits[0].point.clone());
+
+      if (this.measurePoints.length === 2) {
+        const a = this.measurePoints[0];
+        const b = this.measurePoints[1];
+        const d = distance(a, b);
+        this.toastStack.push(
+          "Measurement",
+          `<div class="v3d-measure-line">Distance: ${d.toFixed(5)}</div>`,
+        );
+        this.measurePoints.length = 0;
+      }
       return;
     }
 
-    this.pointer.x = (e.offsetX / this.renderer.domElement.clientWidth) * 2 - 1;
-    this.pointer.y = -(e.offsetY / this.renderer.domElement.clientHeight) * 2 + 1;
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = this.raycaster.intersectObject(this.modelRoot, true);
-    if (!hits.length) return;
-
-    this.measurePoints.push(hits[0].point.clone());
-
-    if (this.measurePoints.length === 2) {
-      const a = this.measurePoints[0];
-      const b = this.measurePoints[1];
-      const d = distance(a, b);
-      this.toastStack.push(
-        "Measurement",
-        `<div class="v3d-measure-line">Distance: ${d.toFixed(5)}</div>`,
-      );
-      this.measurePoints.length = 0;
+    if (this.raycastEnabled) {
+      e.stopPropagation();
+      this.performRaycast(e);
+      return;
     }
   };
 
@@ -806,6 +809,7 @@ export class Viewer3D {
     this.detectCapabilities();
     this.computeStats();
     this.rebuildRenderSection();
+    this.applyRenderMode();
     this.homeCamera(true);
   }
 
@@ -1074,7 +1078,6 @@ export class Viewer3D {
     this.camera.far = Math.max(1000, dist * 100);
     this.camera.updateProjectionMatrix();
     this.camera.lookAt(center);
-    this.controls.saveSpherical();
   }
 
   // ── Update lighting (called each frame) ──────────────────────────────────
