@@ -1,942 +1,1205 @@
-// viewer3d.js
-// Full-featured photogrammetry-oriented GLB viewer
-// Responsive/mobile-friendly
-// API preserved:
-//   launchGlbViewer(b64, fname)
+/* viewer3d.final.js
+ *
+ * Production-ready 3D viewer overhaul:
+ * - Orbit-style camera (spherical coordinates, fixed up-vector)
+ * - Dynamic capability-aware toolbar
+ * - Popover-based UX replacing bottom panel
+ * - Dismissible measurement / pick cards
+ * - Robust interaction cleanup
+ * - Mesh / pointcloud adaptive rendering
+ * - Persistent viewer state
+ * - Improved accessibility and shortcuts
+ */
 
 import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+const STORAGE_KEY = "viewer3d.preferences.v3";
 
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
-import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
-
-import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
-
-const THEME = {
-  bg: "#0d1117",
-  panel: "#161b22",
-  border: "#30363d",
-  text: "#e6edf3",
-  muted: "#8b949e",
-  accent: "#58a6ff",
+const DEFAULT_STATE = {
+  background: "#111318",
+  showGrid: true,
+  showAxes: false,
+  wireframe: false,
+  backfaces: false,
+  raytracing: false,
+  lighting: true,
+  lightingOffset: 0,
+  pointsSize: 1.5,
+  toneMapping: true,
+  measurementVisible: true,
+  inertia: true,
+  exposure: 1.0,
+  renderMode: "solid",
 };
 
-const MOBILE_BREAKPOINT = 820;
-
-const STATE = {
-  renderMode: "textured",
-  pointMode: "rgb",
-
-  pointSize: 1.0,
-
-  showMesh: true,
-  showPoints: true,
-  showWireframe: false,
-
-  clipping: false,
-
-  measurementMode: false,
-
-  selected: null,
-};
-
-export async function launchGlbViewer(b64, fname) {
-  // Cleanup existing viewer
-
-  const existing = document.getElementById("pg-viewer-overlay");
-
-  if (existing) existing.remove();
-
-  // Decode GLB
-
-  const binary = atob(b64);
-
-  const arr = new Uint8Array(binary.length);
-
-  for (let i = 0; i < binary.length; i++) {
-    arr[i] = binary.charCodeAt(i);
-  }
-
-  const blob = new Blob([arr], {
-    type: "model/gltf-binary",
-  });
-
-  const blobUrl = URL.createObjectURL(blob);
-
-  // Layout
-
-  const ui = createLayout(fname);
-
-  document.body.appendChild(ui.root);
-
-  // Scene
-
-  const scene = new THREE.Scene();
-
-  scene.background = new THREE.Color(THEME.bg);
-
-  // Camera
-
-  const camera = new THREE.PerspectiveCamera(60, 1, 0.001, 100000);
-
-  camera.position.set(0, 0, 5);
-
-  // Renderer
-
-  const renderer = new THREE.WebGLRenderer({
-    canvas: ui.canvas,
-    antialias: true,
-    preserveDrawingBuffer: true,
-  });
-
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-
-  renderer.setClearColor(0x0d1117);
-
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-
-  renderer.localClippingEnabled = true;
-
-  // Composer
-
-  const composer = new EffectComposer(renderer);
-
-  composer.addPass(new RenderPass(scene, camera));
-
-  const fxaa = new ShaderPass(FXAAShader);
-
-  composer.addPass(fxaa);
-
-  // Controls
-
-  const controls = new OrbitControls(camera, renderer.domElement);
-
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.screenSpacePanning = true;
-  controls.rotateSpeed = 0.9;
-  controls.zoomSpeed = 1.0;
-  controls.panSpeed = 1.0;
-
-  // Lights
-
-  setupLights(scene, camera);
-
-  // Resize
-
-  function resize() {
-    const w = ui.viewport.clientWidth;
-    const h = ui.viewport.clientHeight;
-
-    camera.aspect = w / h;
-
-    camera.updateProjectionMatrix();
-
-    renderer.setSize(w, h, false);
-
-    fxaa.material.uniforms.resolution.value.set(1 / w, 1 / h);
-  }
-
-  const ro = new ResizeObserver(resize);
-
-  ro.observe(ui.viewport);
-
-  resize();
-
-  // GLTF Load
-
-  const loader = new GLTFLoader();
-
-  ui.status("Loading model...");
-
-  loader.load(
-    blobUrl,
-    (gltf) => {
-      const root = gltf.scene;
-
-      scene.add(root);
-
-      const analysis = processScene(root);
-
-      fitCamera(camera, controls, root);
-
-      buildSidebar(ui, analysis, root);
-
-      buildToolbar(ui, scene, root, renderer, camera, controls);
-
-      setupPicking(renderer, scene, camera, ui);
-
-      setupMeasurements(renderer, scene, camera, ui);
-
-      ui.status("");
-
-      animate();
-    },
-    undefined,
-    (err) => {
-      ui.status("Load failed: " + err.message, true);
-
-      console.error(err);
-    },
-  );
-
-  function animate() {
-    if (!document.contains(ui.root)) {
-      renderer.dispose();
-
-      ro.disconnect();
-
-      URL.revokeObjectURL(blobUrl);
-
-      return;
-    }
-
-    requestAnimationFrame(animate);
-
-    controls.update();
-
-    composer.render();
+function loadPrefs() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    return { ...DEFAULT_STATE, ...(parsed || {}) };
+  } catch {
+    return { ...DEFAULT_STATE };
   }
 }
 
-function createLayout(fname) {
-  const mobile = window.innerWidth <= MOBILE_BREAKPOINT;
-
-  const root = document.createElement("div");
-
-  root.id = "pg-viewer-overlay";
-
-  root.style.cssText = `
-        position:fixed;
-        inset:0;
-        z-index:999999;
-        background:${THEME.bg};
-        display:flex;
-        flex-direction:column;
-        overflow:hidden;
-        touch-action:none;
-    `;
-
-  // Toolbar
-
-  const toolbar = document.createElement("div");
-
-  toolbar.style.cssText = `
-        height:48px;
-        flex-shrink:0;
-        background:${THEME.panel};
-        border-bottom:1px solid ${THEME.border};
-
-        display:flex;
-        align-items:center;
-        gap:6px;
-
-        padding:0 10px;
-        overflow-x:auto;
-        overflow-y:hidden;
-    `;
-
-  const title = document.createElement("div");
-
-  title.textContent = fname;
-
-  title.style.cssText = `
-        color:${THEME.text};
-        font-size:12px;
-        font-family:monospace;
-        white-space:nowrap;
-        overflow:hidden;
-        text-overflow:ellipsis;
-        min-width:120px;
-        max-width:240px;
-        flex-shrink:0;
-    `;
-
-  toolbar.appendChild(title);
-
-  // Body
-
-  const body = document.createElement("div");
-
-  body.style.cssText = `
-        flex:1;
-        position:relative;
-        display:flex;
-        min-height:0;
-    `;
-
-  // Sidebar
-
-  const sidebar = document.createElement("div");
-
-  sidebar.style.cssText = mobile
-    ? `
-            position:absolute;
-            left:0;
-            right:0;
-            bottom:0;
-            height:38%;
-            z-index:10;
-
-            background:${THEME.panel};
-            border-top:1px solid ${THEME.border};
-
-            overflow:auto;
-
-            backdrop-filter:blur(10px);
-        `
-    : `
-            width:300px;
-            flex-shrink:0;
-
-            background:${THEME.panel};
-            border-right:1px solid ${THEME.border};
-
-            overflow:auto;
-        `;
-
-  // Viewport
-
-  const viewport = document.createElement("div");
-
-  viewport.style.cssText = `
-        flex:1;
-        min-width:0;
-        position:relative;
-    `;
-
-  const canvas = document.createElement("canvas");
-
-  canvas.style.cssText = `
-        width:100%;
-        height:100%;
-        display:block;
-    `;
-
-  viewport.appendChild(canvas);
-
-  body.appendChild(sidebar);
-
-  body.appendChild(viewport);
-
-  // Status bar
-
-  const status = document.createElement("div");
-
-  status.style.cssText = `
-        height:24px;
-        flex-shrink:0;
-
-        background:${THEME.panel};
-        border-top:1px solid ${THEME.border};
-
-        display:flex;
-        align-items:center;
-
-        padding:0 10px;
-
-        color:${THEME.muted};
-
-        font-size:11px;
-        font-family:monospace;
-    `;
-
-  root.appendChild(toolbar);
-  root.appendChild(body);
-  root.appendChild(status);
-
-  return {
-    root,
-    toolbar,
-    body,
-    sidebar,
-    viewport,
-    canvas,
-
-    status(msg, err = false) {
-      status.textContent = msg;
-
-      status.style.color = err ? "#ff7b72" : THEME.muted;
-    },
-  };
+function savePrefs(state) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {}
 }
 
-function createButton(icon, tooltip) {
+function clamp(v, a, b) {
+  return Math.max(a, Math.min(b, v));
+}
+
+function distance(a, b) {
+  return a.distanceTo(b);
+}
+
+function createButton(icon, label, onClick) {
   const btn = document.createElement("button");
-
-  btn.innerHTML = icon;
-
-  btn.title = tooltip;
-
-  btn.style.cssText = `
-        width:32px;
-        height:32px;
-
-        border-radius:7px;
-
-        border:1px solid ${THEME.border};
-
-        background:#21262d;
-
-        color:${THEME.text};
-
-        cursor:pointer;
-
-        flex-shrink:0;
-
-        font-size:14px;
-
-        transition:all .15s ease;
+  btn.className = "v3d-btn";
+  btn.type = "button";
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+  btn.innerHTML = `
+        <span class="v3d-btn-icon">${icon}</span>
+        <span class="v3d-btn-label">${label}</span>
     `;
-
-  btn.onmouseenter = () => {
-    btn.style.borderColor = THEME.accent;
-  };
-
-  btn.onmouseleave = () => {
-    btn.style.borderColor = THEME.border;
-  };
-
+  btn.addEventListener("click", onClick);
   return btn;
 }
 
-function setupLights(scene, camera) {
-  scene.add(new THREE.AmbientLight(0xffffff, 0.65));
-
-  const dir = new THREE.DirectionalLight(0xffffff, 1.2);
-
-  dir.position.set(1, 2, 3);
-
-  camera.add(dir);
-
-  scene.add(camera);
-}
-
-function processScene(root) {
-  let meshCount = 0;
-  let pointCount = 0;
-  let triCount = 0;
-
-  const bbox = new THREE.Box3().setFromObject(root);
-
-  root.traverse((obj) => {
-    if (obj.isMesh) {
-      meshCount++;
-
-      obj.userData.originalMaterial = obj.material;
-
-      obj.material.side = THREE.DoubleSide;
-
-      obj.material.depthWrite = true;
-
-      if (obj.geometry.index) {
-        triCount += obj.geometry.index.count / 3;
-      }
-    }
-
-    if (obj.isPoints) {
-      pointCount += obj.geometry.attributes.position.count;
-
-      const hasColors = !!obj.geometry.attributes.color;
-
-      obj.material = new THREE.PointsMaterial({
-        size: 0.02,
-        sizeAttenuation: true,
-        vertexColors: hasColors,
-        color: hasColors ? 0xffffff : 0x58a6ff,
-      });
-    }
-  });
-
-  return {
-    meshCount,
-    pointCount,
-    triCount,
-    bbox,
-  };
-}
-
-function fitCamera(camera, controls, root) {
-  const box = new THREE.Box3().setFromObject(root);
-
-  const center = box.getCenter(new THREE.Vector3());
-
-  const size = box.getSize(new THREE.Vector3());
-
-  const maxDim = Math.max(size.x, size.y, size.z);
-
-  camera.position.set(center.x, center.y, center.z + maxDim * 2);
-
-  camera.near = maxDim * 0.0001;
-  camera.far = maxDim * 1000;
-
-  camera.updateProjectionMatrix();
-
-  controls.target.copy(center);
-
-  controls.update();
-}
-
-function buildToolbar(ui, scene, root, renderer, camera, controls) {
-  // Render mode
-
-  const textured = createButton("🧊", "Textured");
-
-  textured.onclick = () => applyRenderMode(root, "textured");
-
-  ui.toolbar.appendChild(textured);
-
-  const wireframe = createButton("🕸", "Wireframe");
-
-  wireframe.onclick = () => applyRenderMode(root, "wireframe");
-
-  ui.toolbar.appendChild(wireframe);
-
-  const normals = createButton("📏", "Normals");
-
-  normals.onclick = () => applyRenderMode(root, "normals");
-
-  ui.toolbar.appendChild(normals);
-
-  const flat = createButton("⬛", "Flat");
-
-  flat.onclick = () => applyRenderMode(root, "flat");
-
-  ui.toolbar.appendChild(flat);
-
-  const xray = createButton("👁", "X-Ray");
-
-  xray.onclick = () => applyRenderMode(root, "xray");
-
-  ui.toolbar.appendChild(xray);
-
-  // Point coloring
-
-  const height = createButton("🌈", "Height Colors");
-
-  height.onclick = () => applyPointColorMode(root, "height");
-
-  ui.toolbar.appendChild(height);
-
-  const density = createButton("☁", "Density");
-
-  density.onclick = () => applyPointColorMode(root, "density");
-
-  ui.toolbar.appendChild(density);
-
-  // Clipping
-
-  const clip = createButton("✂", "Clipping");
-
-  clip.onclick = () => enableClipping(renderer, root);
-
-  ui.toolbar.appendChild(clip);
-
-  // Measure
-
-  const measure = createButton("📐", "Measure");
-
-  measure.onclick = () => {
-    STATE.measurementMode = !STATE.measurementMode;
-
-    ui.status(STATE.measurementMode ? "Measurement enabled" : "Measurement disabled");
-  };
-
-  ui.toolbar.appendChild(measure);
-
-  // Screenshot
-
-  const shot = createButton("📸", "Screenshot");
-
-  shot.onclick = () => saveScreenshot(renderer);
-
-  ui.toolbar.appendChild(shot);
-
-  // Top
-
-  const top = createButton("⬆", "Top View");
-
-  top.onclick = () => setView(camera, controls, "top");
-
-  ui.toolbar.appendChild(top);
-
-  // Front
-
-  const front = createButton("⬜", "Front View");
-
-  front.onclick = () => setView(camera, controls, "front");
-
-  ui.toolbar.appendChild(front);
-
-  // Side
-
-  const side = createButton("➡", "Side View");
-
-  side.onclick = () => setView(camera, controls, "side");
-
-  ui.toolbar.appendChild(side);
-
-  // Reset
-
-  const reset = createButton("⟳", "Reset");
-
-  reset.onclick = () => fitCamera(camera, controls, root);
-
-  ui.toolbar.appendChild(reset);
-
-  // Close
-
-  const close = createButton("✕", "Close");
-
-  close.onclick = () => ui.root.remove();
-
-  ui.toolbar.appendChild(close);
-}
-
-function applyRenderMode(root, mode) {
-  root.traverse((obj) => {
-    if (!obj.isMesh) return;
-
-    switch (mode) {
-      case "textured":
-        obj.material = obj.userData.originalMaterial;
-
-        obj.material.wireframe = false;
-
-        obj.material.transparent = false;
-
-        break;
-
-      case "wireframe":
-        obj.material = obj.userData.originalMaterial;
-
-        obj.material.wireframe = true;
-
-        break;
-
-      case "normals":
-        obj.material = new THREE.MeshNormalMaterial();
-
-        break;
-
-      case "flat":
-        obj.material = new THREE.MeshStandardMaterial({
-          color: 0xcccccc,
-          flatShading: true,
-        });
-
-        break;
-
-      case "xray":
-        obj.material = new THREE.MeshBasicMaterial({
-          color: 0xffffff,
-          transparent: true,
-          opacity: 0.25,
-        });
-
-        break;
-    }
-  });
-}
-
-function applyPointColorMode(root, mode) {
-  root.traverse((obj) => {
-    if (!obj.isPoints) return;
-
-    const pos = obj.geometry.attributes.position;
-
-    const count = pos.count;
-
-    let colors = obj.geometry.attributes.color;
-
-    if (!colors) {
-      colors = new THREE.BufferAttribute(new Float32Array(count * 3), 3);
-
-      obj.geometry.setAttribute("color", colors);
-    }
-
-    const arr = colors.array;
-
-    if (mode === "height") {
-      let min = Infinity;
-      let max = -Infinity;
-
-      for (let i = 0; i < count; i++) {
-        const y = pos.getY(i);
-
-        min = Math.min(min, y);
-        max = Math.max(max, y);
-      }
-
-      for (let i = 0; i < count; i++) {
-        const y = pos.getY(i);
-
-        const t = (y - min) / (max - min);
-
-        arr[i * 3 + 0] = t;
-        arr[i * 3 + 1] = 0.2;
-        arr[i * 3 + 2] = 1.0 - t;
-      }
-    }
-
-    if (mode === "density") {
-      for (let i = 0; i < count; i++) {
-        const r = Math.random();
-
-        arr[i * 3 + 0] = r;
-        arr[i * 3 + 1] = 0.5;
-        arr[i * 3 + 2] = 1.0 - r;
-      }
-    }
-
-    colors.needsUpdate = true;
-  });
-}
-
-function enableClipping(renderer, root) {
-  const plane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
-
-  renderer.clippingPlanes = [plane];
-
-  let offset = 0;
-
-  const onWheel = (e) => {
-    offset += e.deltaY * 0.001;
-
-    plane.constant = offset;
-  };
-
-  window.addEventListener("wheel", onWheel, { passive: true });
-
-  setTimeout(() => {
-    window.removeEventListener("wheel", onWheel);
-
-    renderer.clippingPlanes = [];
-  }, 10000);
-}
-
-function buildSidebar(ui, analysis, root) {
-  ui.sidebar.innerHTML = "";
-
-  addSection(
-    ui.sidebar,
-    "Scene",
-    `
-        Meshes: ${analysis.meshCount}<br>
-        Points: ${analysis.pointCount.toLocaleString()}<br>
-        Triangles: ${analysis.triCount.toLocaleString()}
-        `,
-  );
-
-  const size = analysis.bbox.getSize(new THREE.Vector3());
-
-  addSection(
-    ui.sidebar,
-    "Bounds",
-    `
-        X: ${size.x.toFixed(2)}<br>
-        Y: ${size.y.toFixed(2)}<br>
-        Z: ${size.z.toFixed(2)}
-        `,
-  );
-
-  addSection(
-    ui.sidebar,
-    "Controls",
-    `
-        Orbit: Left Mouse<br>
-        Pan: Right Mouse<br>
-        Zoom: Wheel / Pinch
-        `,
-  );
-
-  // Point size slider
-
-  const section = document.createElement("div");
-
-  section.style.cssText = `
-        padding:12px;
-        border-bottom:1px solid ${THEME.border};
+function createPopover(anchor, title, contentNode) {
+  const pop = document.createElement("div");
+  pop.className = "v3d-popover hidden";
+  pop.innerHTML = `
+        <div class="v3d-popover-header">
+            <div class="v3d-popover-title">${title}</div>
+            <button class="v3d-close">×</button>
+        </div>
     `;
+  pop.appendChild(contentNode);
+  document.body.appendChild(pop);
 
-  const title = document.createElement("div");
+  const closeBtn = pop.querySelector(".v3d-close");
 
-  title.textContent = "Point Size";
+  function position() {
+    const r = anchor.getBoundingClientRect();
+    pop.style.left = `${r.left}px`;
+    pop.style.top = `${r.bottom + 10}px`;
+  }
 
-  title.style.cssText = `
-        color:${THEME.text};
-        font-size:13px;
-        margin-bottom:8px;
-        font-weight:600;
-    `;
+  function open() {
+    position();
+    pop.classList.remove("hidden");
+  }
 
-  const slider = document.createElement("input");
+  function close() {
+    pop.classList.add("hidden");
+  }
 
-  slider.type = "range";
+  anchor.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (pop.classList.contains("hidden")) {
+      closeAllPopovers();
+      open();
+    } else {
+      close();
+    }
+  });
 
-  slider.min = "0.1";
-  slider.max = "10";
-  slider.step = "0.1";
-  slider.value = "1";
+  closeBtn.addEventListener("click", close);
 
-  slider.style.width = "100%";
+  function outside(e) {
+    if (!pop.contains(e.target) && !anchor.contains(e.target)) {
+      close();
+    }
+  }
 
-  slider.oninput = (e) => {
-    const s = parseFloat(e.target.value);
+  function keyHandler(e) {
+    if (e.key === "Escape") {
+      close();
+    }
+  }
 
-    root.traverse((obj) => {
-      if (!obj.isPoints) return;
+  document.addEventListener("pointerdown", outside);
+  document.addEventListener("keydown", keyHandler);
 
-      obj.material.size = 0.02 * s;
+  registerPopover(close);
+  return pop;
+}
+
+const activePopovers = [];
+
+function registerPopover(closeFn) {
+  activePopovers.push(closeFn);
+}
+
+function closeAllPopovers() {
+  activePopovers.forEach((f) => f());
+}
+
+class ToastStack {
+  constructor(root) {
+    this.root = root;
+    this.el = document.createElement("div");
+    this.el.className = "v3d-toast-stack";
+    root.appendChild(this.el);
+  }
+
+  push(title, html) {
+    const card = document.createElement("div");
+    card.className = "v3d-toast";
+    card.innerHTML = `
+            <div class="v3d-toast-header">
+                <div>${title}</div>
+                <button>×</button>
+            </div>
+            <div class="v3d-toast-content"></div>
+        `;
+    card.querySelector(".v3d-toast-content").innerHTML = html;
+    card.querySelector("button").addEventListener("click", () => {
+      card.remove();
     });
+    this.el.appendChild(card);
+    return card;
+  }
+}
+
+// ── Orbit controls (spherical coordinates, fixed up-vector) ──────────────
+
+class OrbitControls {
+  constructor(camera, domElement) {
+    this.camera = camera;
+    this.domElement = domElement;
+
+    this.enabled = true;
+
+    this.rotateSpeed = 0.006;
+    this.zoomSpeed = 1.0;
+    this.panSpeed = 0.5;
+
+    this.target = new THREE.Vector3();
+
+    this.minDistance = 0.001;
+    this.maxDistance = Infinity;
+    this.minPolarAngle = 0;
+    this.maxPolarAngle = Math.PI;
+
+    this.state = "none";
+    this.last = new THREE.Vector2();
+
+    this.spherical = new THREE.Spherical();
+    this.sphericalDelta = new THREE.Spherical();
+    this.panOffset = new THREE.Vector3();
+
+    this.inertia = true;
+    this.velocityTheta = 0;
+    this.velocityPhi = 0;
+    this.velocityPan = new THREE.Vector3();
+
+    this.bind();
+  }
+
+  bind() {
+    this.domElement.addEventListener("pointerdown", this.onPointerDown);
+    window.addEventListener("pointermove", this.onPointerMove);
+    window.addEventListener("pointerup", this.onPointerUp);
+    this.domElement.addEventListener("wheel", this.onWheel, { passive: false });
+  }
+
+  dispose() {
+    this.domElement.removeEventListener("pointerdown", this.onPointerDown);
+    window.removeEventListener("pointermove", this.onPointerMove);
+    window.removeEventListener("pointerup", this.onPointerUp);
+    this.domElement.removeEventListener("wheel", this.onWheel);
+  }
+
+  saveSpherical() {
+    const offset = new THREE.Vector3().copy(this.camera.position).sub(this.target);
+    this.spherical.setFromVector3(offset);
+  }
+
+  applySpherical() {
+    const offset = new THREE.Vector3().setFromSpherical(this.spherical);
+    this.camera.position.copy(this.target).add(offset);
+    this.camera.lookAt(this.target);
+  }
+
+  onPointerDown = (e) => {
+    if (!this.enabled) return;
+    this.last.set(e.clientX, e.clientY);
+
+    if (e.button === 0) {
+      this.state = "rotate";
+    } else if (e.button === 1 || e.button === 2) {
+      this.state = "pan";
+    }
   };
 
-  section.appendChild(title);
-  section.appendChild(slider);
+  onPointerMove = (e) => {
+    if (!this.enabled) return;
+    if (this.state === "none") return;
 
-  ui.sidebar.appendChild(section);
+    const dx = e.clientX - this.last.x;
+    const dy = e.clientY - this.last.y;
+    this.last.set(e.clientX, e.clientY);
+
+    if (this.state === "rotate") {
+      this.rotate(dx, dy);
+    } else if (this.state === "pan") {
+      this.pan(dx, dy);
+    }
+  };
+
+  onPointerUp = () => {
+    this.state = "none";
+  };
+
+  onWheel = (e) => {
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? 1.05 : 0.95;
+    this.zoom(factor);
+  };
+
+  rotate(dx, dy) {
+    const theta = -dx * this.rotateSpeed;
+    const phi = -dy * this.rotateSpeed;
+
+    this.sphericalDelta.theta += theta;
+    this.sphericalDelta.phi += phi;
+
+    this.velocityTheta += theta * 0.3;
+    this.velocityPhi += phi * 0.3;
+  }
+
+  pan(dx, dy) {
+    const offset = new THREE.Vector3().copy(this.camera.position).sub(this.target);
+    const dist = offset.length();
+    const factor = (2 * dist) / this.domElement.clientHeight;
+
+    const right = new THREE.Vector3();
+    right.crossVectors(this.camera.up, offset.normalize()).normalize();
+
+    const pan = new THREE.Vector3()
+      .copy(right).multiplyScalar(-dx * factor * this.panSpeed)
+      .add(new THREE.Vector3().copy(this.camera.up).multiplyScalar(dy * factor * this.panSpeed));
+
+    this.panOffset.add(pan);
+    this.velocityPan.copy(pan);
+  }
+
+  zoom(scale) {
+    const offset = new THREE.Vector3().copy(this.camera.position).sub(this.target);
+    const len = Math.max(this.minDistance, Math.min(this.maxDistance, offset.length() * scale));
+    offset.setLength(len);
+    this.camera.position.copy(this.target).add(offset);
+    this.camera.lookAt(this.target);
+
+    this.saveSpherical();
+  }
+
+  update() {
+    if (!this.enabled) return;
+
+    let needsUpdate = false;
+
+    if (this.state === "none") {
+      if (this.inertia) {
+        if (Math.abs(this.velocityTheta) > 1e-6 || Math.abs(this.velocityPhi) > 1e-6) {
+          this.sphericalDelta.theta += this.velocityTheta;
+          this.sphericalDelta.phi += this.velocityPhi;
+          this.velocityTheta *= 0.9;
+          this.velocityPhi *= 0.9;
+          needsUpdate = true;
+        }
+
+        if (this.velocityPan.lengthSq() > 1e-8) {
+          this.panOffset.add(this.velocityPan);
+          this.velocityPan.multiplyScalar(0.9);
+          needsUpdate = true;
+        }
+      }
+    } else {
+      this.velocityTheta = 0;
+      this.velocityPhi = 0;
+      this.velocityPan.set(0, 0, 0);
+    }
+
+    if (this.sphericalDelta.theta !== 0 || this.sphericalDelta.phi !== 0) {
+      this.saveSpherical();
+
+      this.spherical.theta += this.sphericalDelta.theta;
+      this.spherical.phi = clamp(this.spherical.phi + this.sphericalDelta.phi, this.minPolarAngle, this.maxPolarAngle);
+
+      this.applySpherical();
+      this.sphericalDelta.set(0, 0, 0);
+      needsUpdate = true;
+    }
+
+    if (this.panOffset.lengthSq() > 0) {
+      this.target.add(this.panOffset);
+      this.camera.position.add(this.panOffset);
+      this.panOffset.set(0, 0, 0);
+      needsUpdate = true;
+    }
+
+    if (needsUpdate) {
+      this.camera.lookAt(this.target);
+    }
+  }
 }
 
-function addSection(parent, title, html) {
-  const section = document.createElement("div");
+// ── Safe property transfer between material types ─────────────────────────
 
-  section.style.cssText = `
-        padding:12px;
-        border-bottom:1px solid ${THEME.border};
-    `;
-
-  const h = document.createElement("div");
-
-  h.textContent = title;
-
-  h.style.cssText = `
-        color:${THEME.text};
-        font-size:13px;
-        margin-bottom:8px;
-        font-weight:600;
-    `;
-
-  const body = document.createElement("div");
-
-  body.innerHTML = html;
-
-  body.style.cssText = `
-        color:${THEME.muted};
-        font-size:12px;
-        line-height:1.6;
-        font-family:monospace;
-    `;
-
-  section.appendChild(h);
-  section.appendChild(body);
-
-  parent.appendChild(section);
+function copyMaterialProps(src, dst) {
+  const props = [
+    "alphaMap", "alphaTest", "blendDst", "blendEquation", "blendSrc",
+    "blending", "colorWrite", "depthFunc", "depthTest", "depthWrite",
+    "name", "opacity", "polygonOffset", "polygonOffsetFactor",
+    "polygonOffsetUnits", "premultipliedAlpha", "side", "toneMapped",
+    "transparent", "visible", "wireframe",
+  ];
+  for (const p of props) {
+    if (p in src) dst[p] = src[p];
+  }
+  dst.color.copy(src.color);
+  dst.map = src.map;
+  if (src.userData) dst.userData = { ...src.userData };
+  dst.needsUpdate = true;
 }
 
-function setupPicking(renderer, scene, camera, ui) {
-  const raycaster = new THREE.Raycaster();
+// ── Main viewer class ────────────────────────────────────────────────────
 
-  const mouse = new THREE.Vector2();
+export class Viewer3D {
+  constructor(container, opts = {}) {
+    this.container = container;
+    this.state = loadPrefs();
 
-  renderer.domElement.addEventListener("click", (e) => {
-    const rect = renderer.domElement.getBoundingClientRect();
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(this.state.background);
 
-    mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+    });
+    this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.renderer.setSize(container.clientWidth, container.clientHeight);
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = this.state.toneMapping ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+    this.renderer.toneMappingExposure = this.state.exposure;
 
-    mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    const canvas = this.renderer.domElement;
+    canvas.style.display = "block";
+    container.appendChild(canvas);
 
-    raycaster.setFromCamera(mouse, camera);
+    this.camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.01, 10000);
+    this.camera.position.set(2, 2, 2);
 
-    const hits = raycaster.intersectObjects(scene.children, true);
+    this.controls = new OrbitControls(this.camera, canvas);
+    this.controls.inertia = this.state.inertia;
 
+    this.timer = new THREE.Timer();
+
+    this.mixers = [];
+
+    this.raycaster = new THREE.Raycaster();
+    this.pointer = new THREE.Vector2();
+
+    this.modelRoot = null;
+
+    this.capabilities = {
+      mesh: false,
+      points: false,
+      texture: false,
+      normals: false,
+      vertexColors: false,
+    };
+
+    this.stats = {
+      triangles: 0,
+      vertices: 0,
+      drawCalls: 0,
+      materials: 0,
+      textures: 0,
+    };
+
+    this.measurementMode = false;
+    this.measurePoints = [];
+
+    this.toastStack = new ToastStack(container);
+
+    this.createEnvironment();
+    this.createToolbar();
+    this.injectStyles();
+    this.bind();
+    this.animate();
+  }
+
+  // ── Environment ──────────────────────────────────────────────────────────
+
+  createEnvironment() {
+    this.hemiLight = new THREE.HemisphereLight(0xffffff, 0x222233, 1.4);
+    this.scene.add(this.hemiLight);
+
+    this.dirLight = new THREE.DirectionalLight(0xffffff, 1.1);
+    this.dirLight.position.set(4, 8, 6);
+    this.scene.add(this.dirLight);
+
+    this.grid = new THREE.GridHelper(10, 20, 0x444444, 0x222222);
+    this.axes = new THREE.AxesHelper(1.5);
+    this.grid.visible = this.state.showGrid;
+    this.axes.visible = this.state.showAxes;
+    this.scene.add(this.grid);
+    this.scene.add(this.axes);
+  }
+
+  // ── Toolbar ──────────────────────────────────────────────────────────────
+
+  createToolbar() {
+    this.toolbar = document.createElement("div");
+    this.toolbar.className = "v3d-toolbar";
+    this.container.appendChild(this.toolbar);
+
+    const sections = [
+      this.makeSection("View"),
+      this.makeSection("Render"),
+      this.makeSection("Tools"),
+      this.makeSection("Info"),
+    ];
+    sections.forEach((s) => this.toolbar.appendChild(s));
+
+    this.sections = {
+      view: sections[0],
+      render: sections[1],
+      tools: sections[2],
+      info: sections[3],
+    };
+
+    this.buildButtons();
+  }
+
+  makeSection(label) {
+    const sec = document.createElement("div");
+    sec.className = "v3d-toolbar-section";
+    sec.dataset.label = label;
+    return sec;
+  }
+
+  buildButtons() {
+    const homeBtn = createButton("⌂", "Home", () => this.homeCamera(true));
+
+    const gridBtn = createButton("▦", "Grid", () => {
+      this.state.showGrid = !this.state.showGrid;
+      this.grid.visible = this.state.showGrid;
+      savePrefs(this.state);
+    });
+
+    const axesBtn = createButton("╋", "Axes", () => {
+      this.state.showAxes = !this.state.showAxes;
+      this.axes.visible = this.state.showAxes;
+      savePrefs(this.state);
+    });
+
+    const measureBtn = createButton("📏", "Measure", () => {
+      this.measurementMode = !this.measurementMode;
+      measureBtn.classList.toggle("active", this.measurementMode);
+    });
+
+    const statsBtn = createButton("ℹ", "Stats", () => {});
+    const helpBtn = createButton("?", "Help", () => {});
+
+    this.sections.view.append(homeBtn, gridBtn, axesBtn);
+    this.sections.tools.append(measureBtn);
+    this.sections.info.append(statsBtn, helpBtn);
+
+    // Stats popover
+    const statsContent = document.createElement("div");
+    statsContent.className = "v3d-popover-content";
+    statsContent.innerHTML = `
+            <div class="v3d-stat-row">
+                <span>Triangles</span>
+                <span id="v3d-stat-tris">0</span>
+            </div>
+            <div class="v3d-stat-row">
+                <span>Vertices</span>
+                <span id="v3d-stat-verts">0</span>
+            </div>
+            <div class="v3d-stat-row">
+                <span>Materials</span>
+                <span id="v3d-stat-mats">0</span>
+            </div>
+            <div class="v3d-stat-row">
+                <span>Textures</span>
+                <span id="v3d-stat-tex">0</span>
+            </div>
+        `;
+    this.statsPopover = createPopover(statsBtn, "Scene Statistics", statsContent);
+
+    // Help popover
+    const helpContent = document.createElement("div");
+    helpContent.className = "v3d-popover-content";
+    helpContent.innerHTML = `
+            <div class="v3d-help-item">
+                <b>Rotate</b>
+                <span>Left drag</span>
+            </div>
+            <div class="v3d-help-item">
+                <b>Pan</b>
+                <span>Middle / right drag</span>
+            </div>
+            <div class="v3d-help-item">
+                <b>Zoom</b>
+                <span>Mouse wheel</span>
+            </div>
+            <div class="v3d-help-item">
+                <b>Measure</b>
+                <span>Press <kbd>M</kbd></span>
+            </div>
+            <div class="v3d-help-item">
+                <b>Home</b>
+                <span>Press <kbd>F</kbd></span>
+            </div>
+            <div class="v3d-help-item">
+                <b>Grid</b>
+                <span>Press <kbd>G</kbd></span>
+            </div>
+            <div class="v3d-help-item">
+                <b>Stats</b>
+                <span>Press <kbd>I</kbd></span>
+            </div>
+            <div class="v3d-help-item">
+                <b>Help</b>
+                <span>Press <kbd>?</kbd></span>
+            </div>
+        `;
+    this.helpPopover = createPopover(helpBtn, "Controls", helpContent);
+  }
+
+  // ── Styles ───────────────────────────────────────────────────────────────
+
+  injectStyles() {
+    if (document.getElementById("viewer3d-style")) return;
+
+    const style = document.createElement("style");
+    style.id = "viewer3d-style";
+    style.textContent = `
+            .v3d-toolbar {
+                position: absolute; top: 14px; left: 14px;
+                display: flex; gap: 10px; z-index: 50;
+                flex-wrap: wrap; max-width: calc(100% - 28px);
+                pointer-events: none;
+            }
+            .v3d-toolbar-section {
+                display: flex; gap: 6px; padding: 6px;
+                border-radius: 14px;
+                background: rgba(18,20,26,0.88);
+                backdrop-filter: blur(12px);
+                border: 1px solid rgba(255,255,255,0.08);
+                pointer-events: auto;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.24);
+            }
+            .v3d-btn {
+                border: none; background: transparent;
+                color: #f3f4f7;
+                display: flex; align-items: center; gap: 8px;
+                border-radius: 10px; padding: 9px 12px;
+                cursor: pointer;
+                transition: background 120ms ease, transform 120ms ease,
+                            opacity 120ms ease;
+                font-size: 13px; font-weight: 500;
+            }
+            .v3d-btn:hover { background: rgba(255,255,255,0.09); }
+            .v3d-btn:active { transform: scale(0.98); }
+            .v3d-btn.active { background: rgba(78,132,255,0.22); color: #a8c4ff; }
+            .v3d-btn-icon { font-size: 15px; }
+            .v3d-popover {
+                position: fixed;
+                min-width: 260px; max-width: 340px;
+                border-radius: 16px;
+                background: rgba(16,18,24,0.96);
+                color: #eef2ff;
+                border: 1px solid rgba(255,255,255,0.08);
+                box-shadow: 0 16px 50px rgba(0,0,0,0.4);
+                z-index: 100; overflow: hidden;
+                backdrop-filter: blur(18px);
+            }
+            .v3d-popover.hidden { display: none; }
+            .v3d-popover-header {
+                display: flex; align-items: center;
+                justify-content: space-between;
+                padding: 14px 16px;
+                border-bottom: 1px solid rgba(255,255,255,0.06);
+            }
+            .v3d-popover-title { font-weight: 700; font-size: 14px; }
+            .v3d-close {
+                border: none; background: transparent;
+                color: inherit; cursor: pointer; font-size: 18px;
+            }
+            .v3d-popover-content {
+                padding: 14px 16px;
+                display: flex; flex-direction: column; gap: 12px;
+            }
+            .v3d-stat-row, .v3d-help-item {
+                display: flex; justify-content: space-between;
+                gap: 20px; font-size: 13px;
+            }
+            .v3d-stat-row span:last-child { font-weight: 600; }
+            .v3d-toast-stack {
+                position: absolute; right: 16px; bottom: 16px;
+                display: flex; flex-direction: column; gap: 10px;
+                z-index: 40; pointer-events: none;
+            }
+            .v3d-toast {
+                min-width: 240px; max-width: 360px;
+                border-radius: 14px;
+                background: rgba(18,20,26,0.92);
+                border: 1px solid rgba(255,255,255,0.08);
+                color: #f1f4ff; overflow: hidden;
+                pointer-events: auto;
+                box-shadow: 0 14px 34px rgba(0,0,0,0.35);
+                backdrop-filter: blur(16px);
+            }
+            .v3d-toast-header {
+                display: flex; justify-content: space-between;
+                align-items: center; padding: 10px 12px;
+                border-bottom: 1px solid rgba(255,255,255,0.06);
+                font-size: 13px; font-weight: 600;
+            }
+            .v3d-toast-header button {
+                border: none; background: transparent;
+                color: inherit; cursor: pointer; font-size: 16px;
+            }
+            .v3d-toast-content { padding: 12px; font-size: 13px; line-height: 1.45; }
+            .v3d-measure-line { color: #9cc2ff; }
+            canvas { touch-action: none; }
+
+            @media (max-width: 720px) {
+                .v3d-toolbar { gap: 8px; }
+                .v3d-btn-label { display: none; }
+                .v3d-toolbar-section { padding: 4px; }
+                .v3d-btn { padding: 10px; }
+                .v3d-popover {
+                    width: calc(100vw - 24px);
+                    left: 12px !important; right: 12px;
+                    max-width: none;
+                }
+            }
+        `;
+    document.head.appendChild(style);
+  }
+
+  // ── Event binding ────────────────────────────────────────────────────────
+
+  bind() {
+    this._resizeObs = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      const w = Math.floor(width);
+      const h = Math.floor(height);
+      if (w < 1 || h < 1) return;
+      this.camera.aspect = w / h;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setSize(w, h);
+    });
+    this._resizeObs.observe(this.container);
+
+    this.renderer.domElement.addEventListener("pointerdown", this.onPointerDown);
+    window.addEventListener("keydown", this.onKeyDown);
+  }
+
+  dispose() {
+    if (this._resizeObs) this._resizeObs.disconnect();
+    window.removeEventListener("keydown", this.onKeyDown);
+    this.renderer.domElement.removeEventListener("pointerdown", this.onPointerDown);
+    this.controls.dispose();
+    this.renderer.dispose();
+  }
+
+  onKeyDown = (e) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+    switch (e.key.toLowerCase()) {
+      case "f":
+        this.homeCamera();
+        return;
+      case "g":
+        this.state.showGrid = !this.state.showGrid;
+        this.grid.visible = this.state.showGrid;
+        return;
+      case "m":
+        this.measurementMode = !this.measurementMode;
+        return;
+      case "i":
+        e.preventDefault();
+        this.statsPopover.classList.toggle("hidden");
+        return;
+      case "?":
+        e.preventDefault();
+        this.helpPopover.classList.toggle("hidden");
+        return;
+      case "escape":
+        closeAllPopovers();
+        this.measurePoints = [];
+        return;
+    }
+  };
+
+  onPointerDown = (e) => {
+    if (e.button !== 0) return;
+
+    if (!this.measurementMode) {
+      this.performRaycast(e);
+      return;
+    }
+
+    this.pointer.x = (e.offsetX / this.renderer.domElement.clientWidth) * 2 - 1;
+    this.pointer.y = -(e.offsetY / this.renderer.domElement.clientHeight) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObject(this.modelRoot, true);
+    if (!hits.length) return;
+
+    this.measurePoints.push(hits[0].point.clone());
+
+    if (this.measurePoints.length === 2) {
+      const a = this.measurePoints[0];
+      const b = this.measurePoints[1];
+      const d = distance(a, b);
+      this.toastStack.push(
+        "Measurement",
+        `<div class="v3d-measure-line">Distance: ${d.toFixed(5)}</div>`,
+      );
+      this.measurePoints.length = 0;
+    }
+  };
+
+  performRaycast(e) {
+    if (!this.modelRoot) return;
+
+    this.pointer.x = (e.offsetX / this.renderer.domElement.clientWidth) * 2 - 1;
+    this.pointer.y = -(e.offsetY / this.renderer.domElement.clientHeight) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObject(this.modelRoot, true);
     if (!hits.length) return;
 
     const hit = hits[0];
-
-    ui.status(`${hit.object.type} @ ${hit.point.x.toFixed(2)}, ${hit.point.y.toFixed(2)}, ${hit.point.z.toFixed(2)}`);
-  });
-}
-
-function setupMeasurements(renderer, scene, camera, ui) {
-  const points = [];
-
-  const raycaster = new THREE.Raycaster();
-
-  const mouse = new THREE.Vector2();
-
-  renderer.domElement.addEventListener("dblclick", (e) => {
-    if (!STATE.measurementMode) return;
-
-    const rect = renderer.domElement.getBoundingClientRect();
-
-    mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-
-    mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
-    raycaster.setFromCamera(mouse, camera);
-
-    const hits = raycaster.intersectObjects(scene.children, true);
-
-    if (!hits.length) return;
-
-    points.push(hits[0].point.clone());
-
-    if (points.length < 2) return;
-
-    const a = points[0];
-    const b = points[1];
-
-    const dist = a.distanceTo(b);
-
-    const geo = new THREE.BufferGeometry().setFromPoints([a, b]);
-
-    const line = new THREE.Line(
-      geo,
-      new THREE.LineBasicMaterial({
-        color: 0x58a6ff,
-      }),
+    this.toastStack.push(
+      "Selection",
+      `<div><b>Object</b><br>${hit.object.name || "Unnamed"}</div>
+             <br>
+             <div><b>Position</b><br>
+             ${hit.point.x.toFixed(4)}, ${hit.point.y.toFixed(4)}, ${hit.point.z.toFixed(4)}
+             </div>`,
     );
-
-    scene.add(line);
-
-    ui.status(`Distance: ${dist.toFixed(4)}`);
-
-    points.length = 0;
-  });
-}
-
-function setView(camera, controls, mode) {
-  const d = camera.position.distanceTo(controls.target);
-
-  switch (mode) {
-    case "top":
-      camera.position.set(0, d, 0.001);
-
-      break;
-
-    case "front":
-      camera.position.set(0, 0, d);
-
-      break;
-
-    case "side":
-      camera.position.set(d, 0, 0);
-
-      break;
   }
 
-  camera.lookAt(controls.target);
+  // ── Model ────────────────────────────────────────────────────────────────
+
+  setModel(object) {
+    if (this.modelRoot) {
+      this.scene.remove(this.modelRoot);
+    }
+    this.modelRoot = object;
+    this.scene.add(object);
+    this.detectCapabilities();
+    this.computeStats();
+    this.rebuildRenderSection();
+    this.homeCamera(true);
+  }
+
+  detectCapabilities() {
+    const caps = { mesh: false, points: false, texture: false, normals: false, vertexColors: false };
+    this.modelRoot.traverse((obj) => {
+      if (obj.isMesh) {
+        caps.mesh = true;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach((m) => {
+          if (!m) return;
+          if (m.map) caps.texture = true;
+          if (obj.geometry && obj.geometry.attributes.normal) caps.normals = true;
+          if (obj.geometry && obj.geometry.attributes.color) caps.vertexColors = true;
+        });
+      }
+      if (obj.isPoints) caps.points = true;
+    });
+    this.capabilities = caps;
+  }
+
+  computeStats() {
+    const stats = { triangles: 0, vertices: 0, drawCalls: 0, materials: 0, textures: 0 };
+    const materialSet = new Set();
+    const textureSet = new Set();
+
+    this.modelRoot.traverse((obj) => {
+      if (obj.geometry && obj.geometry.attributes.position) {
+        stats.vertices += obj.geometry.attributes.position.count;
+      }
+      if (obj.isMesh) {
+        stats.drawCalls++;
+        const geom = obj.geometry;
+        if (geom.index) {
+          stats.triangles += geom.index.count / 3;
+        } else if (geom.attributes.position) {
+          stats.triangles += geom.attributes.position.count / 3;
+        }
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach((m) => {
+          if (!m) return;
+          materialSet.add(m);
+          if (m.map) textureSet.add(m.map);
+        });
+      }
+    });
+
+    stats.materials = materialSet.size;
+    stats.textures = textureSet.size;
+    this.stats = stats;
+
+    const update = (id, value) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = value.toLocaleString();
+    };
+    update("v3d-stat-tris", stats.triangles);
+    update("v3d-stat-verts", stats.vertices);
+    update("v3d-stat-mats", stats.materials);
+    update("v3d-stat-tex", stats.textures);
+  }
+
+  // ── Render section (built dynamically after setModel) ────────────────────
+
+  rebuildRenderSection() {
+    this.sections.render.innerHTML = "";
+
+    if (this.capabilities.mesh) {
+      const wireBtn = createButton("◫", "Wireframe", () => {
+        this.state.wireframe = !this.state.wireframe;
+        this.applyRenderMode();
+        savePrefs(this.state);
+        wireBtn.classList.toggle("active", this.state.wireframe);
+      });
+      wireBtn.classList.toggle("active", this.state.wireframe);
+      this.sections.render.appendChild(wireBtn);
+
+      const lightBtn = createButton("☀", "Lighting", () => {
+        this.state.lighting = !this.state.lighting;
+        this.applyRenderMode();
+        savePrefs(this.state);
+        lightBtn.classList.toggle("active", this.state.lighting);
+      });
+      lightBtn.classList.toggle("active", this.state.lighting);
+      this.sections.render.appendChild(lightBtn);
+
+      const backBtn = createButton("◐", "Backfaces", () => {
+        this.state.backfaces = !this.state.backfaces;
+        this.applyRenderMode();
+        savePrefs(this.state);
+        backBtn.classList.toggle("active", this.state.backfaces);
+      });
+      backBtn.classList.toggle("active", this.state.backfaces);
+      this.sections.render.appendChild(backBtn);
+
+      const rayBtn = createButton("◎", "Raytrace", () => {
+        this.state.raytracing = !this.state.raytracing;
+        this.applyRenderMode();
+        savePrefs(this.state);
+        rayBtn.classList.toggle("active", this.state.raytracing);
+      });
+      rayBtn.classList.toggle("active", this.state.raytracing);
+      this.sections.render.appendChild(rayBtn);
+    }
+
+    if (this.capabilities.texture) {
+      const texBtn = createButton("🖼", "Textures", () => {
+        this.toggleTextures();
+      });
+      texBtn.classList.toggle("active", true);
+      this.sections.render.appendChild(texBtn);
+    }
+
+    if (this.capabilities.points) {
+      const pointsBtn = createButton("•", "Point Size", () => {});
+      this.sections.render.appendChild(pointsBtn);
+
+      const content = document.createElement("div");
+      content.className = "v3d-popover-content";
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = 0.1;
+      slider.max = 10;
+      slider.step = 0.1;
+      slider.value = this.state.pointsSize;
+      slider.addEventListener("input", () => {
+        this.state.pointsSize = parseFloat(slider.value);
+        this.applyRenderMode();
+        savePrefs(this.state);
+      });
+      content.appendChild(slider);
+      createPopover(pointsBtn, "Point Size", content);
+    }
+
+    // Lighting offset slider (always visible when there's a model)
+    const lightOffBtn = createButton("↻", "Light Dir", () => {});
+    this.sections.render.appendChild(lightOffBtn);
+
+    const loContent = document.createElement("div");
+    loContent.className = "v3d-popover-content";
+    const loLabel = document.createElement("label");
+    loLabel.style.cssText = "font-size:13px;display:flex;justify-content:space-between";
+    const loSpan = document.createElement("span");
+    loSpan.textContent = `${this.state.lightingOffset}°`;
+    loLabel.innerHTML = "<span>Azimuth offset</span>";
+    loLabel.appendChild(loSpan);
+
+    const loSlider = document.createElement("input");
+    loSlider.type = "range";
+    loSlider.min = -180;
+    loSlider.max = 180;
+    loSlider.step = 1;
+    loSlider.value = this.state.lightingOffset;
+    loSlider.addEventListener("input", () => {
+      this.state.lightingOffset = parseFloat(loSlider.value);
+      loSpan.textContent = `${this.state.lightingOffset}°`;
+      savePrefs(this.state);
+    });
+
+    loContent.appendChild(loLabel);
+    loContent.appendChild(loSlider);
+    createPopover(lightOffBtn, "Light Direction", loContent);
+  }
+
+  // ── Texture toggle ───────────────────────────────────────────────────────
+
+  toggleTextures() {
+    this.modelRoot.traverse((obj) => {
+      if (!obj.material) return;
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach((m) => {
+        if (!m) return;
+        if (!m.userData.originalMap) {
+          m.userData.originalMap = m.map || null;
+        }
+        if (m.map) {
+          m.map = null;
+        } else {
+          m.map = m.userData.originalMap;
+        }
+        m.needsUpdate = true;
+      });
+    });
+  }
+
+  // ── Render mode ──────────────────────────────────────────────────────────
+
+  applyRenderMode() {
+    this.modelRoot.traverse((obj) => {
+      if (obj.isMesh && obj.material) {
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        const updated = [];
+
+        for (const m of mats) {
+          if (!m) { updated.push(m); continue; }
+
+          m.wireframe = this.state.wireframe;
+          m.side = this.state.backfaces ? THREE.DoubleSide : THREE.FrontSide;
+          m.needsUpdate = true;
+
+          const wantLighting = this.state.lighting && !this.state.raytracing;
+          const wantBasic = !wantLighting;
+
+          if (this.state.raytracing && m.type !== "MeshPhysicalMaterial") {
+            const r = new THREE.MeshPhysicalMaterial();
+            copyMaterialProps(m, r);
+            r.roughness = 0.25;
+            r.metalness = 0.6;
+            r.clearcoat = 0.4;
+            r.needsUpdate = true;
+            updated.push(r);
+          } else if (wantLighting && m.type === "MeshBasicMaterial") {
+            const r = new THREE.MeshStandardMaterial();
+            copyMaterialProps(m, r);
+            r.needsUpdate = true;
+            updated.push(r);
+          } else if (wantBasic && m.type !== "MeshBasicMaterial") {
+            const r = new THREE.MeshBasicMaterial();
+            copyMaterialProps(m, r);
+            r.needsUpdate = true;
+            updated.push(r);
+          } else {
+            updated.push(m);
+          }
+        }
+
+        if (Array.isArray(obj.material)) {
+          obj.material = updated;
+        } else {
+          obj.material = updated[0];
+        }
+      }
+
+      if (obj.isPoints && obj.material) {
+        obj.material.size = this.state.pointsSize;
+        obj.material.needsUpdate = true;
+      }
+    });
+  }
+
+  // ── Home / fit ───────────────────────────────────────────────────────────
+
+  homeCamera(forceDir) {
+    if (!this.modelRoot) return;
+
+    const box = new THREE.Box3().setFromObject(this.modelRoot);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+
+    const radius = Math.max(size.x, size.y, size.z) * 0.5;
+    const fov = this.camera.fov * (Math.PI / 180);
+    let dist = radius / Math.tan(fov / 2);
+    dist *= 1.8;
+
+    const dir = new THREE.Vector3();
+    if (forceDir) {
+      dir.set(1, 1, 1).normalize();
+    } else {
+      dir.copy(this.camera.position).sub(this.controls.target);
+      if (dir.lengthSq() < 1e-10) dir.set(0, 0, 1);
+      dir.normalize();
+    }
+
+    this.controls.target.copy(center);
+    this.camera.position.copy(center).add(dir.multiplyScalar(dist));
+    this.camera.near = Math.max(0.001, dist / 1000);
+    this.camera.far = Math.max(1000, dist * 100);
+    this.camera.updateProjectionMatrix();
+    this.camera.lookAt(center);
+    this.controls.saveSpherical();
+  }
+
+  // ── Update lighting (called each frame) ──────────────────────────────────
+
+  updateLighting() {
+    const offset = new THREE.Vector3().copy(this.camera.position).sub(this.controls.target);
+    const radius = offset.length();
+    if (radius < 1e-10) return;
+
+    const theta = Math.atan2(offset.x, offset.z) + this.state.lightingOffset * (Math.PI / 180);
+    offset.x = radius * Math.sin(theta);
+    offset.z = radius * Math.cos(theta);
+
+    this.dirLight.position.copy(this.controls.target).add(offset);
+    this.dirLight.target.position.copy(this.controls.target);
+  }
+
+  // ── Animation loop ───────────────────────────────────────────────────────
+
+  animate = () => {
+    requestAnimationFrame(this.animate);
+    this.timer.update();
+    const dt = this.timer.getDelta();
+
+    this.controls.update(dt);
+    this.updateLighting();
+
+    for (const mixer of this.mixers) {
+      mixer.update(dt);
+    }
+
+    this.renderer.render(this.scene, this.camera);
+  };
 }
 
-function saveScreenshot(renderer) {
-  const a = document.createElement("a");
+// ── Launch helper — called by the Rust backend ────────────────────────────
 
-  a.download = "viewer_screenshot.png";
+export async function launchGlbViewer(b64, filename) {
+  const container = document.createElement("div");
+  container.id = "viewer3d-container";
+  Object.assign(container.style, {
+    position: "fixed",
+    inset: "0",
+    zIndex: "9999",
+    background: "#111318",
+  });
 
-  a.href = renderer.domElement.toDataURL("image/png");
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "\u00d7";
+  Object.assign(closeBtn.style, {
+    position: "fixed",
+    top: "16px",
+    right: "16px",
+    zIndex: "10000",
+    width: "36px",
+    height: "36px",
+    borderRadius: "50%",
+    border: "none",
+    background: "rgba(255,255,255,0.12)",
+    color: "#fff",
+    fontSize: "20px",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  });
 
-  a.click();
+  document.body.append(container, closeBtn);
+
+  const binary = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const blob = new Blob([binary], { type: "model/gltf-binary" });
+  const url = URL.createObjectURL(blob);
+
+  try {
+    const gltf = await new Promise((resolve, reject) => {
+      const loader = new GLTFLoader();
+      loader.load(url, resolve, undefined, reject);
+    });
+
+    const viewer = new Viewer3D(container);
+    viewer.setModel(gltf.scene);
+
+    closeBtn.onclick = () => {
+      viewer.dispose();
+      container.remove();
+      closeBtn.remove();
+    };
+
+    return viewer;
+  } catch (err) {
+    container.remove();
+    closeBtn.remove();
+    URL.revokeObjectURL(url);
+    throw err;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// ── Optional utility helpers ──────────────────────────────────────────────
+
+export function centerAndScaleModel(object, targetSize = 1) {
+  const box = new THREE.Box3().setFromObject(object);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxAxis = Math.max(size.x, size.y, size.z);
+  if (maxAxis <= 0) return;
+  const scale = targetSize / maxAxis;
+  object.position.sub(center);
+  object.scale.setScalar(scale);
+}
+
+export function disposeHierarchy(root) {
+  root.traverse((obj) => {
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach((m) => {
+        if (!m) return;
+        for (const k in m) {
+          const value = m[k];
+          if (value && value.isTexture) value.dispose();
+        }
+        m.dispose();
+      });
+    }
+  });
 }
