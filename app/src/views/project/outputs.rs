@@ -639,7 +639,8 @@ async fn launch_glb_viewer(b64: &str, fname_safe: &str) {
     let js = format!(
         r#"(async () => {{
     try {{
-        const {{ launchGlbViewer }} = await import('{viewer_url}');
+        const absUrl = new URL('{viewer_url}', window.location.origin).href;
+        const {{ launchGlbViewer }} = await import(absUrl);
         await launchGlbViewer('{b64_esc}', '{fname_esc}');
     }} catch (err) {{
         console.error('[3D Viewer] launch error:', err.stack || err);

@@ -1362,9 +1362,21 @@ impl Runtime for PRoot {
 /// Called on every [`PRoot::run`] invocation so that changes to the
 /// host network (VPN, WiFi↔cellular switch, etc.) are picked up.
 async fn write_guest_network_config(rootfs_dir: &std::path::Path) {
-    let etc_dir = rootfs_dir.join("etc");
-    if let Err(e) = tokio::fs::create_dir_all(&etc_dir).await {
-        warn!(path = %etc_dir.display(), error = %e, "write_network_config: cannot create etc dir");
+    let etc_path = rootfs_dir.join("etc");
+
+    // If /etc itself is a symlink (e.g. pointing to the host's read-only
+    // /etc/ on Android), remove it first so we can create a real directory.
+    #[cfg(unix)]
+    {
+        if let Ok(meta) = tokio::fs::symlink_metadata(&etc_path).await {
+            if meta.is_symlink() {
+                let _ = tokio::fs::remove_file(&etc_path).await;
+            }
+        }
+    }
+
+    if let Err(e) = tokio::fs::create_dir_all(&etc_path).await {
+        warn!(path = %etc_path.display(), error = %e, "write_network_config: cannot create etc dir");
         return;
     }
 
@@ -1375,7 +1387,11 @@ async fn write_guest_network_config(rootfs_dir: &std::path::Path) {
         resolv.push_str(&format!("nameserver {}\n", ns));
     }
     resolv.push_str("options edns0 trust-ad\n");
-    if let Err(e) = tokio::fs::write(etc_dir.join("resolv.conf"), &resolv).await {
+    let resolv_path = etc_path.join("resolv.conf");
+    // Remove any existing symlink first – the rootfs skeleton may have
+    // linked this file into read-only jniLibs storage.
+    let _ = tokio::fs::remove_file(&resolv_path).await;
+    if let Err(e) = tokio::fs::write(&resolv_path, &resolv).await {
         warn!(error = %e, "write_network_config: failed to write resolv.conf");
     }
 
@@ -1384,7 +1400,9 @@ async fn write_guest_network_config(rootfs_dir: &std::path::Path) {
 127.0.0.1\tlocalhost
 ::1\tlocalhost ip6-localhost ip6-loopback
 ";
-    if let Err(e) = tokio::fs::write(etc_dir.join("hosts"), hosts).await {
+    let hosts_path = etc_path.join("hosts");
+    let _ = tokio::fs::remove_file(&hosts_path).await;
+    if let Err(e) = tokio::fs::write(&hosts_path, hosts).await {
         warn!(error = %e, "write_network_config: failed to write hosts");
     }
 
@@ -1392,8 +1410,8 @@ async fn write_guest_network_config(rootfs_dir: &std::path::Path) {
     {
         use std::os::unix::fs::PermissionsExt;
         let perm = std::fs::Permissions::from_mode(0o644);
-        let _ = tokio::fs::set_permissions(etc_dir.join("resolv.conf"), perm.clone()).await;
-        let _ = tokio::fs::set_permissions(etc_dir.join("hosts"), perm).await;
+        let _ = tokio::fs::set_permissions(&resolv_path, perm.clone()).await;
+        let _ = tokio::fs::set_permissions(&hosts_path, perm).await;
     }
 }
 
