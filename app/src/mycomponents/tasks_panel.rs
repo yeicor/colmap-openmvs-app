@@ -28,11 +28,9 @@ pub fn TasksPanel() -> Element {
     // Track which task IDs already have a background subscription started from
     // this component so we never start duplicates.
     let mut bg_subscribed: Signal<HashSet<String>> = use_signal(HashSet::new);
-    let mut prev_task_count: Signal<usize> = use_signal(|| 0);
 
-    // Re-run whenever the task list changes.  Start a background drive_task
-    // for every Running task not yet subscribed from here.
-    use_effect(move || {
+    // Subscribe to running tasks on mount only — don't re-run on every tasks_ctx change.
+    use_memo(move || {
         let to_sub: Vec<String> = tasks_ctx
             .read()
             .tasks
@@ -41,18 +39,19 @@ pub fn TasksPanel() -> Element {
             .map(|t| t.id.clone())
             .collect();
 
-        for task_id in to_sub {
-            bg_subscribed.write().insert(task_id.clone());
-            // No component callback – just keep TasksCtx alive.
-            drive_task(task_id, tasks_ctx, |_| {});
+        if !to_sub.is_empty() {
+            for task_id in to_sub {
+                bg_subscribed.write().insert(task_id.clone());
+                drive_task(task_id, tasks_ctx, |_| {});
+            }
         }
     });
 
-    // Auto-scroll drawer to bottom when a new task is added while panel is open
+    // Scroll drawer to top (showing newest) when a new task arrives while open.
+    let mut prev_task_count = use_signal(|| 0usize);
     use_effect(move || {
         let current_count = tasks_ctx.read().tasks.len();
-        if panel_open() && current_count > prev_task_count() {
-            // New task added - scroll to top (which shows bottom in column-reverse)
+        if panel_open() && current_count > *prev_task_count.peek() {
             let _ = dioxus::document::eval(
                 "setTimeout(() => { \
                     const body = document.querySelector('.tasks-drawer-body'); \
