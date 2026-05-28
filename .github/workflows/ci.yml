@@ -15,25 +15,18 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
             build-type: desktop
           - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
             build-type: desktop
           - os: macos-26-intel
-            target: x86_64-apple-darwin
             build-type: desktop
           - os: macos-26
-            target: aarch64-apple-darwin
             build-type: desktop
           - os: windows-2025-vs2026
-            target: x86_64-pc-windows-msvc
             build-type: desktop
           - os: ubuntu-latest
-            target: wasm32-unknown-unknown
             build-type: web
           - os: ubuntu-latest
-            target: aarch64-linux-android
             build-type: android
     steps:
       - uses: actions/checkout@v6
@@ -73,7 +66,7 @@ jobs:
         run: curl -sSL https://dioxus.dev/install.sh | bash
       - shell: bash
         if: runner.build-type != 'android'
-        run: $HOME/.dx/bin/dx build --release --target ${{ matrix.target }} --${{ matrix.build-type }}
+        run: $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }}
       - shell: bash
         if: runner.build-type == 'desktop'
         run: cargo test --workspace --all-targets --all-features
