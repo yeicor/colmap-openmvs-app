@@ -14,10 +14,9 @@ pub fn init() {
 
     #[cfg(target_arch = "wasm32")]
     {
-        use std::str::FromStr;
         use tracing::Level;
         // Default log level: DEBUG in debug builds, INFO otherwise
-        let mut level = if cfg!(debug_assertions) {
+        let level = if cfg!(debug_assertions) {
             Level::DEBUG
         } else {
             Level::INFO

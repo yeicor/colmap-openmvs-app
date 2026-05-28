@@ -62,16 +62,25 @@ jobs:
           echo "PATH=$PATH:$HOME/Android/Sdk/cmake/4.1.2/bin:$HOME/Android/Sdk/ndk/30.0.14904198" >> $GITHUB_ENV
       - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # WiX Toolset is required by `dx bundle --desktop` for MSI creation.
+          # The windows-2025 runner does not ship with it pre-installed.
+          choco install wixtoolset -y --no-progress
       - shell: bash
-        if: runner.build-type != 'android'
-        run: $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --verbose
+        if: runner.build-type == 'desktop'
+        run: $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --features server --verbose
       - shell: bash
         if: runner.build-type == 'desktop'
         run: cargo test --workspace --all-targets --all-features
+      - shell: bash
+        if: runner.build-type == 'web'
+        run: $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --verbose
       - shell: bash
         if: runner.build-type == 'android'
         run: ./build_android.sh # TODO: --release (needs signing)
       - uses: actions/upload-artifact@v7
         with:
           name: build-${{ matrix.build-type }}
-          path: target/dx/${{ github.repository_name }}/bundle
+          path: target/dx/${{ github.event.repository.name }}/bundle
