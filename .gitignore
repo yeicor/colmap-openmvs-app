@@ -3,7 +3,8 @@
 /devstorage/
 
 # npm — populated by `npm install` (run automatically by app/build.rs)
-node_modules/
+/node_modules/
+/.build-rs-hash
 
 # Generated JS assets (produced by app/build.rs, not for committing)
 /app/assets/viewer3d.bundle.*

@@ -57,10 +57,12 @@ fn main() {
     }
 }
 
-// ── npm install ───────────────────────────────────────────────────────────────
+// ── npm ci ────────────────────────────────────────────────────────────────────
 
 fn npm_install_if_needed(workspace_root: &Path, pkg_json_path: &Path) {
-    let marker = workspace_root.join("node_modules").join(".build-rs-hash");
+    // Store the marker OUTSIDE node_modules so npm ci (which deletes
+    // node_modules) doesn't destroy it.
+    let marker = workspace_root.join(".build-rs-hash");
     let pkg_bytes =
         fs::read(pkg_json_path).unwrap_or_else(|e| panic!("Cannot read package.json: {e}"));
     let hash = fnv64(&pkg_bytes);
@@ -71,14 +73,20 @@ fn npm_install_if_needed(workspace_root: &Path, pkg_json_path: &Path) {
         return; // Already up-to-date
     }
 
-    eprintln!("cargo:warning=Running npm install …");
-    let status = Command::new("npm")
-        .args(["install", "--prefer-offline"])
+    eprintln!("cargo:warning=Running npm ci …");
+    let output = Command::new("npm")
+        .args(["ci"])
         .current_dir(workspace_root)
-        .status()
-        .expect("Failed to spawn `npm install` — is Node.js installed?");
-    if !status.success() {
-        panic!("`npm install` exited with {status}");
+        .output()
+        .unwrap_or_else(|e| {
+            panic!("Failed to spawn `npm ci`: {e} — is Node.js installed?")
+        });
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        panic!(
+            "`npm ci` exited with {}\n--- stderr ---\n{stderr}\n--------------",
+            output.status
+        );
     }
     // Write marker AFTER successful install so a failed install retries next time
     let _ = fs::write(&marker, &hash);
