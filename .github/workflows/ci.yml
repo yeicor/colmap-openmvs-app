@@ -73,7 +73,7 @@ jobs:
         run: curl -sSL https://dioxus.dev/install.sh | bash
       - shell: bash
         if: runner.build-type != 'android'
-        run: $HOME/.dx/bin/dx build --release --target ${{ matrix.target }} --${{ runner.build-type }}
+        run: $HOME/.dx/bin/dx build --release --target ${{ matrix.target }} --${{ matrix.build-type }}
       - shell: bash
         if: runner.build-type == 'desktop'
         run: cargo test --workspace --all-targets --all-features
