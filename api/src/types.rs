@@ -62,18 +62,16 @@ impl Settings {
 /// Events emitted during demo image download
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum DemoProgressEvent {
+    /// Fetching file list from GitHub API
+    FetchingFileList,
+    /// Downloading an individual file
     DownloadProgress {
-        downloaded_bytes: u64,
-        total_bytes: u64,
+        filename: String,
+        downloaded: usize,
+        total: usize,
     },
-    ExtractionProgress {
-        last_file: Option<String>,
-        total_files: usize,
-        total_bytes: u64,
-    },
-    Error {
-        message: String,
-    },
+    /// An error occurred
+    Error { message: String },
 }
 
 /// Events emitted during image batch resize

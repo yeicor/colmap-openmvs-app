@@ -895,6 +895,13 @@ impl Runtime for PRoot {
     async fn prepare(&self, image: &str, tx: PrepareProgressTx) -> RuntimeResult<()> {
         use super::image_manager::ImageManager;
 
+        // Helper for cleanup
+        async fn cleanup_dir_if_exists(dir: &std::path::Path) {
+            if dir.exists() {
+                let _ = tokio::fs::remove_dir_all(dir).await;
+            }
+        }
+
         // ----------------------------------------------------------------
         // Fast-path: manifest-based embedded rootfs (skeleton approach).
         // The actual file data lives in the native-lib dir (runtime_dir),
@@ -931,6 +938,18 @@ impl Runtime for PRoot {
         let tag_dir_name = image.replace([':', '/'], "_");
         let image_dir = self.images_dir.join(&tag_dir_name);
         let rootfs_dir = image_dir.join("rootfs");
+
+        // Idempotency: If a previous run was cancelled, clean up any partial data
+        if rootfs_dir.exists() {
+            info!(rootfs = %rootfs_dir.display(), "prepare: cleaning up partial rootfs from previous run");
+            cleanup_dir_if_exists(&rootfs_dir).await;
+        }
+        if image_dir.exists() && !rootfs_dir.exists() {
+            // If image_dir exists but rootfs doesn't, it may be a partial/corrupt state
+            // Remove the image_dir to ensure a clean state
+            info!(image_dir = %image_dir.display(), "prepare: cleaning up partial image_dir from previous run");
+            cleanup_dir_if_exists(&image_dir).await;
+        }
 
         tokio::fs::create_dir_all(&image_dir)
             .await

@@ -632,6 +632,303 @@
 }
 
 /* ============================================================================
+   Demo Dataset Selector Modal
+   ============================================================================ */
+
+.demo-selector-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    animation: fadeIn 0.15s ease-out;
+    padding: 1rem;
+}
+
+.demo-selector-modal {
+    background-color: var(--primary-color);
+    border: 1px solid var(--primary-color-6);
+    border-radius: 0.75rem;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    max-width: 720px;
+    width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    padding: 1.5rem;
+    animation: slideUp 0.2s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.demo-selector-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.demo-selector-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--secondary-color);
+}
+
+.demo-selector-title svg {
+    width: 1.25rem;
+    height: 1.25rem;
+    color: var(--focused-border-color);
+}
+
+.demo-close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    background: transparent;
+    color: var(--secondary-color-4);
+    border: 1px solid var(--primary-color-6);
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 1.25rem;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+}
+
+.demo-close-btn:hover {
+    background-color: var(--primary-color-5);
+    color: var(--secondary-color);
+    border-color: var(--primary-color-7);
+}
+
+.demo-selector-subtitle {
+    margin: 0;
+    font-size: 0.9375rem;
+    color: var(--secondary-color-4);
+    line-height: 1.5;
+}
+/* ── Dataset cards ── */
+
+.demo-cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+}
+
+@media (max-width: 560px) {
+    .demo-cards {
+        grid-template-columns: 1fr;
+    }
+}
+
+.demo-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem 0.875rem;
+    background-color: var(--primary-color-4);
+    border: 1px solid var(--primary-color-6);
+    border-radius: 0.5rem;
+    transition:
+        border-color 0.15s ease,
+        box-shadow 0.15s ease;
+    min-width: 0;
+}
+
+.demo-card:hover {
+    border-color: var(--focused-border-color);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--focused-border-color) 20%, transparent);
+}
+
+.demo-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.demo-card-icon {
+    display: inline-flex;
+    align-items: center;
+    font-size: 2rem;
+    line-height: 1;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.demo-card-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--secondary-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.demo-card-body {
+    display: flex;
+    color: var(--secondary-color-4);
+    line-height: 1.4;
+    min-width: 0;
+    gap: 1rem;
+}
+
+.demo-card-body-text {
+    display: flex;
+    flex-direction: column;
+    color: var(--secondary-color-4);
+    line-height: 1.4;
+    min-width: 0;
+}
+
+.demo-card-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+    margin-top: 0.25rem;
+    font-size: 0.75rem;
+}
+
+.demo-card-author {
+    color: var(--secondary-color-5);
+    font-style: italic;
+}
+
+.demo-card-license {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.0625rem 0.375rem;
+    font-size: 0.75em;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: #f59e0b;
+    background-color: color-mix(in srgb, #f59e0b 15%, transparent);
+    border: 1px solid color-mix(in srgb, #f59e0b 40%, transparent);
+    border-radius: 9999px;
+}
+
+.demo-card-actions {
+    justify-content: center;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.375rem;
+    flex-wrap: wrap;
+    padding-top: 0.375rem;
+    border-top: 1px solid var(--primary-color-6);
+    margin-top: 0.25rem;
+}
+
+.demo-source-link {
+    background: transparent;
+    border-color: color-mix(in srgb, var(--focused-border-color) 40%, transparent);
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    gap: 0.25rem;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+}
+
+.demo-source-link:hover {
+    background-color: color-mix(in srgb, var(--focused-border-color) 12%, transparent);
+    border-color: var(--focused-border-color);
+}
+
+@media (prefers-color-scheme: dark) {
+    .demo-source-link {
+        filter: invert(1) hue-rotate(180deg);
+    }
+    .demo-source-link:hover {
+        color: white;
+        filter: invert(0) hue-rotate(180deg) brightness(1.1);
+    }
+}
+
+.demo-source-link svg {
+    width: 0.75em;
+    height: 0.75em;
+    margin-right: 0.25em;
+}
+
+/* ── Attribution note ── */
+
+.demo-selector-note {
+    margin: 0;
+    padding: 0.75rem 1rem;
+    font-size: 0.8125rem;
+    color: var(--secondary-color-5);
+    line-height: 1.5;
+    background-color: var(--primary-color-5);
+    border: 1px solid var(--primary-color-6);
+    border-radius: 0.375rem;
+}
+
+.demo-selector-note em {
+    font-style: italic;
+    color: var(--secondary-color-4);
+}
+
+@media (max-width: 480px) {
+    .demo-selector-modal {
+        padding: 1rem;
+        gap: 1rem;
+    }
+
+    .demo-selector-title {
+        font-size: 1.0625rem;
+    }
+
+    .demo-card {
+        padding: 0.875rem;
+    }
+
+    .demo-card-icon {
+        font-size: 1.75rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .demo-selector-overlay {
+        animation: none;
+    }
+    .demo-selector-modal {
+        animation: none;
+    }
+    .demo-card {
+        transition: none;
+    }
+}
+
+/* ============================================================================
+   Resize Dialog Content
+   (No extra styles needed; uses AlertDialog primitive + inline styles)
+   ============================================================================ */
+
+/* ============================================================================
    Focus & Accessibility
    ============================================================================ */
 

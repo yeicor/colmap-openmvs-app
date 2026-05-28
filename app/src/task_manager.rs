@@ -210,29 +210,20 @@ pub fn event_to_log_line(event: &TaskEvent) -> Option<String> {
             Some(format!("✗ {}", message))
         }
 
-        TaskEvent::DemoProgress(DemoProgressEvent::DownloadProgress {
-            downloaded_bytes,
-            total_bytes,
-        }) => {
-            let mb = *downloaded_bytes as f64 / 1_048_576.0;
-            Some(format!(
-                "↓ demo {:.1}/{:.1} MB",
-                mb,
-                *total_bytes as f64 / 1_048_576.0
-            ))
+        TaskEvent::DemoProgress(DemoProgressEvent::FetchingFileList) => {
+            Some("↓ fetching file list…".to_string())
         }
-        TaskEvent::DemoProgress(DemoProgressEvent::ExtractionProgress {
-            last_file,
-            total_files,
-            ..
-        }) => Some(format!(
-            "⚙ {} files{}",
-            total_files,
-            last_file
-                .as_deref()
-                .map(|f| format!(": {}", f))
-                .unwrap_or_default()
-        )),
+        TaskEvent::DemoProgress(DemoProgressEvent::DownloadProgress {
+            filename,
+            downloaded,
+            total,
+        }) => {
+            if filename.is_empty() {
+                Some(format!("↓ demo {}/{} files", downloaded, total))
+            } else {
+                Some(format!("↓ demo {}/{}: {}", downloaded + 1, total, filename))
+            }
+        }
         TaskEvent::DemoProgress(DemoProgressEvent::Error { message }) => {
             Some(format!("✗ {}", message))
         }
@@ -304,11 +295,10 @@ pub fn apply_event_to_entry(entry: &mut TaskEntry, event: &TaskEvent, stream_pos
             entry.progress = Some(*progress);
         }
         TaskEvent::DemoProgress(DemoProgressEvent::DownloadProgress {
-            downloaded_bytes,
-            total_bytes,
+            downloaded, total, ..
         }) => {
-            if *total_bytes > 0 {
-                entry.progress = Some(*downloaded_bytes as f32 / *total_bytes as f32);
+            if *total > 0 {
+                entry.progress = Some(*downloaded as f32 / *total as f32);
             }
         }
         TaskEvent::ResizeProgress(ResizeProgressEvent::ResizeProgress {
