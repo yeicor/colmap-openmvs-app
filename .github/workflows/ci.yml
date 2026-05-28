@@ -69,16 +69,16 @@ jobs:
           # The windows-2025 runner does not ship with it pre-installed.
           choco install wixtoolset -y --no-progress
       - shell: bash
-        if: runner.build-type == 'desktop'
+        if: matrix.build-type == 'desktop'
         run: $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --features server --verbose
       - shell: bash
-        if: runner.build-type == 'desktop'
+        if: matrix.build-type == 'desktop'
         run: cargo test --workspace --all-targets --all-features
       - shell: bash
-        if: runner.build-type == 'web'
+        if: matrix.build-type == 'web'
         run: $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --verbose
       - shell: bash
-        if: runner.build-type == 'android'
+        if: matrix.build-type == 'android'
         run: ./build_android.sh # TODO: --release (needs signing)
       - uses: actions/upload-artifact@v7
         with:
