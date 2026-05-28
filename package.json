@@ -7,5 +7,8 @@
   "dependencies": {
     "eruda": "3.4.3",
     "three": "0.184.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0"
   }
 }

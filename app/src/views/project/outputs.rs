@@ -184,7 +184,7 @@ fn build_display_list(files: &[OutputFile]) -> Vec<DisplayEntry> {
     // ── Virtual <models> folder: all viewable files, sorted by path ──────
     let mut viewable: Vec<&OutputFile> = files.iter().filter(|f| f.is_viewable).collect();
     if !viewable.is_empty() {
-        viewable.sort_by_key(|f| &f.relative_path);
+        viewable.sort_by(|a, b| b.modified_at.cmp(&a.modified_at).then_with(|| a.relative_path.cmp(&b.relative_path)));
         let models_size: u64 = viewable.iter().map(|f| f.size).sum();
         result.push(DisplayEntry {
             name: "<models>".to_string(),

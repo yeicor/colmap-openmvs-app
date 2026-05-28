@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 #[cfg(target_os = "android")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(target_os = "android")]
 use tracing::{debug, info, warn};
 
@@ -90,14 +90,23 @@ pub async fn setup_android_runtime() -> anyhow::Result<()> {
     let image_dir = images_dir.join(&tag_dir_name);
     let rootfs_dir = image_dir.join("rootfs");
 
-    // Skip if already set up
+    // Skip if already set up with valid symlinks
     if rootfs_dir.exists() {
-        info!(
+        if verify_rootfs_symlinks(&rootfs_dir, &manifest).await {
+            info!(
+                tag = %manifest.tag,
+                rootfs = %rootfs_dir.display(),
+                "Android startup: rootfs skeleton already exists and symlinks valid, skipping setup"
+            );
+            return Ok(());
+        }
+        warn!(
             tag = %manifest.tag,
             rootfs = %rootfs_dir.display(),
-            "Android startup: rootfs skeleton already exists, skipping setup"
+            "Android startup: rootfs symlinks are broken (likely due to reinstall), rebuilding"
         );
-        return Ok(());
+        tokio::fs::remove_dir_all(&rootfs_dir).await?;
+        tokio::fs::create_dir_all(&rootfs_dir).await?;
     }
 
     info!(
@@ -227,6 +236,34 @@ pub async fn setup_android_runtime() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+/// Check whether the symlinks in an existing rootfs skeleton still point to
+/// valid targets.  On Android the jniLibs directory changes between app
+/// reinstalls, so absolute-path symlinks from a previous install break.
+///
+/// Checks up to 5 file entries from the manifest; if any symlink's target
+/// does not exist the rootfs is considered invalid and must be rebuilt.
+#[cfg(target_os = "android")]
+async fn verify_rootfs_symlinks(rootfs_dir: &Path, manifest: &EmbeddedManifest) -> bool {
+    let check_count = manifest.files.len().min(5);
+    let mut checked = 0usize;
+    for file_info in manifest.files.values() {
+        let dest_path = rootfs_dir.join(file_info.path.trim_start_matches('/'));
+        match tokio::fs::read_link(&dest_path).await {
+            Ok(target) => {
+                if !target.exists() {
+                    return false;
+                }
+            }
+            Err(_) => return false,
+        }
+        checked += 1;
+        if checked >= check_count {
+            break;
+        }
+    }
+    true
 }
 
 /// No-op on non-Android platforms.

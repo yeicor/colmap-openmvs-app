@@ -77,7 +77,7 @@ pub async fn list_project_outputs(project_name: String) -> DioxusResult<Vec<Outp
     walk_for_outputs(&root, &root, &mut outputs)
         .map_err(|e| anyhow::anyhow!("Failed to scan project outputs: {}", e))?;
 
-    outputs.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    outputs.sort_by(|a, b| b.modified_at.cmp(&a.modified_at).then_with(|| a.relative_path.cmp(&b.relative_path)));
     debug!("Found {} output files", outputs.len());
     Ok(outputs)
 }
