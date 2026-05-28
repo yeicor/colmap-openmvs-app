@@ -51,15 +51,6 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             lld
-      - if: runner.build-type == 'android' #SDK + NDK
-        shell: bash
-        run: |
-          wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
-          unzip cmdline-tools.zip -d $HOME/cmdline-tools
-          yes | $HOME/cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$HOME/Android/Sdk "cmdline-tools;latest" "platforms;android-34" "build-tools;34.0.0" "ndk;30.0.14904198" "cmake;4.1.2"
-          echo "ANDROID_HOME=$HOME/Android/Sdk" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/30.0.14904198" >> $GITHUB_ENV
-          echo "PATH=$PATH:$HOME/Android/Sdk/cmake/4.1.2/bin:$HOME/Android/Sdk/ndk/30.0.14904198" >> $GITHUB_ENV
       - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
       - if: runner.os == 'Windows'
