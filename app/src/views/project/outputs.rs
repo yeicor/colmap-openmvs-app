@@ -493,7 +493,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                             title: "Download {actual_name}",
                                                             onclick: move |_| {
                                                                 let url = format!(
-                                                                    "/projects/{}/outputs/file?relative_path={}",
+                                                                    "/api/projects/{}/outputs/file?relative_path={}",
                                                                     pn_dl, url_encode(&rp_dl)
                                                                 );
                                                                 let fname = fname_dl.clone();

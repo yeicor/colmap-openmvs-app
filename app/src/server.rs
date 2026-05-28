@@ -39,49 +39,49 @@ async fn ensure_android_startup() {
     }
 }
 
-#[get("/projects")]
+#[get("/api/projects")]
 pub async fn get_projects() -> Result<Vec<Project>> {
     #[cfg(feature = "server")]
     ensure_android_startup().await;
     backend::get_projects().await
 }
 
-#[post("/projects/:name")]
+#[post("/api/projects/{name}")]
 pub async fn create_project(name: String) -> Result<Project> {
     backend::create_project(name).await
 }
 
-#[delete("/projects/:name")]
+#[delete("/api/projects/{name}")]
 pub async fn delete_project(name: String) -> Result<()> {
     backend::delete_project(name).await
 }
 
-#[patch("/projects/:name")]
+#[patch("/api/projects/{name}")]
 pub async fn rename_project(name: String, new_name: String) -> Result<Project> {
     backend::rename_project(name, new_name).await
 }
 
-#[get("/settings")]
+#[get("/api/settings")]
 pub async fn get_settings() -> Result<Settings> {
     backend::get_settings().await
 }
 
-#[post("/settings")]
+#[post("/api/settings")]
 pub async fn update_settings(new_settings: Settings) -> Result<()> {
     backend::update_settings(new_settings).await
 }
 
-#[get("/projects/:project_name/images")]
+#[get("/api/projects/{project_name}/images")]
 pub async fn get_project_images(project_name: String) -> Result<Vec<String>> {
     backend::get_project_images(project_name).await
 }
 
-#[get("/projects/:project_name/images/:image_name")]
+#[get("/api/projects/{project_name}/images/{image_name}")]
 pub async fn get_project_image(project_name: String, image_name: String) -> Result<FileStream> {
     backend::get_project_image(project_name, image_name).await
 }
 
-#[post("/projects/:project_name/images/:image_name")]
+#[post("/api/projects/{project_name}/images/{image_name}")]
 pub async fn add_project_image(
     project_name: String,
     image_name: String,
@@ -90,22 +90,22 @@ pub async fn add_project_image(
     backend::add_project_image(project_name, image_name, body).await
 }
 
-#[delete("/projects/:project_name/images/:image_name")]
+#[delete("/api/projects/{project_name}/images/{image_name}")]
 pub async fn delete_project_image(project_name: String, image_name: String) -> Result<()> {
     backend::delete_project_image(project_name, image_name).await
 }
 
-#[delete("/projects/:project_name/images")]
+#[delete("/api/projects/{project_name}/images")]
 pub async fn clear_project_images(project_name: String) -> Result<()> {
     backend::clear_project_images(project_name).await
 }
 
-#[post("/projects/:project_name/images/resize/:max_dimension")]
+#[post("/api/projects/{project_name}/images/resize/{max_dimension}")]
 pub async fn batch_resize_images(project_name: String, max_dimension: u32) -> Result<String> {
     backend::batch_resize_images(project_name, max_dimension).await
 }
 
-#[post("/projects/:project_name/images/demo")]
+#[post("/api/projects/{project_name}/images/demo")]
 pub async fn download_demo_images(project_name: String) -> Result<String> {
     backend::download_demo_images(project_name).await
 }
@@ -114,58 +114,58 @@ pub async fn download_demo_images(project_name: String) -> Result<String> {
 // Runtime management
 // ---------------------------------------------------------------------------
 
-#[get("/runtimes/proot/info")]
+#[get("/api/runtimes/proot/info")]
 pub async fn get_runtime_info() -> Result<RuntimeInfo> {
     #[cfg(feature = "server")]
     ensure_android_startup().await;
     backend::get_runtime_info().await
 }
 
-#[get("/runtimes/proot/versions")]
+#[get("/api/runtimes/proot/versions")]
 pub async fn get_available_runtime_versions() -> Result<Vec<String>> {
     backend::get_available_runtime_versions().await
 }
 
-#[post("/runtimes/proot/install")]
+#[post("/api/runtimes/proot/install")]
 pub async fn download_runtime_version(version: String) -> Result<()> {
     backend::download_runtime_version(version).await
 }
 
-#[delete("/runtimes/proot/binary")]
+#[delete("/api/runtimes/proot/binary")]
 pub async fn delete_runtime_binary() -> Result<()> {
     backend::delete_runtime_binary().await
 }
 
-#[get("/runtimes/proot/images")]
+#[get("/api/runtimes/proot/images")]
 pub async fn list_runtime_images() -> Result<Vec<PreparedImageInfo>> {
     #[cfg(feature = "server")]
     ensure_android_startup().await;
     backend::list_runtime_images().await
 }
 
-#[post("/runtimes/proot/images/prepare")]
+#[post("/api/runtimes/proot/images/prepare")]
 pub async fn prepare_runtime_image(image: String) -> Result<String> {
     backend::prepare_runtime_image(image).await
 }
 
-#[delete("/runtimes/proot/images/remove")]
+#[delete("/api/runtimes/proot/images/remove")]
 pub async fn remove_runtime_image(image_tag: String) -> Result<()> {
     backend::remove_runtime_image(image_tag).await
 }
 
-#[get("/runtimes/proot/images/available-tags")]
+#[get("/api/runtimes/proot/images/available-tags")]
 pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
     #[cfg(feature = "server")]
     ensure_android_startup().await;
     backend::list_available_image_tags().await
 }
 
-#[get("/runtimes/proot/images/embedded-tag")]
+#[get("/api/runtimes/proot/images/embedded-tag")]
 pub async fn get_embedded_image_tag() -> Result<Option<String>> {
     backend::get_embedded_image_tag().await
 }
 
-#[post("/repair-android-settings")]
+#[post("/api/repair-android-settings")]
 pub async fn repair_android_settings() -> Result<String> {
     backend::repair_android_settings().await
 }
@@ -174,12 +174,12 @@ pub async fn repair_android_settings() -> Result<String> {
 // Configuration schema
 // ---------------------------------------------------------------------------
 
-#[post("/config")]
+#[post("/api/config")]
 pub async fn get_image_config(image_tag: String) -> Result<ConfigSchema> {
     Ok(backend::get_image_config(image_tag).await?)
 }
 
-#[get("/projects/:project_name/config")]
+#[get("/api/projects/{project_name}/config")]
 pub async fn load_project_config(project_name: String) -> Result<LoadedProjectConfig> {
     // Get the project to retrieve its path
     let project = backend::get_projects()
@@ -191,7 +191,7 @@ pub async fn load_project_config(project_name: String) -> Result<LoadedProjectCo
     Ok(backend::load_project_config(project.path).await?)
 }
 
-#[post("/projects/:project_name/config")]
+#[post("/api/projects/{project_name}/config")]
 pub async fn save_project_config(project_name: String, config: SavedProjectConfig) -> Result<()> {
     // Get the project to retrieve its path
     let project = backend::get_projects()
@@ -207,7 +207,7 @@ pub async fn save_project_config(project_name: String, config: SavedProjectConfi
 // Task management
 // ---------------------------------------------------------------------------
 
-#[get("/tasks?kind_filter&context_key_filter")]
+#[get("/api/tasks?kind_filter&context_key_filter")]
 pub async fn list_tasks(
     kind_filter: Option<String>,
     context_key_filter: Option<String>,
@@ -223,12 +223,12 @@ pub async fn list_tasks(
     backend::list_tasks(kind, context_key_filter).await
 }
 
-#[get("/tasks/:task_id")]
+#[get("/api/tasks/{task_id}")]
 pub async fn get_task_info(task_id: String) -> Result<Option<TaskInfo>> {
     backend::get_task_info(task_id).await
 }
 
-#[get("/tasks/:task_id/poll?cursor")]
+#[get("/api/tasks/{task_id}/poll?cursor")]
 pub async fn poll_task_events(
     task_id: String,
     cursor: usize,
@@ -236,7 +236,7 @@ pub async fn poll_task_events(
     backend::poll_task_events(task_id, cursor).await
 }
 
-#[delete("/tasks/:task_id")]
+#[delete("/api/tasks/{task_id}")]
 pub async fn cancel_task(task_id: String) -> Result<()> {
     backend::cancel_task(task_id).await
 }
@@ -245,12 +245,12 @@ pub async fn cancel_task(task_id: String) -> Result<()> {
 // Pipeline execution
 // ---------------------------------------------------------------------------
 
-#[post("/projects/:project_name/pipeline")]
+#[post("/api/projects/{project_name}/pipeline")]
 pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String> {
     Ok(backend::run_pipeline(project_name, dry_run).await?)
 }
 
-#[get("/projects/:project_name/run-status")]
+#[get("/api/projects/{project_name}/run-status")]
 pub async fn get_project_run_status(project_name: String) -> Result<ProjectRunStatus> {
     backend::get_project_run_status(project_name).await
 }
@@ -259,24 +259,24 @@ pub async fn get_project_run_status(project_name: String) -> Result<ProjectRunSt
 // Docker runtime
 // ---------------------------------------------------------------------------
 
-#[get("/runtimes/docker/info")]
+#[get("/api/runtimes/docker/info")]
 pub async fn get_docker_runtime_info() -> Result<RuntimeInfo> {
     #[cfg(feature = "server")]
     ensure_android_startup().await;
     backend::get_docker_runtime_info().await
 }
 
-#[get("/runtimes/docker/images")]
+#[get("/api/runtimes/docker/images")]
 pub async fn list_docker_images() -> Result<Vec<PreparedImageInfo>> {
     backend::list_docker_images().await
 }
 
-#[post("/runtimes/docker/images/prepare")]
+#[post("/api/runtimes/docker/images/prepare")]
 pub async fn prepare_docker_image(image: String) -> Result<String> {
     backend::prepare_docker_image(image).await
 }
 
-#[delete("/runtimes/docker/images/remove")]
+#[delete("/api/runtimes/docker/images/remove")]
 pub async fn remove_docker_image(image_tag: String) -> Result<()> {
     backend::remove_docker_image(image_tag).await
 }
@@ -285,21 +285,21 @@ pub async fn remove_docker_image(image_tag: String) -> Result<()> {
 // Project outputs
 // ---------------------------------------------------------------------------
 
-#[get("/projects/:project_name/outputs")]
+#[get("/api/projects/{project_name}/outputs")]
 pub async fn list_project_outputs(project_name: String) -> Result<Vec<OutputFile>> {
     backend::list_project_outputs(project_name).await
 }
 
 /// Return the raw bytes of an output file (used for download links).
 /// `relative_path` is a query parameter (e.g. ?relative_path=colmap%2Fdatabase.db).
-#[get("/projects/{project_name}/outputs/file?relative_path")]
+#[get("/api/projects/{project_name}/outputs/file?relative_path")]
 pub async fn get_project_output(project_name: String, relative_path: String) -> Result<FileStream> {
     backend::get_project_output(project_name, relative_path).await
 }
 
 /// Return an output file in a viewer-friendly PLY format.
 /// For PLY files this is a pass-through; for points3D.bin it converts to ASCII PLY.
-#[get("/projects/:project_name/outputs/view?relative_path")]
+#[get("/api/projects/{project_name}/outputs/view?relative_path")]
 pub async fn get_project_output_for_viewer(
     project_name: String,
     relative_path: String,
@@ -308,13 +308,13 @@ pub async fn get_project_output_for_viewer(
 }
 
 /// Delete an output file or directory.
-#[post("/projects/:project_name/outputs/delete")]
+#[post("/api/projects/{project_name}/outputs/delete")]
 pub async fn delete_project_output(project_name: String, relative_path: String) -> Result<()> {
     backend::delete_project_output(project_name, relative_path).await
 }
 
 /// Delete all output files/directories, preserving only `images/` and `config.sh`.
-#[post("/projects/:project_name/outputs/clear")]
+#[post("/api/projects/{project_name}/outputs/clear")]
 pub async fn clear_project_outputs(project_name: String) -> Result<()> {
     backend::clear_project_outputs(project_name).await
 }
@@ -333,7 +333,7 @@ pub async fn clear_project_outputs(project_name: String) -> Result<()> {
 /// On Android the WebView may not propagate `prefers-color-scheme` reliably,
 /// so the server probes the system UI mode.  Currently defaults to
 /// `Some(false)` (light) on Android until JNI detection is wired up.
-#[get("/theme/dark-mode")]
+#[get("/api/theme/dark-mode")]
 pub async fn get_dark_mode() -> Result<Option<bool>> {
     #[cfg(feature = "server")]
     return Ok(backend::get_dark_mode().await?);

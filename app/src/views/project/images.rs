@@ -435,7 +435,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                 if let Some(fullscreen_name) = fullscreen_image() {
                     let safe_fullscreen_name = fullscreen_name.clone();
                     let safe_project_name = project_name.clone();
-                    let full_image_url = format!("{}/projects/{}/images/{}",
+                    let full_image_url = format!("{}/api/projects/{}/images/{}",
                         get_server_url(),
                         safe_project_name,
                         safe_fullscreen_name
@@ -627,7 +627,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                             let safe_project_name = urlencoding::encode(&project_name);
                             let is_selected = selected.contains(&image_name);
                             let image_url = format!(
-                                "{}/projects/{}/images/{}?_drop_cache={}",
+                                "{}/api/projects/{}/images/{}?_drop_cache={}",
                                 get_server_url(),
                                 safe_project_name,
                                 safe_image_name,

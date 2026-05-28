@@ -4,7 +4,7 @@
 //! It imports from the server package for types and function calls.
 
 use dioxus::prelude::*;
-use tracing::{info, Level};
+use tracing::info;
 pub mod components;
 pub mod logging;
 pub mod mycomponents;
