@@ -4,13 +4,14 @@
 //! It imports from the server package for types and function calls.
 
 use dioxus::prelude::*;
-use tracing::info;
+use tracing::{info, Level};
 pub mod components;
+pub mod logging;
 pub mod mycomponents;
 pub mod server;
 pub mod task_manager;
 pub mod views;
-
+use logging::init as init_logging;
 pub use views::{Project, Projects, ProjectsSidebar, SettingsView, StartupTasks};
 
 #[derive(Debug, Clone, Routable, PartialEq)]
@@ -77,14 +78,13 @@ pub fn App() -> Element {
         document::Link { rel: "stylesheet", href: asset!("/assets/dx-components-theme-override.css") }
         document::Link { rel: "stylesheet", href: asset!("/assets/mycomponents.css") }
         document::Link { rel: "stylesheet", href: asset!("/assets/tasks-panel.css") }
+        document::Title { "COLMAP + OpenMVS" }
         Router::<Route> {}
     }
 }
 
 fn main() {
-    if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "info,colmap_openmvs_backend=trace");
-    }
+    init_logging();
     info!("Starting colmap-openmvs-app client");
     dioxus::launch(App);
 }

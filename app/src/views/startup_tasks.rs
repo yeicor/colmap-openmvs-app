@@ -5,7 +5,16 @@ use colmap_openmvs_api::TaskState;
 use dioxus::prelude::*;
 use std::collections::VecDeque;
 
-use crate::server::{repair_android_settings, subscribe_task_events};
+use crate::server::{poll_task_events, repair_android_settings};
+
+const POLL_INTERVAL_MS: u64 = 300;
+
+async fn sleep_poll() {
+    #[cfg(not(target_arch = "wasm32"))]
+    tokio::time::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
+    #[cfg(target_arch = "wasm32")]
+    gloo_timers::future::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
+}
 
 #[derive(Clone)]
 struct LogEntry {
@@ -108,8 +117,7 @@ pub fn StartupTasks() -> Element {
     }
 }
 
-/// Subscribe to a repair task's event stream and update signals as events arrive.
-/// Handles keep-alives by ignoring them.
+/// Poll a task's event stream and update signals as events arrive.
 async fn stream_task_events(
     id: String,
     mut logs: Signal<VecDeque<LogEntry>>,
@@ -122,52 +130,65 @@ async fn stream_task_events(
         })
     });
 
-    match subscribe_task_events(id).await {
-        Ok(mut stream) => {
-            while let Some(Ok(event)) = stream.recv().await {
-                match event {
-                    TaskEvent::Log(msg) if msg.contains("Keep-alive") => {
-                        // ignore heartbeats
+    let mut cursor = 0usize;
+
+    loop {
+        match poll_task_events(id.clone(), cursor).await {
+            Ok(batch) => {
+                if !batch.task_found {
+                    // Task gone — treat as completed.
+                    task_state.set(Some(TaskState::Completed));
+                    is_completed.set(true);
+                    return;
+                }
+
+                cursor = batch.cursor;
+                let is_terminal = batch.is_terminal;
+
+                for event in batch.events {
+                    match event {
+                        TaskEvent::Log(msg) => {
+                            logs.with_mut(|l| l.push_back(LogEntry { message: msg }));
+                        }
+                        TaskEvent::Completed => {
+                            logs.with_mut(|l| {
+                                l.push_back(LogEntry {
+                                    message: "Android settings repair completed successfully."
+                                        .to_string(),
+                                })
+                            });
+                            task_state.set(Some(TaskState::Completed));
+                            is_completed.set(true);
+                            return;
+                        }
+                        TaskEvent::Failed(msg) => {
+                            logs.with_mut(|l| {
+                                l.push_back(LogEntry {
+                                    message: format!("Error: {}", msg),
+                                })
+                            });
+                            task_state.set(Some(TaskState::Failed(msg)));
+                            return;
+                        }
+                        _ => {}
                     }
-                    TaskEvent::Log(msg) => {
-                        logs.with_mut(|l| l.push_back(LogEntry { message: msg }));
-                    }
-                    TaskEvent::Completed => {
-                        logs.with_mut(|l| {
-                            l.push_back(LogEntry {
-                                message: "Android settings repair completed successfully."
-                                    .to_string(),
-                            })
-                        });
-                        task_state.set(Some(TaskState::Completed));
-                        is_completed.set(true);
-                        return;
-                    }
-                    TaskEvent::Failed(msg) => {
-                        logs.with_mut(|l| {
-                            l.push_back(LogEntry {
-                                message: format!("Error: {}", msg),
-                            })
-                        });
-                        task_state.set(Some(TaskState::Failed(msg)));
-                        return;
-                    }
-                    _ => {}
+                }
+
+                if is_terminal {
+                    return;
                 }
             }
-            // Stream ended without terminal event – fall back to completed.
-            task_state.set(Some(TaskState::Completed));
-            is_completed.set(true);
+            Err(e) => {
+                logs.with_mut(|l| {
+                    l.push_back(LogEntry {
+                        message: format!("Failed to poll events: {}", e),
+                    })
+                });
+                task_state.set(Some(TaskState::Failed("Event polling failed".to_string())));
+                return;
+            }
         }
-        Err(e) => {
-            logs.with_mut(|l| {
-                l.push_back(LogEntry {
-                    message: format!("Failed to subscribe to events: {}", e),
-                })
-            });
-            task_state.set(Some(TaskState::Failed(
-                "Event subscription failed".to_string(),
-            )));
-        }
+
+        sleep_poll().await;
     }
 }

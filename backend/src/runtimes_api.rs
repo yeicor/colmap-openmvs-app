@@ -5,9 +5,8 @@ use crate::task_registry::TASK_REGISTRY;
 use crate::AndroidSettingsValidation;
 use colmap_openmvs_api::{
     ImageTagInfo, PrepareProgress, PreparedImageInfo, ProjectRunStatus, RuntimeInfo, TaskEvent,
-    TaskInfo, TaskKind, TaskState,
+    TaskEventBatch, TaskInfo, TaskKind, TaskState,
 };
-use dioxus::fullstack::ServerEvents;
 use dioxus::Result;
 use reqwest::Client;
 use tracing::warn;
@@ -320,31 +319,18 @@ pub async fn cancel_task(task_id: String) -> Result<()> {
     Ok(())
 }
 
-/// Subscribe to a task's event stream (replays history + live).
-/// Returns a ServerEvents stream of TaskEvents.
-///
-/// This includes automatic keep-alive heartbeats to prevent HTTP connection timeouts
-/// on mobile browsers. Heartbeats are sent every 2-3 seconds if no real events occur.
-pub async fn subscribe_task_events(task_id: String) -> Result<ServerEvents<TaskEvent>> {
-    use futures_util::TryStreamExt;
-
-    tracing::debug!(task_id = %task_id, "Subscribing to task events");
-
-    let stream = crate::task_registry::create_event_stream(&task_id).ok_or_else(|| {
-        tracing::warn!(task_id = %task_id, "Task not found when subscribing to events");
-        anyhow::anyhow!("Task not found: {}", task_id)
-    })?;
-
-    let stream = stream.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-        let error_msg = e.to_string();
-        tracing::error!(error = %error_msg, "Event stream error");
-        Box::new(std::io::Error::other(error_msg))
-    });
-
-    let server_events = ServerEvents::from_stream(stream);
-    tracing::debug!(task_id = %task_id, "Task event stream created successfully");
-
-    Ok(server_events)
+/// Poll for new task events since `cursor`. Returns batched events.
+/// This is the universal replacement for the SSE-based subscribe_task_events.
+pub async fn poll_task_events(task_id: String, cursor: usize) -> Result<TaskEventBatch> {
+    match TASK_REGISTRY.poll_events(&task_id, cursor) {
+        Some(batch) => Ok(batch),
+        None => Ok(TaskEventBatch {
+            events: vec![],
+            cursor,
+            is_terminal: false,
+            task_found: false,
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------

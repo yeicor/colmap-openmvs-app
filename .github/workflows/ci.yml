@@ -64,7 +64,7 @@ jobs:
         run: curl -sSL https://dioxus.dev/install.sh | bash
       - shell: bash
         if: runner.build-type != 'android'
-        run: $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }}
+        run: $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --verbose
       - shell: bash
         if: runner.build-type == 'desktop'
         run: cargo test --workspace --all-targets --all-features
@@ -74,4 +74,4 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: build-${{ matrix.build-type }}
-          path: target/dx/${{ github.repository_name }}/*/*
+          path: target/dx/${{ github.repository_name }}/bundle

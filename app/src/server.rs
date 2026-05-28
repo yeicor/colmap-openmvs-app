@@ -1,14 +1,11 @@
 //! Server functions with Dioxus fullstack macros
 //! These wrap the backend implementations and provide the RPC interface for the client
 
-use dioxus::{
-    fullstack::{FileStream, ServerEvents},
-    prelude::*,
-};
+use dioxus::{fullstack::FileStream, prelude::*};
 
 use colmap_openmvs_api::{
     ConfigSchema, ImageTagInfo, LoadedProjectConfig, OutputFile, PreparedImageInfo, Project,
-    ProjectRunStatus, RuntimeInfo, SavedProjectConfig, Settings, TaskEvent, TaskInfo,
+    ProjectRunStatus, RuntimeInfo, SavedProjectConfig, Settings, TaskInfo,
 };
 
 #[cfg(feature = "server")]
@@ -210,7 +207,7 @@ pub async fn save_project_config(project_name: String, config: SavedProjectConfi
 // Task management
 // ---------------------------------------------------------------------------
 
-#[get("/tasks")]
+#[get("/tasks?kind_filter&context_key_filter")]
 pub async fn list_tasks(
     kind_filter: Option<String>,
     context_key_filter: Option<String>,
@@ -231,9 +228,12 @@ pub async fn get_task_info(task_id: String) -> Result<Option<TaskInfo>> {
     backend::get_task_info(task_id).await
 }
 
-#[get("/tasks/:task_id/events")]
-pub async fn subscribe_task_events(task_id: String) -> Result<ServerEvents<TaskEvent>> {
-    backend::subscribe_task_events(task_id).await
+#[get("/tasks/:task_id/poll?cursor")]
+pub async fn poll_task_events(
+    task_id: String,
+    cursor: usize,
+) -> Result<colmap_openmvs_api::TaskEventBatch> {
+    backend::poll_task_events(task_id, cursor).await
 }
 
 #[delete("/tasks/:task_id")]
@@ -299,7 +299,7 @@ pub async fn get_project_output(project_name: String, relative_path: String) -> 
 
 /// Return an output file in a viewer-friendly PLY format.
 /// For PLY files this is a pass-through; for points3D.bin it converts to ASCII PLY.
-#[get("/projects/:project_name/outputs/view")]
+#[get("/projects/:project_name/outputs/view?relative_path")]
 pub async fn get_project_output_for_viewer(
     project_name: String,
     relative_path: String,

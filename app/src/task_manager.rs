@@ -16,7 +16,7 @@
 //!    (always mounted) re-subscribes to any task that lost its component
 //!    subscription, so the panel stays live.
 
-use crate::server::{get_task_info, subscribe_task_events};
+use crate::server::poll_task_events;
 use colmap_openmvs_api::{
     DemoProgressEvent, PrepareProgress, ResizeProgressEvent, TaskEvent, TaskKind, TaskState,
 };
@@ -25,6 +25,17 @@ use dioxus::prelude::*;
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
+
+/// How often the client polls the server for new task events.
+const POLL_INTERVAL_MS: u64 = 300;
+
+/// Cross-platform async sleep.
+async fn sleep_poll() {
+    #[cfg(not(target_arch = "wasm32"))]
+    tokio::time::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
+    #[cfg(target_arch = "wasm32")]
+    gloo_timers::future::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
+}
 
 pub const MAX_LOG_LINES: usize = 500;
 
@@ -331,7 +342,8 @@ pub fn apply_event_to_entry(entry: &mut TaskEntry, event: &TaskEvent, stream_pos
                 entry.current_stage_num = Some(*stage_num);
                 // For cached/skipped stages, progress is 1.0. For running stages, start at 0.0
                 entry.stage_progress = Some(match stage_status {
-                    colmap_openmvs_api::PipelineStageStatus::Cached | colmap_openmvs_api::PipelineStageStatus::Skipped => 1.0,
+                    colmap_openmvs_api::PipelineStageStatus::Cached
+                    | colmap_openmvs_api::PipelineStageStatus::Skipped => 1.0,
                     colmap_openmvs_api::PipelineStageStatus::Run => 0.0,
                 });
             } else {
@@ -369,7 +381,6 @@ pub fn apply_event_to_entry(entry: &mut TaskEntry, event: &TaskEvent, stream_pos
 /// * Updates [`TasksCtx`] with progress, state, and log lines.
 /// * Calls `on_event` for each *new* event so the calling component can update
 ///   its local UI state (banners, progress text, etc.).
-/// * Handles automatic reconnection when the SSE stream drops unexpectedly.
 ///
 /// The subscription is scoped to the spawning component.  [`TasksPanel`] in
 /// `ProjectsSidebar` provides a persistent background subscription that kicks
@@ -387,119 +398,63 @@ pub fn start_task<F: FnMut(TaskEvent) + 'static>(
     drive_task(task_id, tasks, on_event);
 }
 
-/// Subscribe to an already-registered task and drive its event stream.
+/// Subscribe to an already-registered task and drive its event stream via polling.
 ///
-/// Unlike [`start_task`], this does **not** call `register` – use it when
-/// reconnecting to a task that already has an entry in [`TasksCtx`] (e.g.
-/// on component remount or from the background sidebar subscription).
-///
-/// ## Reconnection
-/// When the SSE stream closes without a terminal event the function queries
-/// [`get_task_info`] to determine the actual task state:
-/// - Still `Running` → reconnects immediately (preserving cursor).
-/// - `Completed` / `Failed` → synthesises the terminal event, calls
-///   `on_event`, then exits.
-///
-/// ## Deduplication
-/// `on_event` is only called for events that are *new* relative to the
-/// previous connection, so replayed history never fires the callback twice.
+/// Polls the server every [`POLL_INTERVAL_MS`] ms for new events.
+/// Updates [`TasksCtx`] and calls `on_event` for each new event.
+/// Stops automatically when a terminal event (Completed/Failed) is received
+/// or when the task is no longer found in the registry.
 pub fn drive_task<F: FnMut(TaskEvent) + 'static>(
     task_id: String,
     mut tasks: TasksCtx,
     mut on_event: F,
 ) {
     spawn(async move {
-        // Per-instance cursor: how many events have already triggered on_event.
-        // Preserved across reconnections so replayed history is skipped.
-        let mut on_event_cursor = 0usize;
+        let mut cursor = 0usize;
 
-        'outer: loop {
-            let mut stream_len = 0usize;
+        loop {
+            match poll_task_events(task_id.clone(), cursor).await {
+                Ok(batch) => {
+                    if !batch.task_found {
+                        // Task evicted or never existed — stop silently.
+                        break;
+                    }
 
-            match subscribe_task_events(task_id.clone()).await {
-                Ok(mut stream) => loop {
-                    match stream.recv().await {
-                        Some(Ok(event)) => {
-                            stream_len += 1;
-                            let is_terminal =
-                                matches!(event, TaskEvent::Completed | TaskEvent::Failed(_));
+                    let new_cursor = batch.cursor;
+                    let is_terminal = batch.is_terminal;
+                    let mut local_pos = cursor;
 
-                            // Update global context (log dedup via entry.logs_cursor).
-                            {
-                                let mut state = tasks.write();
-                                if let Some(entry) =
-                                    state.tasks.iter_mut().find(|t| t.id == task_id)
-                                {
-                                    apply_event_to_entry(entry, &event, stream_len);
-                                }
-                            }
+                    for event in batch.events {
+                        local_pos += 1;
 
-                            // Call on_event only for new events.
-                            if stream_len > on_event_cursor {
-                                on_event_cursor = stream_len;
-                                on_event(event);
-                            }
-
-                            if is_terminal {
-                                tasks.write().gc();
-                                break 'outer;
+                        // Update global context (log dedup via entry.logs_cursor).
+                        {
+                            let mut state = tasks.write();
+                            if let Some(entry) = state.tasks.iter_mut().find(|t| t.id == task_id) {
+                                apply_event_to_entry(entry, &event, local_pos);
                             }
                         }
-                        // Stream closed or errored – fall through to reconnect logic.
-                        Some(Err(_)) | None => break,
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!(
-                        task_id = %task_id,
-                        error = %e,
-                        "subscribe_task_events failed; checking task state before retry"
-                    );
-                }
-            }
 
-            // Stream ended without a terminal event.
-            // Ask the server for the authoritative task state.
-            match get_task_info(task_id.clone()).await {
-                Ok(Some(info)) if info.state == TaskState::Running => {
-                    tracing::debug!(
-                        task_id = %task_id,
-                        "task still running after stream drop; reconnecting"
-                    );
-                    continue 'outer;
-                }
-                Ok(Some(info)) => {
-                    // Task has reached a terminal state while we were disconnected.
-                    let terminal = match info.state {
-                        TaskState::Completed => TaskEvent::Completed,
-                        TaskState::Failed(msg) => TaskEvent::Failed(msg),
-                        TaskState::Running => continue 'outer, // shouldn't happen
-                    };
-                    {
-                        let mut state = tasks.write();
-                        if let Some(entry) = state.tasks.iter_mut().find(|t| t.id == task_id) {
-                            // Use logs_cursor + 1 so this synthetic event is treated as new.
-                            let pos = entry.logs_cursor + 1;
-                            apply_event_to_entry(entry, &terminal, pos);
-                        }
+                        on_event(event);
                     }
-                    on_event(terminal);
-                    tasks.write().gc();
-                    break 'outer;
-                }
-                Ok(None) => {
-                    tracing::warn!(task_id = %task_id, "task not found in registry; stopping");
-                    break 'outer;
+
+                    cursor = new_cursor;
+
+                    if is_terminal {
+                        tasks.write().gc();
+                        break;
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
                         task_id = %task_id,
                         error = %e,
-                        "get_task_info failed; stopping subscription"
+                        "poll_task_events failed; will retry"
                     );
-                    break 'outer;
                 }
             }
+
+            sleep_poll().await;
         }
     });
 }

@@ -648,6 +648,7 @@ dependencies = [
  "dioxus",
  "dioxus-free-icons",
  "dioxus-primitives",
+ "gloo-timers",
  "tokio",
  "tracing",
  "tracing-log",

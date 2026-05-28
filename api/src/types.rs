@@ -339,6 +339,19 @@ pub enum TaskEvent {
     Failed(String),
 }
 
+/// Result of polling for task events since a given cursor position.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskEventBatch {
+    /// New events since the given cursor
+    pub events: Vec<TaskEvent>,
+    /// Updated cursor to use in the next poll (equals old cursor + events.len())
+    pub cursor: usize,
+    /// True if a terminal event (Completed or Failed) is in this batch
+    pub is_terminal: bool,
+    /// False if the task ID was not found in the registry (evicted or never existed)
+    pub task_found: bool,
+}
+
 /// Status of a running or recently completed pipeline for a project
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectRunStatus {
