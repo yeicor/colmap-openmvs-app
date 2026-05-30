@@ -53,15 +53,12 @@ jobs:
             lld
       - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
-      - if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # WiX Toolset is required by `dx bundle --desktop` for MSI creation.
-          # The windows-2025 runner does not ship with it pre-installed.
-          choco install wixtoolset -y --no-progress
       - name: Cargo build
         if: matrix.build-type == 'desktop'
         run: cargo build --release --features server,desktop -vv
+        env:
+          CARGO_TERM_VERBOSE: true
+          CARGO_TERM_COLOR: always
       - shell: bash
         if: matrix.build-type == 'desktop'
         run: $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --features server --verbose

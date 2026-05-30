@@ -60,8 +60,6 @@ fn main() {
 // ── npm ci ────────────────────────────────────────────────────────────────────
 
 fn npm_install_if_needed(workspace_root: &Path, pkg_json_path: &Path) {
-    // Store the marker OUTSIDE node_modules so npm ci (which deletes
-    // node_modules) doesn't destroy it.
     let marker = workspace_root.join(".build-rs-hash");
     let pkg_bytes =
         fs::read(pkg_json_path).unwrap_or_else(|e| panic!("Cannot read package.json: {e}"));
@@ -70,17 +68,16 @@ fn npm_install_if_needed(workspace_root: &Path, pkg_json_path: &Path) {
     if fs::read_to_string(&marker).unwrap_or_default().trim() == hash
         && workspace_root.join("node_modules").exists()
     {
-        return; // Already up-to-date
+        return;
     }
 
+    let npm = npm_exe();
     eprintln!("cargo:warning=Running npm ci …");
-    let output = Command::new("npm")
+    let output = Command::new(npm)
         .args(["ci"])
         .current_dir(workspace_root)
         .output()
-        .unwrap_or_else(|e| {
-            panic!("Failed to spawn `npm ci`: {e} — is Node.js installed?")
-        });
+        .unwrap_or_else(|e| panic!("Failed to spawn `{npm} ci`: {e} — is Node.js installed?"));
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         panic!(
@@ -88,7 +85,6 @@ fn npm_install_if_needed(workspace_root: &Path, pkg_json_path: &Path) {
             output.status
         );
     }
-    // Write marker AFTER successful install so a failed install retries next time
     let _ = fs::write(&marker, &hash);
 }
 
@@ -194,6 +190,16 @@ fn find_esbuild(workspace_root: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Return the platform-appropriate npm executable name.
+/// On Windows npm ships as `npm.cmd`; everywhere else it's just `npm`.
+fn npm_exe() -> &'static str {
+    if cfg!(windows) {
+        "npm.cmd"
+    } else {
+        "npm"
+    }
 }
 
 /// Produce a string suitable for esbuild CLI arguments.
