@@ -86,8 +86,7 @@ colmap-openmvs-app/
 │   └── build.rs                  # npm install + esbuild bundling
 ├── devstorage/                   # Runtime data (gitignored)
 ├── .github/workflows/
-│   ├── ci.yml                    # CI matrix (6 OS targets)
-│   └── release.yml               # GitHub Release on v* tags
+│   └── ci.yml                    # Build + test matrix, Docker, GitHub Release
 ├── Dockerfile                    # Multi-stage Docker build
 ├── Dioxus.toml                   # Dioxus configuration
 ├── build_android.sh              # Android APK build script
