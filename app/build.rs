@@ -95,19 +95,27 @@ fn bundle_viewer(workspace_root: &Path, src: &Path, out: &Path) {
         fs::create_dir_all(parent).ok();
     }
 
-    let cmd = format!(
-        "{} {} --outfile={} --bundle --format=esm --minify --external:https://* --external:http://* --log-level=warning",
-        quote_path(&esbuild),
-        normalized_path(src),
-        normalized_path(out),
-    );
-
     eprintln!("cargo:warning=Bundling {} …", src.display());
-    let status = run_shell(&cmd, workspace_root)
-        .unwrap_or_else(|e| panic!("Failed to spawn esbuild: {e}"))
-        .status;
-    if !status.success() {
-        panic!("esbuild bundle failed");
+
+    let output = Command::new(&esbuild)
+        .current_dir(workspace_root)
+        .arg(normalized_path(src))
+        .arg(format!("--outfile={}", normalized_path(out)))
+        .arg("--bundle")
+        .arg("--format=esm")
+        .arg("--minify")
+        .arg("--external:https://*")
+        .arg("--external:http://*")
+        .arg("--log-level=warning")
+        .output()
+        .expect("failed to run esbuild");
+
+    if !output.status.success() {
+        panic!(
+            "esbuild bundle failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
     }
 
     let _ = fs::write(&hash_file, &hash);
