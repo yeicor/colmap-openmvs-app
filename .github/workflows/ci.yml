@@ -82,8 +82,6 @@ jobs:
           path: target/dx
 
   docker:
-    if: github.event_name == 'push'
-    needs: build-and-test
     runs-on: ubuntu-latest
     permissions:
       contents: read

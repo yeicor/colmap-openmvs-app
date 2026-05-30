@@ -1,19 +1,16 @@
-// build.rs — Pre-bundle JS assets before dx copies them.
-//
-// Strategy:
-//   1. Run `npm install` (workspace root) when package.json changes.
-//      Uses a content-hash marker so it is skipped on subsequent builds.
-//   2. Run esbuild to bundle app/js/viewer3d.js → app/assets/viewer3d.bundle.js
-//      when the source changes.  Uses the same hash-file approach.
-//   3. Copy eruda.js from node_modules into app/assets/lib/eruda/ (debug only).
-//
-// cargo:rerun-if-changed is set ONLY on the two source inputs.  Output files
-// are never listed, which prevents the "output changes → cargo reruns build.rs
-// → output changes" loop that plagued the previous implementation.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[cfg(target_family = "windows")]
+const SHELL: &str = "cmd.exe";
+#[cfg(target_family = "windows")]
+const SHELL_ARG: &str = "/C";
+
+#[cfg(not(target_family = "windows"))]
+const SHELL: &str = "bash";
+#[cfg(not(target_family = "windows"))]
+const SHELL_ARG: &str = "-c";
 
 fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -23,15 +20,11 @@ fn main() {
         .expect("Failed to resolve workspace root");
 
     // ── Rebuild triggers ─────────────────────────────────────────────────────
-    // SOURCE inputs: trigger rebuild when they change.
     let pkg_json_path = workspace_root.join("package.json");
     let viewer_src = manifest_dir.join("js").join("viewer3d.js");
     println!("cargo:rerun-if-changed={}", pkg_json_path.display());
     println!("cargo:rerun-if-changed={}", viewer_src.display());
 
-    // OUTPUT files: if they are MISSING cargo will unconditionally re-run
-    // build.rs so they get regenerated.  Once they exist and are unchanged,
-    // cargo skips this script — no loop.
     let bundle_out = manifest_dir.join("assets").join("viewer3d.bundle.js");
     println!("cargo:rerun-if-changed={}", bundle_out.display());
 
@@ -71,13 +64,9 @@ fn npm_install_if_needed(workspace_root: &Path, pkg_json_path: &Path) {
         return;
     }
 
-    let npm = npm_exe();
     eprintln!("cargo:warning=Running npm ci …");
-    let output = Command::new(npm)
-        .args(["ci"])
-        .current_dir(workspace_root)
-        .output()
-        .unwrap_or_else(|e| panic!("Failed to spawn `{npm} ci`: {e} — is Node.js installed?"));
+    let output = run_shell("npm ci", workspace_root)
+        .unwrap_or_else(|e| panic!("Failed to spawn `npm ci`: {e} — is Node.js installed?"));
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         panic!(
@@ -96,7 +85,7 @@ fn bundle_viewer(workspace_root: &Path, src: &Path, out: &Path) {
 
     let hash_file = out.with_extension("hash");
     if fs::read_to_string(&hash_file).unwrap_or_default().trim() == hash && out.exists() {
-        return; // Bundle is current
+        return;
     }
 
     let esbuild = find_esbuild(workspace_root)
@@ -106,22 +95,17 @@ fn bundle_viewer(workspace_root: &Path, src: &Path, out: &Path) {
         fs::create_dir_all(parent).ok();
     }
 
+    let cmd = format!(
+        "{} {} --outfile={} --bundle --format=esm --minify --external:https://* --external:http://* --log-level=warning",
+        quote_path(&esbuild),
+        normalized_path(src),
+        normalized_path(out),
+    );
+
     eprintln!("cargo:warning=Bundling {} …", src.display());
-    let status = Command::new(&esbuild)
-        .args([
-            &normalized_path(src),
-            &format!("--outfile={}", normalized_path(out)),
-            "--bundle",
-            "--format=esm",
-            "--minify",
-            "--external:https://*",
-            "--external:http://*",
-            "--log-level=warning",
-        ])
-        // Run from workspace root so esbuild walks up to node_modules/ there
-        .current_dir(workspace_root)
-        .status()
-        .expect("Failed to spawn esbuild");
+    let status = run_shell(&cmd, workspace_root)
+        .unwrap_or_else(|e| panic!("Failed to spawn esbuild: {e}"))
+        .status;
     if !status.success() {
         panic!("esbuild bundle failed");
     }
@@ -159,6 +143,13 @@ fn copy_eruda(workspace_root: &Path, manifest_dir: &Path) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+fn run_shell(cmd: &str, dir: &Path) -> std::io::Result<std::process::Output> {
+    Command::new(SHELL)
+        .args([SHELL_ARG, cmd])
+        .current_dir(dir)
+        .output()
+}
+
 /// FNV-1a 64-bit hash — no external deps, returns a hex string.
 fn fnv64(data: &[u8]) -> String {
     let mut h: u64 = 14695981039346656037;
@@ -169,46 +160,42 @@ fn fnv64(data: &[u8]) -> String {
     format!("{h:016x}")
 }
 
-/// Find esbuild from the project's own `node_modules` (devDependency).
-/// npm places the binary at `node_modules/.bin/esbuild` (or `.cmd` on Windows).
+/// Find esbuild binary or shim in node_modules/.bin
 fn find_esbuild(workspace_root: &Path) -> Option<PathBuf> {
     let bin_dir = workspace_root.join("node_modules").join(".bin");
-    for name in &["esbuild", "esbuild.cmd", "esbuild.exe"] {
+    // Try platform-native names first (important on Windows where the bare
+    // "esbuild" is a POSIX script, not a .cmd batch file).
+    let names: &[&str] = if cfg!(windows) {
+        &["esbuild.cmd", "esbuild.exe", "esbuild"]
+    } else {
+        &["esbuild"]
+    };
+    for name in names {
         let candidate = bin_dir.join(name);
         if candidate.is_file() {
             return Some(candidate);
         }
     }
-    // Fallback: the actual binary inside the esbuild package itself
-    let esbuild_pkg = workspace_root.join("node_modules").join("esbuild");
-    if esbuild_pkg.join("bin").is_dir() {
-        for name in &["esbuild", "esbuild.cmd", "esbuild.exe"] {
-            let candidate = esbuild_pkg.join("bin").join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
     None
 }
 
-/// Return the platform-appropriate npm executable name.
-/// On Windows npm ships as `npm.cmd`; everywhere else it's just `npm`.
-fn npm_exe() -> &'static str {
-    if cfg!(windows) {
-        "npm.cmd"
-    } else {
-        "npm"
-    }
-}
-
 /// Produce a string suitable for esbuild CLI arguments.
-/// On Windows, backslashes are converted to forward slashes to avoid escaping
-/// issues in argument parsing.  Non-UTF-8 paths are lossily replaced.
+/// On Windows, backslashes are converted to forward slashes to avoid
+/// escaping issues in argument parsing.
 fn normalized_path(path: &Path) -> String {
     let s = path.to_string_lossy();
     if cfg!(windows) {
         s.replace('\\', "/")
+    } else {
+        s.into_owned()
+    }
+}
+
+/// Wrap a path in double quotes so the shell command string handles spaces.
+fn quote_path(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    if s.contains(' ') {
+        format!("\"{}\"", s)
     } else {
         s.into_owned()
     }
