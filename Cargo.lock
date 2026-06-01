@@ -5093,7 +5093,7 @@ dependencies = [
 [[package]]
 name = "rfd"
 version = "0.17.2"
-source = "git+https://github.com/yeicor/rfd.git?branch=feature%2Fweb-dialogs#93d83bb8d5e8c2d88100eb43b5cc8b0f24131e4e"
+source = "git+https://github.com/yeicor/rfd.git?branch=feature%2Fweb-dialogs#e34fa238bb5cf7e39fa40a991c9c377a0af2bec5"
 dependencies = [
  "axum",
  "block2",
