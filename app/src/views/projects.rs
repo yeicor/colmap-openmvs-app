@@ -1,6 +1,6 @@
 use crate::mycomponents::{Banner, BannerType, PageHeaderButton, TasksPanel};
 use crate::server::{create_project, delete_project, get_projects, rename_project};
-use crate::Route;
+use crate::{backend_url, Route};
 use crate::{
     components::{
         alert_dialog::{
@@ -211,6 +211,13 @@ pub fn Projects(
                 message: info_message(),
                 banner_type: BannerType::Info,
                 on_close: move |_| info_message.set(String::new()),
+            }
+            if !backend_url::BACKEND_URL.get().map(|s| s.as_str()).unwrap_or("").is_empty() {
+                Banner {
+                    message: format!("Using backend: {}", backend_url::BACKEND_URL.get().unwrap()),
+                    banner_type: BannerType::Info,
+                    on_close: move |_| {},
+                }
             }
 
             if loading() {

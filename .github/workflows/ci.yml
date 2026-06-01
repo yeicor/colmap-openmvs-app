@@ -75,11 +75,67 @@ jobs:
         run: $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --verbose
       - shell: bash
         if: matrix.build-type == 'android'
-        run: ./build_android.sh # TODO: --release (needs signing)
+        run: ./build_android.sh --release
+      - name: Sign Android APK
+        if: matrix.build-type == 'android' && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > keystore.jks
+          APK_PATH=$(ls target/dx/colmap-openmvs-app/bundle/android/*.apk | head -1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
+          "$APKSIGNER" sign \
+            --ks keystore.jks \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --ks-pass "pass:$ANDROID_KEYSTORE_PASSWORD" \
+            --key-pass "pass:$ANDROID_KEY_PASSWORD" \
+            "$APK_PATH"
+          rm -f keystore.jks
       - uses: actions/upload-artifact@v7
         with:
           name: build-${{ matrix.os }}-${{ matrix.build-type }}
           path: target/dx
+
+  deploy-pages:
+    if: github.event_name != 'pull_request'
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-ubuntu-latest-web
+          path: web-artifact
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web-artifact/colmap-openmvs-app/bundle/web/public
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  android-deploy:
+    if: github.event_name != 'pull_request'
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-ubuntu-latest-android
+          path: android-artifact
+      - uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.github.yeicor.colmap_openmvs_app
+          releaseFiles: android-artifact/colmap-openmvs-app/bundle/android/*.apk
+          track: ${{ startsWith(github.ref, 'refs/tags/v') && 'production' || 'internal' }}
 
   docker:
     runs-on: ubuntu-latest

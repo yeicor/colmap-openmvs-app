@@ -198,13 +198,3 @@ fn normalized_path(path: &Path) -> String {
         s.into_owned()
     }
 }
-
-/// Wrap a path in double quotes so the shell command string handles spaces.
-fn quote_path(path: &Path) -> String {
-    let s = path.to_string_lossy();
-    if s.contains(' ') {
-        format!("\"{}\"", s)
-    } else {
-        s.into_owned()
-    }
-}

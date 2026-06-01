@@ -8,11 +8,11 @@ use crate::server::{
     delete_runtime_binary, download_runtime_version, get_available_runtime_versions,
     get_docker_runtime_info, get_runtime_info, get_settings, get_task_info,
     list_available_image_tags, list_docker_images, list_runtime_images, list_tasks,
-    prepare_docker_image, prepare_runtime_image, remove_docker_image, remove_runtime_image,
-    update_settings,
+    pick_projects_folder, pick_settings_file, prepare_docker_image, prepare_runtime_image,
+    remove_docker_image, remove_runtime_image, update_settings,
 };
 use crate::task_manager::{drive_task, start_task, TasksCtx};
-use crate::Route;
+use crate::{backend_url, Route};
 use chrono::{DateTime, Duration, Utc};
 use colmap_openmvs_api::{
     ImageTagInfo, PreparedImageInfo, RuntimeInfo, TaskEvent, TaskKind, TaskState,
@@ -150,6 +150,15 @@ fn GeneralTab() -> Element {
     let mut success = use_signal(String::new);
     let mut has_changed = use_signal(|| false);
 
+    // Backend URL — configurable on all platforms.
+    let current_backend_url = backend_url::BACKEND_URL.get().cloned().unwrap_or_default();
+    let current_backend_url_for_memo = current_backend_url.clone();
+    let current_backend_url_for_cancel = current_backend_url.clone();
+    let mut pending_backend_url = use_signal(|| current_backend_url.clone());
+    let backend_url_changed =
+        use_memo(move || pending_backend_url() != current_backend_url_for_memo.clone());
+    let mut confirm_backend_reload = use_signal(|| false);
+
     use_effect(move || {
         spawn(async move {
             loading.set(true);
@@ -224,15 +233,24 @@ fn GeneralTab() -> Element {
                             class: "folder-input",
                             oninput: move |e| { projects_folder.set(e.value()); has_changed.set(true); error.set(String::new()); success.set(String::new()); },
                         }
-                        input { r#type: "file", directory: true, style: "display:none;", id: "genpf-input",
-                            onchange: move |e| {
-                                if let Some(f) = e.files().into_iter().next() {
-                                    projects_folder.set(f.path().to_str().unwrap_or("").to_string());
-                                    has_changed.set(true);
-                                }
-                            }
+                        Button {
+                            variant: ButtonVariant::Secondary,
+                            title: "Browse for folder (server-side dialog)",
+                            onclick: move |_| {
+                                spawn(async move {
+                                    match pick_projects_folder().await {
+                                        Ok(path) if !path.is_empty() => {
+                                            projects_folder.set(path);
+                                            has_changed.set(true);
+                                            error.set(String::new());
+                                        }
+                                        Ok(_) => {} // user cancelled
+                                        Err(e) => error.set(format!("Folder picker: {}", e)),
+                                    }
+                                });
+                            },
+                            Icon { icon: BsFolder }
                         }
-                        Button { variant: ButtonVariant::Secondary, onclick: move |_| { eval("document.querySelector('#genpf-input').click()"); }, Icon { icon: BsFolder } }
                     }
                 }
 
@@ -246,15 +264,24 @@ fn GeneralTab() -> Element {
                             class: "folder-input",
                             oninput: move |e| { settings_file_path.set(e.value()); has_changed.set(true); error.set(String::new()); success.set(String::new()); },
                         }
-                        input { r#type: "file", style: "display:none;", id: "gensf-input",
-                            onchange: move |e| {
-                                if let Some(f) = e.files().into_iter().next() {
-                                    settings_file_path.set(f.path().to_str().unwrap_or("").to_string());
-                                    has_changed.set(true);
-                                }
-                            }
+                        Button {
+                            variant: ButtonVariant::Secondary,
+                            title: "Browse for settings file (server-side dialog)",
+                            onclick: move |_| {
+                                spawn(async move {
+                                    match pick_settings_file().await {
+                                        Ok(path) if !path.is_empty() => {
+                                            settings_file_path.set(path);
+                                            has_changed.set(true);
+                                            error.set(String::new());
+                                        }
+                                        Ok(_) => {} // user cancelled
+                                        Err(e) => error.set(format!("File picker: {}", e)),
+                                    }
+                                });
+                            },
+                            Icon { icon: BsFolder }
                         }
-                        Button { variant: ButtonVariant::Secondary, onclick: move |_| { eval("document.querySelector('#gensf-input').click()"); }, Icon { icon: BsFolder } }
                     }
                 }
 
@@ -262,6 +289,79 @@ fn GeneralTab() -> Element {
                     div { class: "form-actions",
                         Button { variant: ButtonVariant::Primary, onclick: handle_save, "Save" }
                         Button { variant: ButtonVariant::Secondary, onclick: handle_cancel, "Cancel" }
+                    }
+                }
+
+                // Backend URL — only meaningful on web/WASM deployments where the
+                // API server lives at a different origin from the static UI.
+                if backend_url::backend_url_configurable() {
+                    hr { class: "settings-divider" }
+                    div { class: "form-group",
+                        label {
+                            title: "Base URL of the API backend (e.g. https://api.example.com). \
+                                    Leave empty to use the same origin as this page. \
+                                    Can also be set via ?backend= URL parameter.",
+                            "Backend API URL"
+                        }
+                        div { class: "folder-row",
+                            input {
+                                r#type: "url",
+                                value: "{pending_backend_url}",
+                                placeholder: "https://your-backend.example.com",
+                                class: "folder-input",
+                                oninput: move |e| {
+                                    pending_backend_url.set(e.value());
+                                    confirm_backend_reload.set(false);
+                                },
+                            }
+                            if !pending_backend_url().is_empty() {
+                                Button {
+                                    variant: ButtonVariant::Secondary,
+                                    title: "Clear and use same-origin",
+                                    onclick: move |_| pending_backend_url.set(String::new()),
+                                    "×"
+                                }
+                            }
+                        }
+                        if backend_url_changed() {
+                            if confirm_backend_reload() {
+                                div { class: "form-actions",
+                                    p { class: "settings-warning",
+                                            "⚠️ {backend_url::needs_restart_message()} Unsaved work will be lost."
+                                        }
+                                    Button {
+                                                        variant: ButtonVariant::Primary,
+                                                        onclick: move |_| {
+                                                            let url = pending_backend_url();
+                                                            backend_url::save_backend_url(&url);
+                                                            backend_url::reload_or_exit();
+                                                        },
+                                                        "Confirm & Restart"
+                                                    }
+                                    Button {
+                                        variant: ButtonVariant::Secondary,
+                                        onclick: move |_| confirm_backend_reload.set(false),
+                                        "Cancel"
+                                    }
+                                }
+                            } else {
+                                div { class: "form-actions",
+                                    Button {
+                                                        variant: ButtonVariant::Primary,
+                                                        onclick: move |_| confirm_backend_reload.set(true),
+                                                        "Save & Restart"
+                                                    }
+                                    Button {
+                                        variant: ButtonVariant::Secondary,
+                                        onclick: move |_| {
+                                            pending_backend_url.set(current_backend_url_for_cancel.clone());
+                                            confirm_backend_reload.set(false);
+                                        },
+                                        "Cancel"
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -611,15 +711,24 @@ fn ProotPanel(on_default_changed: EventHandler<()>) -> Element {
                                 placeholder: "./proot-images",
                                 oninput: move |e| { proot_images_dir.set(e.value()); dir_changed.set(true); error.set(String::new()); success.set(String::new()); },
                             }
-                            input { r#type: "file", directory: true, style: "display:none;", id: "proot-dir-input",
-                                onchange: move |e| {
-                                    if let Some(f) = e.files().into_iter().next() {
-                                        proot_images_dir.set(f.path().to_str().unwrap_or("").to_string());
-                                        dir_changed.set(true);
-                                    }
-                                }
+                            Button {
+                                variant: ButtonVariant::Secondary,
+                                title: "Browse for folder (server-side dialog)",
+                                onclick: move |_| {
+                                    spawn(async move {
+                                        match crate::server::pick_projects_folder().await {
+                                            Ok(path) if !path.is_empty() => {
+                                                proot_images_dir.set(path);
+                                                dir_changed.set(true);
+                                                error.set(String::new());
+                                            }
+                                            Ok(_) => {}
+                                            Err(e) => error.set(format!("Folder picker: {}", e)),
+                                        }
+                                    });
+                                },
+                                Icon { icon: BsFolder }
                             }
-                            Button { variant: ButtonVariant::Secondary, onclick: move |_| { eval("document.querySelector('#proot-dir-input').click()"); }, Icon { icon: BsFolder } }
                         }
                         if dir_changed() {
                             div { class: "form-actions",

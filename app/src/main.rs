@@ -5,12 +5,14 @@
 
 use dioxus::prelude::*;
 use tracing::info;
+pub mod backend_url;
 pub mod components;
 pub mod logging;
 pub mod mycomponents;
 pub mod server;
 pub mod task_manager;
 pub mod views;
+
 use logging::init as init_logging;
 pub use views::{Project, Projects, ProjectsSidebar, SettingsView, StartupTasks};
 
@@ -85,6 +87,17 @@ pub fn App() -> Element {
 
 fn main() {
     init_logging();
+
+    // Resolve the backend URL from URL params / localStorage before launching.
+    // On web (WASM) this also calls `dioxus::fullstack::set_server_url` so that
+    // all generated server-function HTTP requests go to the configured origin.
+    let backend_url_str = backend_url::read_initial_backend_url();
+    backend_url::BACKEND_URL.set(backend_url_str.clone()).ok();
+    if !backend_url_str.is_empty() {
+        let leaked: &'static str = Box::leak(backend_url_str.clone().into_boxed_str());
+        dioxus::fullstack::set_server_url(leaked);
+    }
+
     info!("Starting colmap-openmvs-app client");
     dioxus::launch(App);
 }

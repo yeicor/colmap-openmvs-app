@@ -1,0 +1,17 @@
+[package]
+name = "rrfd"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror = "2.0"
+tokio = { version = "1.35", features = ["sync", "fs"] }
+tracing = { version = "0.1" }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rfd = "0.15"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", default-features = false }
+ndk-context = { version = "0.1" }

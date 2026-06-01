@@ -4,24 +4,64 @@ use crate::components::alert_dialog::{
 };
 use crate::mycomponents::{Banner, BannerType};
 use crate::task_manager::{drive_task, start_task, TasksCtx};
+use base64::Engine as _;
 use colmap_openmvs_api::TaskEvent;
 use colmap_openmvs_api::TaskKind;
 use colmap_openmvs_api::TaskState;
 use dioxus::document::eval;
-use dioxus::fullstack::get_server_url;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
     BsArrowsFullscreen, BsBoxArrowUpRight, BsCheckAll, BsCloudDownload, BsImage, BsStar,
     BsTextareaResize, BsTrash3, BsUpload, BsXCircle,
 };
 use dioxus_free_icons::Icon;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::LazyLock;
+use std::collections::HashMap;
 use tracing::{debug, error, info};
 
-static CACHE_BUSTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
-fn generate_cache_busting_num() -> u64 {
-    CACHE_BUSTER.fetch_add(1, Ordering::Relaxed)
+// ---------------------------------------------------------------------------
+// Blob-URL helpers
+// ---------------------------------------------------------------------------
+
+/// Convert raw image bytes into a URL the browser can load in `<img src>`.
+///
+/// * On **WASM** (web) targets: creates a native `Blob` URL via
+///   `URL.createObjectURL`.  These are reference-counted by the browser and
+///   must be released with `revoke_display_url` when no longer needed.
+/// * On **native** (desktop / Android) targets: produces a `data:` URL which
+///   the embedded WebView understands directly.  No explicit revocation is
+///   needed — just drop the `String`.
+fn bytes_to_display_url(bytes: &[u8]) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use js_sys::{Array, Uint8Array};
+        use web_sys::{Blob, BlobPropertyBag, Url};
+
+        // Copy bytes into a JS Uint8Array, wrap in a Blob, then get an object URL.
+        let typed = Uint8Array::new_with_length(bytes.len() as u32);
+        typed.copy_from(bytes);
+        let array = Array::of1(&typed);
+        let mut opts = BlobPropertyBag::new();
+        opts.type_("image/*");
+        if let Ok(blob) = Blob::new_with_u8_array_sequence_and_options(&array, &opts) {
+            if let Ok(url) = Url::create_object_url_with_blob(&blob) {
+                return url;
+            }
+        }
+        // Fall through to data URL on any failure.
+    }
+    // Fallback / non-WASM: encode as a data URL; works in every WebView.
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    format!("data:image/*;base64,{}", b64)
+}
+
+/// Release a blob URL created by `bytes_to_display_url`.  Safe to call with
+/// data URLs (they start with `"data:"`, not `"blob:"`) — no-op in that case.
+fn revoke_display_url(url: &str) {
+    if !url.starts_with("blob:") {
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = web_sys::Url::revoke_object_url(url);
 }
 
 // ---------------------------------------------------------------------------
@@ -32,6 +72,7 @@ fn generate_cache_busting_num() -> u64 {
 fn build_demo_cb(
     project_name: String,
     mut image_paths: Signal<Vec<String>>,
+    mut list_version: Signal<u64>,
     mut info_message: Signal<Option<String>>,
     mut error_message: Signal<Option<String>>,
     mut demo_loading: Signal<bool>,
@@ -67,6 +108,7 @@ fn build_demo_cb(
                     Ok(paths) => {
                         let n = paths.len();
                         image_paths.set(paths);
+                        list_version += 1;
                         info_message.set(Some(format!(
                             "Demo ready ({} images). You may want to optimize them using the 'Optimize Images' button.",
                             n
@@ -88,6 +130,7 @@ fn build_demo_cb(
 fn build_resize_cb(
     project_name: String,
     mut image_paths: Signal<Vec<String>>,
+    mut list_version: Signal<u64>,
     mut info_message: Signal<Option<String>>,
     mut error_message: Signal<Option<String>>,
     mut resize_loading: Signal<bool>,
@@ -114,6 +157,7 @@ fn build_resize_cb(
             spawn(async move {
                 if let Ok(paths) = crate::server::get_project_images(p).await {
                     image_paths.set(paths);
+                    list_version += 1;
                 }
             });
         }
@@ -130,6 +174,14 @@ pub fn ImagesTab(project_name: String) -> Element {
     debug!(project_name = %project_name, "Initializing images tab");
     let mut tasks_ctx = use_context::<TasksCtx>();
     let mut image_paths = use_signal(Vec::<String>::new);
+    // Incremented on every mutation that may change image content (upload, delete,
+    // resize, demo download).  The blob-URL cache effect depends on this signal
+    // and on `image_paths`; a change to either triggers a cache rebuild.
+    let mut list_version = use_signal(|| 0u64);
+    // Cache: image_name → (display_url, size_bytes).
+    // On WASM the display URL is a Blob URL; on native it is a data: URL.
+    // Rebuilt whenever `list_version` or `image_paths` changes.
+    let mut img_cache = use_signal(HashMap::<String, (String, usize)>::new);
     let mut selected_images = use_signal(Vec::<String>::new);
     let mut demo_loading = use_signal(|| false);
     let mut demo_dialog_open = use_signal(|| false);
@@ -149,6 +201,7 @@ pub fn ImagesTab(project_name: String) -> Element {
         let demo_cb = build_demo_cb(
             project_name.clone(),
             image_paths,
+            list_version,
             info_message,
             error_message,
             demo_loading,
@@ -156,6 +209,7 @@ pub fn ImagesTab(project_name: String) -> Element {
         let resize_cb = build_resize_cb(
             project_name.clone(),
             image_paths,
+            list_version,
             info_message,
             error_message,
             resize_loading,
@@ -166,6 +220,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                     let count = imgs.len();
                     info!(project_name = %project_name, image_count = count, "Successfully loaded project images");
                     image_paths.set(imgs);
+                    list_version += 1;
                 }
                 Err(e) => {
                     error!(project_name = %project_name, error = %e, "Failed to load project images");
@@ -232,6 +287,51 @@ pub fn ImagesTab(project_name: String) -> Element {
         });
     });
 
+    // ── Blob-URL cache management ─────────────────────────────────────────
+    // Reacts to both `image_paths` and `list_version`.  Any change (add,
+    // delete, resize, re-upload of an existing file) revokes all existing
+    // Blob URLs and re-fetches the current image set through the Dioxus
+    // server-function mechanism.  Because the framework owns the URL routing
+    // this works identically for every deployment topology: bundled desktop,
+    // Android, web pointing to a remote backend via set_server_url, etc.
+    let project_name_cache = project_name.clone();
+    use_effect(move || {
+        let paths = image_paths(); // reactive: re-runs when list changes
+        let version = list_version(); // reactive: re-runs when content changes
+
+        // Revoke all existing Blob URLs synchronously before spawning the fetch.
+        for (_, (url, _)) in img_cache.write().drain() {
+            revoke_display_url(&url);
+        }
+
+        if paths.is_empty() {
+            return;
+        }
+
+        let project = project_name_cache.clone();
+        spawn(async move {
+            for name in paths {
+                // Abort if a newer mutation superseded this fetch run.
+                if list_version() != version {
+                    break;
+                }
+                match crate::server::get_project_image_bytes(project.clone(), name.clone()).await {
+                    Ok(bytes) => {
+                        if list_version() != version {
+                            break;
+                        }
+                        let size = bytes.len();
+                        let url = bytes_to_display_url(&bytes);
+                        img_cache.write().insert(name, (url, size));
+                    }
+                    Err(e) => {
+                        error!(image_name = %name, error = %e, "Failed to load image bytes");
+                    }
+                }
+            }
+        });
+    });
+
     let on_delete_selected = {
         let project_name = project_name.clone();
         move |_| {
@@ -245,6 +345,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                 match crate::server::get_project_images(project_name).await {
                     Ok(imgs) => {
                         image_paths.set(imgs);
+                        list_version += 1;
                         info_message.set(Some("Images deleted successfully".to_string()));
                     }
                     Err(e) => {
@@ -268,6 +369,7 @@ pub fn ImagesTab(project_name: String) -> Element {
             let cb = build_demo_cb(
                 project_name.clone(),
                 image_paths,
+                list_version,
                 info_message,
                 error_message,
                 demo_loading,
@@ -301,6 +403,8 @@ pub fn ImagesTab(project_name: String) -> Element {
             spawn(async move {
                 match crate::server::clear_project_images(project_name).await {
                     Ok(_) => {
+                        image_paths.set(Vec::new());
+                        list_version += 1;
                         info_message.set(Some("All images cleared successfully".to_string()));
                     }
                     Err(e) => {
@@ -330,6 +434,7 @@ pub fn ImagesTab(project_name: String) -> Element {
             let cb = build_resize_cb(
                 project_name.clone(),
                 image_paths,
+                list_version,
                 info_message,
                 error_message,
                 resize_loading,
@@ -348,50 +453,6 @@ pub fn ImagesTab(project_name: String) -> Element {
                     };
                 let label = format!("Resize: {}", project_name);
                 start_task(task_id, label, TaskKind::BatchResize, tasks_ctx, cb);
-            });
-        }
-    };
-    let on_file_upload = {
-        let project_name = project_name.clone();
-        move |evt: FormEvent| {
-            uploading.set(true);
-            error_message.set(None);
-            let project_name = project_name.clone();
-            spawn(async move {
-                let mut count = 0;
-                for file in evt.files() {
-                    match file.read_bytes().await {
-                        Ok(bytes) => {
-                            match crate::server::add_project_image(
-                                project_name.clone(),
-                                file.name(),
-                                bytes.to_vec(),
-                            )
-                            .await
-                            {
-                                Ok(_) => {
-                                    count += 1;
-                                }
-                                Err(e) => {
-                                    error_message.set(Some(format!(
-                                        "Failed to upload {}: {}",
-                                        file.name(),
-                                        e
-                                    )));
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error_message.set(Some(format!(
-                                "Failed to read {}: {}",
-                                file.name(),
-                                e
-                            )));
-                        }
-                    }
-                }
-                info_message.set(Some(format!("Uploaded {} image(s)", count)));
-                uploading.set(false);
             });
         }
     };
@@ -540,15 +601,17 @@ pub fn ImagesTab(project_name: String) -> Element {
             // ── Fullscreen image viewer ───────────────────────────────────────
             {
                 if let Some(fullscreen_name) = fullscreen_image() {
-                    let safe_fullscreen_name = fullscreen_name.clone();
-                    let safe_project_name = project_name.clone();
-                    let full_image_url = format!("{}/api/projects/{}/images/{}",
-                        get_server_url(),
-                        safe_project_name,
-                        safe_fullscreen_name
-                    );
-                    let img_id = format!("fullscreen-img-{}", safe_fullscreen_name);
-                    let metadata_id = format!("metadata-fullscreen-{}", safe_fullscreen_name);
+                    // Reuse the cached Blob / data URL — no extra network request.
+                    let cache_entry = img_cache().get(&fullscreen_name).cloned();
+                    let (full_image_url, size_bytes) = cache_entry
+                        .map(|(u, s)| (u, s))
+                        .unwrap_or_else(|| (String::new(), 0));
+                    let size_mb = size_bytes as f64 / 1024.0 / 1024.0;
+                    let img_id = format!("fullscreen-img-{}", fullscreen_name);
+                    let metadata_id = format!("metadata-fullscreen-{}", fullscreen_name);
+                    let img_id_onload = img_id.clone();
+                    let metadata_id_onload = metadata_id.clone();
+                    let fname_onload = fullscreen_name.clone();
                     rsx! {
                         div {
                             class: "fullscreen-modal",
@@ -568,31 +631,29 @@ pub fn ImagesTab(project_name: String) -> Element {
                                 div {
                                     class: "fullscreen-caption",
                                     id: metadata_id.clone(),
-                                    "Loading..."
+                                    if full_image_url.is_empty() { "Loading…" } else { "" }
                                 }
-                                img {
-                                    src: full_image_url.clone(),
-                                    alt: fullscreen_name.clone(),
-                                    class: "fullscreen-image",
-                                    id: img_id.clone(),
-                                    onload: move |_| {
-                                        eval(&format!(r#"
-                                            (async () => {{
-                                                const img = document.getElementById('{}');
-                                                const metadataDiv = document.getElementById('{}');
-                                                if (img && metadataDiv) {{
-                                                    const width = img.naturalWidth;
-                                                    const height = img.naturalHeight;
-                                                    let sizeBytes = 0;
-                                                    try {{
-                                                        const res = await fetch('{}', {{ method: 'HEAD' }});
-                                                        const size = res.headers.get('Content-Length');
-                                                        sizeBytes = parseInt(size);
-                                                    }} catch (e) {{}}
-                                                    metadataDiv.innerHTML = `${{width}}x${{height}} · ${{(sizeBytes / 1024 / 1024).toFixed(3)}} MB · {}`;
-                                                }}
-                                            }})();
-                                        "#, img_id, metadata_id, full_image_url, fullscreen_name));
+                                if !full_image_url.is_empty() {
+                                    img {
+                                        src: full_image_url.clone(),
+                                        alt: fullscreen_name.clone(),
+                                        class: "fullscreen-image",
+                                        id: img_id.clone(),
+                                        onload: move |_| {
+                                            // Size is known from bytes; only read dimensions from the DOM.
+                                            eval(&format!(
+                                                r#"const img = document.getElementById('{id}');
+                                                   const meta = document.getElementById('{mid}');
+                                                   if (img && meta) {{
+                                                     meta.innerHTML = img.naturalWidth + 'x' + img.naturalHeight
+                                                       + ' · {sz:.3} MB · {fname}';
+                                                   }}"#,
+                                                id = img_id_onload,
+                                                mid = metadata_id_onload,
+                                                sz = size_mb,
+                                                fname = fname_onload,
+                                            ));
+                                        }
                                     }
                                 }
                             }
@@ -609,37 +670,40 @@ pub fn ImagesTab(project_name: String) -> Element {
                 div {
                     class: "toolbar-group",
 
-                    form {
-                        onsubmit: move |evt| {
-                            evt.prevent_default();
-                            eval("document.getElementById('file-upload-input').click()");
-                        },
-                        div {
-                            class: "file-input-wrapper",
-                            input {
-                                id: "file-upload-input",
-                                r#type: "file",
-                                name: "images",
-                                class: "hidden-file-input",
-                                multiple: true,
-                                accept: "image/*",
-                                disabled: uploading() || demo_loading(),
-                                onchange: on_file_upload,
-                            }
-                            button {
-                                r#type: "submit",
-                                class: "btn btn-secondary",
-                                title: if uploading() { "Uploading..." } else { "Upload images from disk" },
-                                disabled: uploading() || demo_loading(),
-                                Icon { icon: BsUpload }
-                                span {
-                                    if uploading() {
-                                        "Uploading..."
-                                    } else {
-                                        "Upload"
+                    button {
+                        class: "btn btn-secondary",
+                        title: if uploading() { "Uploading..." } else { "Upload images from disk" },
+                        disabled: uploading() || demo_loading(),
+                        onclick: {
+                            let project_name = project_name.clone();
+                            move |_| {
+                                uploading.set(true);
+                                error_message.set(None);
+                                let pn = project_name.clone();
+                                spawn(async move {
+                                    match crate::server::pick_and_import_images(pn.clone()).await {
+                                        Ok(imported) if imported.is_empty() => {
+                                            // User cancelled — no error
+                                        }
+                                        Ok(imported) => {
+                                            let count = imported.len();
+                                            info_message.set(Some(format!("Imported {} image(s)", count)));
+                                            if let Ok(paths) = crate::server::get_project_images(pn).await {
+                                                image_paths.set(paths);
+                                                list_version += 1;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error_message.set(Some(format!("Failed to import images: {}", e)));
+                                        }
                                     }
-                                }
+                                    uploading.set(false);
+                                });
                             }
+                        },
+                        Icon { icon: BsUpload }
+                        span {
+                            if uploading() { "Uploading..." } else { "Upload" }
                         }
                     }
 
@@ -730,18 +794,18 @@ pub fn ImagesTab(project_name: String) -> Element {
                     {
                         let paths = image_paths();
                         let selected = selected_images();
+                        let cache = img_cache();
                         let mut elements = Vec::new();
                         for image_name in paths.into_iter() {
-                            let safe_image_name = urlencoding::encode(&image_name);
-                            let safe_project_name = urlencoding::encode(&project_name);
                             let is_selected = selected.contains(&image_name);
-                            let image_url = format!(
-                                "{}/api/projects/{}/images/{}?_drop_cache={}",
-                                get_server_url(),
-                                safe_project_name,
-                                safe_image_name,
-                                generate_cache_busting_num(),
-                            );
+                            // Blob / data URL from the cache.  Shows nothing until the
+                            // background fetch completes — the img element is simply not
+                            // rendered, keeping the tile visible as a loading placeholder.
+                            let Some((image_url, size_bytes)) = cache.get(&image_name).cloned()
+                                else { continue; };
+                            let size_mb = size_bytes as f64 / 1024.0 / 1024.0;
+                            // Safe ID (avoid special chars from file names).
+                            let safe_image_name = urlencoding::encode(&image_name);
                             let img_id = format!("thumbnail-{}", safe_image_name);
                             let metadata_id = format!("metadata-{}", safe_image_name);
                             let image_name_for_checkbox = image_name.clone();
@@ -788,23 +852,18 @@ pub fn ImagesTab(project_name: String) -> Element {
                                         onclick: move |_| toggle_select(image_name_for_img.clone()),
                                         class: "thumbnail",
                                         onload: move |_| {
-                                            let js = format!(r#"
-                                                (async () => {{
-                                                    const img = document.getElementById('{}');
-                                                    const metadataDiv = document.getElementById('{}');
-                                                    if (img && metadataDiv) {{
-                                                        const width = img.naturalWidth;
-                                                        const height = img.naturalHeight;
-                                                        let sizeBytes = 0;
-                                                        try {{
-                                                            const res = await fetch('{}', {{ method: 'HEAD' }});
-                                                            const size = res.headers.get('Content-Length');
-                                                            sizeBytes = parseInt(size);
-                                                        }} catch (e) {{}}
-                                                        metadataDiv.innerHTML = `${{width}}x${{height}}<br/>${{(sizeBytes / 1024 / 1024).toFixed(3)}} MB`;
-                                                    }}
-                                                }})();
-                                            "#, img_id, metadata_id, image_url);
+                                            // Size is already known; read only dimensions from the DOM.
+                                            let js = format!(
+                                                r#"const img = document.getElementById('{id}');
+                                                   const meta = document.getElementById('{mid}');
+                                                   if (img && meta) {{
+                                                     meta.innerHTML = img.naturalWidth + 'x' + img.naturalHeight
+                                                       + '<br/>{sz:.3} MB';
+                                                   }}"#,
+                                                id = img_id,
+                                                mid = metadata_id,
+                                                sz = size_mb,
+                                            );
                                             eval(&js);
                                         }
                                     }

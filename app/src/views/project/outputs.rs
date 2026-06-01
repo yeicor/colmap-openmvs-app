@@ -1,14 +1,18 @@
 use crate::server::{
-    clear_project_outputs, delete_project_output, get_project_output_for_viewer,
-    list_project_outputs,
+    clear_project_outputs, delete_project_output, get_project_output_bytes,
+    get_project_output_for_viewer, list_project_outputs, save_output_as,
 };
 use base64::Engine as _;
 use colmap_openmvs_api::OutputFile;
 use dioxus::document::eval;
 use dioxus::prelude::*;
+use dioxus_free_icons::icons::bs_icons::{
+    BsArrowRepeat, BsArrowsExpand, BsCheck2, BsChevronDown, BsChevronRight, BsDownload, BsEye,
+    BsHourglass, BsTrash3, BsX,
+};
+use dioxus_free_icons::Icon;
 use std::collections::HashSet;
 use tracing::{debug, error, info};
-use urlencoding::encode as url_encode;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -57,6 +61,53 @@ fn js_escape(s: &str) -> String {
         .replace('\'', "\\'")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
+}
+
+/// Trigger a browser "Save As" download for `bytes` with the given filename.
+///
+/// On **WASM**: creates a native `Blob` URL, clicks a hidden `<a download>`,
+/// then revokes the URL — all via native browser APIs, no extra network round-trip.
+/// On **native** (desktop / Android): falls back to a `data:` URL which the
+/// embedded WebView can download from.
+async fn trigger_download(filename: &str, bytes: Vec<u8>) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use js_sys::{Array, Uint8Array};
+        use web_sys::{Blob, BlobPropertyBag, Url};
+
+        let typed = Uint8Array::new_with_length(bytes.len() as u32);
+        typed.copy_from(&bytes);
+        let array = Array::of1(&typed);
+        let mut opts = BlobPropertyBag::new();
+        opts.type_("application/octet-stream");
+        if let Ok(blob) = Blob::new_with_u8_array_sequence_and_options(&array, &opts) {
+            if let Ok(blob_url) = Url::create_object_url_with_blob(&blob) {
+                let js = format!(
+                    r#"const a=document.createElement('a');
+                       a.href='{}';a.download='{}';a.style.display='none';
+                       document.body.appendChild(a);a.click();
+                       setTimeout(()=>{{URL.revokeObjectURL('{}');document.body.removeChild(a);}},100);"#,
+                    js_escape(&blob_url),
+                    js_escape(filename),
+                    js_escape(&blob_url),
+                );
+                let _ = eval(&js).await;
+                return;
+            }
+        }
+    }
+    // Fallback: data URL (works in every embedded WebView).
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let js = format!(
+        r#"const a=document.createElement('a');
+           a.href='data:application/octet-stream;base64,{}';
+           a.download='{}';a.style.display='none';
+           document.body.appendChild(a);a.click();
+           setTimeout(()=>document.body.removeChild(a),100);"#,
+        b64,
+        js_escape(filename),
+    );
+    let _ = eval(&js).await;
 }
 
 /// Pick an emoji icon based on file extension.
@@ -184,7 +235,11 @@ fn build_display_list(files: &[OutputFile]) -> Vec<DisplayEntry> {
     // ── Virtual <models> folder: all viewable files, sorted by path ──────
     let mut viewable: Vec<&OutputFile> = files.iter().filter(|f| f.is_viewable).collect();
     if !viewable.is_empty() {
-        viewable.sort_by(|a, b| b.modified_at.cmp(&a.modified_at).then_with(|| a.relative_path.cmp(&b.relative_path)));
+        viewable.sort_by(|a, b| {
+            b.modified_at
+                .cmp(&a.modified_at)
+                .then_with(|| a.relative_path.cmp(&b.relative_path))
+        });
         let models_size: u64 = viewable.iter().map(|f| f.size).sum();
         result.push(DisplayEntry {
             name: "<models>".to_string(),
@@ -280,22 +335,21 @@ pub fn OutputsTab(project_name: String) -> Element {
         div {
             class: "tab-content outputs-tab",
 
-            // ── Toolbar ──────────────────────────────────────────────────
+            // ── Toolbar ──────────────────────────────────────────────
             div {
                 class: "outputs-toolbar",
-                span { class: "outputs-toolbar-title", "Outputs" }
                 div { class: "outputs-toolbar-spacer" }
 
                 button {
                     class: "outputs-btn",
                     title: "Expand all folders",
                     onclick: move |_| collapsed.write().clear(),
-                    "⊞"
+                    Icon { icon: BsArrowsExpand }
                     span { class: "btn-label", " Expand All" }
                 }
 
                 if clearing_all() {
-                    span { class: "outputs-toolbar-status", "⏳" }
+                    span { class: "outputs-toolbar-status", Icon { icon: BsHourglass } }
                 } else if confirming_clear_all() {
                     button {
                         class: "outputs-btn outputs-confirm-del-btn",
@@ -322,20 +376,20 @@ pub fn OutputsTab(project_name: String) -> Element {
                                 });
                             }
                         },
-                        "✓"
+                        Icon { icon: BsCheck2 }
                         span { class: "btn-label", " Sure?" }
                     }
                     button {
                         class: "outputs-btn outputs-cancel-del-btn",
                         onclick: move |_| confirming_clear_all.set(false),
-                        "✗"
+                        Icon { icon: BsX }
                     }
                 } else {
                     button {
                         class: "outputs-btn outputs-del-btn",
                         title: "Delete all outputs",
                         onclick: move |_| confirming_clear_all.set(true),
-                        "🗑"
+                        Icon { icon: BsTrash3 }
                         span { class: "btn-label", " Delete All" }
                     }
                 }
@@ -346,7 +400,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                         debug!("Refresh outputs");
                         refresh_counter += 1;
                     },
-                    "↺"
+                    Icon { icon: BsArrowRepeat }
                     span { class: "btn-label", " Refresh" }
                 }
             }
@@ -456,7 +510,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                     c.insert(rp_toggle.clone());
                                                                 }
                                                             },
-                                                            if is_collapsed { "▶" } else { "▼" }
+                                                            if is_collapsed { Icon { icon: BsChevronRight } } else { Icon { icon: BsChevronDown } }
                                                         }
                                                     } else {
                                                         span { class: "outputs-expand-spacer" }
@@ -486,33 +540,44 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                         }
                                                     }
 
-                                                    // Download (files only)
+                                                    // Download (files only) — fetches bytes through the
+                                                    // Dioxus server-function protocol, then triggers the
+                                                    // browser save-as dialog via a native Blob URL.
                                                     if !is_dir {
                                                         button {
                                                             class: "outputs-btn outputs-download-link",
                                                             title: "Download {actual_name}",
                                                             onclick: move |_| {
-                                                                let url = format!(
-                                                                    "/api/projects/{}/outputs/file?relative_path={}",
-                                                                    pn_dl, url_encode(&rp_dl)
-                                                                );
+                                                                let pn = pn_dl.clone();
+                                                                let rp = rp_dl.clone();
                                                                 let fname = fname_dl.clone();
+                                                                let mut err = error_msg;
                                                                 spawn(async move {
-                                                                    let js = format!(
-                                                                        "var a=document.createElement('a');\
-                                                                         a.href='{}';\
-                                                                         a.download='{}';\
-                                                                         a.style.display='none';\
-                                                                         document.body.appendChild(a);\
-                                                                         a.click();\
-                                                                         setTimeout(function(){{document.body.removeChild(a);}},100);",
-                                                                        js_escape(&url),
-                                                                        js_escape(&fname)
-                                                                    );
-                                                                    let _ = eval(&js).await;
+                                                                    #[cfg(target_arch = "wasm32")]
+                                                                    {
+                                                                        // Web: fetch bytes then trigger browser Save As via Blob URL
+                                                                        match get_project_output_bytes(pn, rp).await {
+                                                                            Ok(bytes) => trigger_download(&fname, bytes).await,
+                                                                            Err(e) => {
+                                                                                error!(error = %e, "Download failed");
+                                                                                err.set(format!("Download failed: {e}"));
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    #[cfg(not(target_arch = "wasm32"))]
+                                                                    {
+                                                                        // Native: open save dialog on the server via rrfd
+                                                                        match crate::server::save_output_as(pn, rp).await {
+                                                                            Ok(()) => info!(file = %fname, "Saved via native dialog"),
+                                                                            Err(e) => {
+                                                                                error!(error = %e, "Save dialog failed");
+                                                                                err.set(format!("Save failed: {e}"));
+                                                                            }
+                                                                        }
+                                                                    }
                                                                 });
                                                             },
-                                                            "⬇"
+                                                            Icon { icon: BsDownload }
                                                             span { class: "btn-label", " Download" }
                                                         }
                                                     }
@@ -545,7 +610,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                     viewing.set(None);
                                                                 });
                                                             },
-                                                            if is_viewing { "⏳" } else { "🔳" }
+                                                            if is_viewing { Icon { icon: BsHourglass } } else { Icon { icon: BsEye } }
                                                             span {
                                                                 class: "btn-label",
                                                                 if is_viewing { " Loading…" } else { " View 3D" }
@@ -556,7 +621,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                     // Delete — hidden for virtual entries
                                                     if !is_virtual {
                                                         if is_deleting {
-                                                            span { class: "outputs-entry-icon", "⏳" }
+                                                            span { class: "outputs-entry-icon", Icon { icon: BsHourglass } }
                                                         } else if is_confirming {
                                                             button {
                                                                 class: "outputs-btn outputs-confirm-del-btn",
@@ -580,23 +645,20 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                         deleting_path.set(None);
                                                                     });
                                                                 },
-                                                                "✓"
-                                                                span {
-                                                                    class: "btn-label",
-                                                                    if is_dir { " Sure?" } else { " Sure?" }
-                                                                }
+                                                                Icon { icon: BsCheck2 }
+                                                                span { class: "btn-label", " Sure?" }
                                                             }
                                                             button {
                                                                 class: "outputs-btn outputs-cancel-del-btn",
                                                                 onclick: move |_| confirming_delete.set(None),
-                                                                "✗"
+                                                                Icon { icon: BsX }
                                                             }
                                                         } else {
                                                             button {
                                                                 class: "outputs-btn outputs-del-btn",
                                                                 title: if is_dir { "Delete folder" } else { "Delete file" },
                                                                 onclick: move |_| confirming_delete.set(Some(rp_confirm.clone())),
-                                                                "🗑"
+                                                                Icon { icon: BsTrash3 }
                                                                 span {
                                                                     class: "btn-label",
                                                                     if is_dir { " Del Folder" } else { " Delete" }

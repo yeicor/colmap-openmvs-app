@@ -16,7 +16,7 @@ pub use android_settings_validation::AndroidSettingsValidation;
 mod project;
 pub use project::{
     add_project_image, batch_resize_images, clear_project_images, delete_project_image,
-    download_demo_images, get_project_image, get_project_images,
+    download_demo_images, get_project_image, get_project_image_bytes, get_project_images,
 };
 
 mod projects;
@@ -44,6 +44,9 @@ pub use pipeline::run_pipeline;
 
 mod theme;
 pub use theme::get_dark_mode;
+
+mod files;
+pub use files::{pick_and_import_images, pick_projects_folder, pick_settings_file, save_output_as};
 
 mod process;
 pub use process::kill_process_tree;
@@ -77,7 +80,11 @@ pub async fn list_project_outputs(project_name: String) -> DioxusResult<Vec<Outp
     walk_for_outputs(&root, &root, &mut outputs)
         .map_err(|e| anyhow::anyhow!("Failed to scan project outputs: {}", e))?;
 
-    outputs.sort_by(|a, b| b.modified_at.cmp(&a.modified_at).then_with(|| a.relative_path.cmp(&b.relative_path)));
+    outputs.sort_by(|a, b| {
+        b.modified_at
+            .cmp(&a.modified_at)
+            .then_with(|| a.relative_path.cmp(&b.relative_path))
+    });
     debug!("Found {} output files", outputs.len());
     Ok(outputs)
 }
@@ -145,6 +152,35 @@ fn walk_for_outputs(
     }
 
     Ok(())
+}
+
+/// Read an output file as raw bytes — callable from the client via the Dioxus
+/// server-function protocol so no URL needs to be constructed or hardcoded.
+pub async fn get_project_output_bytes(
+    project_name: String,
+    relative_path: String,
+) -> DioxusResult<Vec<u8>> {
+    let project_path = {
+        let projects = get_projects().await?;
+        projects
+            .into_iter()
+            .find(|p| p.name == project_name)
+            .map(|p| p.path)
+            .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
+    };
+
+    let sanitized = relative_path.trim_start_matches('/');
+    for component in std::path::Path::new(sanitized).components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(anyhow::anyhow!("Path traversal is not allowed").into());
+        }
+    }
+
+    let full_path = std::path::Path::new(&project_path).join(sanitized);
+    debug!("Reading output file bytes: {}", full_path.display());
+    tokio::fs::read(&full_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e).into())
 }
 
 /// Read a project output file as bytes (for download or viewing).

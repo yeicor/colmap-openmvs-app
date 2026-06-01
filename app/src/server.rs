@@ -81,6 +81,16 @@ pub async fn get_project_image(project_name: String, image_name: String) -> Resu
     backend::get_project_image(project_name, image_name).await
 }
 
+/// Fetch an image as raw bytes via the Dioxus server-function protocol.
+///
+/// Prefer this over constructing a URL manually — the framework routes the
+/// request through the configured server URL regardless of deployment topology
+/// (bundled desktop, web behind a custom origin, etc.).
+#[get("/api/projects/{project_name}/images/{image_name}/bytes")]
+pub async fn get_project_image_bytes(project_name: String, image_name: String) -> Result<Vec<u8>> {
+    backend::get_project_image_bytes(project_name, image_name).await
+}
+
 #[post("/api/projects/{project_name}/images/{image_name}")]
 pub async fn add_project_image(
     project_name: String,
@@ -297,6 +307,18 @@ pub async fn get_project_output(project_name: String, relative_path: String) -> 
     backend::get_project_output(project_name, relative_path).await
 }
 
+/// Fetch an output file as raw bytes via the Dioxus server-function protocol.
+///
+/// Prefer this over constructing a URL — the framework routes the request
+/// through the configured server URL regardless of deployment topology.
+#[get("/api/projects/{project_name}/outputs/bytes?relative_path")]
+pub async fn get_project_output_bytes(
+    project_name: String,
+    relative_path: String,
+) -> Result<Vec<u8>> {
+    backend::get_project_output_bytes(project_name, relative_path).await
+}
+
 /// Return an output file in a viewer-friendly PLY format.
 /// For PLY files this is a pass-through; for points3D.bin it converts to ASCII PLY.
 #[get("/api/projects/{project_name}/outputs/view?relative_path")]
@@ -317,6 +339,41 @@ pub async fn delete_project_output(project_name: String, relative_path: String) 
 #[post("/api/projects/{project_name}/outputs/clear")]
 pub async fn clear_project_outputs(project_name: String) -> Result<()> {
     backend::clear_project_outputs(project_name).await
+}
+
+// ---------------------------------------------------------------------------
+// Native file-picker dialogs (backend-driven, works on all platforms)
+// ---------------------------------------------------------------------------
+
+/// Open a native file-picker on the server and import the chosen image files
+/// into the project.  Returns the file names of successfully imported images,
+/// or an empty list if the user cancelled.
+#[post("/api/projects/{project_name}/images/pick")]
+pub async fn pick_and_import_images(project_name: String) -> Result<Vec<String>> {
+    backend::pick_and_import_images(project_name).await
+}
+
+/// Open a native folder-picker on the server and return the chosen path.
+/// Used by the General settings tab to set the projects folder.
+/// Returns an error on Android (path management is automatic there).
+#[post("/api/settings/pick-folder")]
+pub async fn pick_projects_folder() -> Result<String> {
+    backend::pick_projects_folder().await
+}
+
+/// Open a native file-picker on the server for a JSON settings file and return
+/// the chosen path.  Returns an error on Android.
+#[post("/api/settings/pick-file")]
+pub async fn pick_settings_file() -> Result<String> {
+    backend::pick_settings_file().await
+}
+
+/// Open a native save-file dialog on the server and write the output file to
+/// the user-chosen location.  Used by the Outputs tab on native platforms.
+/// On web/WASM the client uses the browser Blob-URL download instead.
+#[post("/api/projects/{project_name}/outputs/save-as")]
+pub async fn save_output_as(project_name: String, relative_path: String) -> Result<()> {
+    backend::save_output_as(project_name, relative_path).await
 }
 
 // ---------------------------------------------------------------------------
