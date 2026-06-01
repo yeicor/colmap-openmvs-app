@@ -700,7 +700,7 @@ fn align4(n: usize) -> usize {
 }
 
 fn pad4(bin: &mut Vec<u8>, byte: u8) {
-    while bin.len() % 4 != 0 {
+    while !bin.len().is_multiple_of(4) {
         bin.push(byte);
     }
 }

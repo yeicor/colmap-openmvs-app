@@ -1,4 +1,3 @@
-use crate::projects::get_projects;
 use anyhow::anyhow;
 use dioxus::Result as DioxusResult;
 use rfd::AsyncFileDialog;
@@ -17,14 +16,8 @@ pub async fn pick_and_import_images(project_name: String) -> DioxusResult<Vec<St
         .await
         .ok_or_else(|| anyhow!("No files selected"))?;
 
-    let project_path = get_projects()
-        .await?
-        .into_iter()
-        .find(|p| p.name == project_name)
-        .map(|p| p.path)
-        .ok_or_else(|| anyhow!("Project not found: {}", project_name))?;
-
-    let images_dir = std::path::Path::new(&project_path).join("images");
+    let project_path = crate::project::resolve_project_path(&project_name).await?;
+    let images_dir = project_path.join("images");
     tokio::fs::create_dir_all(&images_dir)
         .await
         .map_err(|e| anyhow!("create images dir: {e}"))?;
@@ -73,20 +66,8 @@ pub async fn pick_settings_file() -> DioxusResult<String> {
 /// exports).  On all other platforms a native save-dialog is shown.
 /// Returns a human-readable success message.
 pub async fn save_output_as(project_name: String, relative_path: String) -> DioxusResult<String> {
-    let project_path = get_projects()
-        .await?
-        .into_iter()
-        .find(|p| p.name == project_name)
-        .map(|p| p.path)
-        .ok_or_else(|| anyhow!("Project not found: {}", project_name))?;
-
-    let sanitized = relative_path.trim_start_matches('/');
-    for component in std::path::Path::new(sanitized).components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            return Err(anyhow!("Path traversal not allowed").into());
-        }
-    }
-    let full_path = std::path::Path::new(&project_path).join(sanitized);
+    let project_path = crate::project::resolve_project_path(&project_name).await?;
+    let full_path = crate::project::resolve_project_relative_path(&project_path, &relative_path)?;
     let file_name = full_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -101,8 +82,7 @@ pub async fn save_output_as(project_name: String, relative_path: String) -> Diox
         let dest = std::path::Path::new("/sdcard/Download").join(&file_name);
         tokio::fs::write(&dest, &bytes).await.map_err(|e| {
             let detail = if e.kind() == std::io::ErrorKind::PermissionDenied {
-                "Go to App Settings → Permissions and allow \"Files and media\" access."
-                    .to_string()
+                "Go to App Settings → Permissions and allow \"Files and media\" access.".to_string()
             } else {
                 format!("{e}")
             };

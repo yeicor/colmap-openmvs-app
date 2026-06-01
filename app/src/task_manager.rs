@@ -283,32 +283,24 @@ pub fn apply_event_to_entry(entry: &mut TaskEntry, event: &TaskEvent, stream_pos
         }
         TaskEvent::PrepareProgress(PrepareProgress::Downloading {
             downloaded_bytes,
-            total_bytes,
-        }) => {
-            if let Some(total) = total_bytes {
-                if *total > 0 {
-                    entry.progress = Some(*downloaded_bytes as f32 / *total as f32);
-                }
-            }
+            total_bytes: Some(total),
+        }) if *total > 0 => {
+            entry.progress = Some(*downloaded_bytes as f32 / *total as f32);
         }
         TaskEvent::PrepareProgress(PrepareProgress::ExtractingLayer { progress, .. }) => {
             entry.progress = Some(*progress);
         }
         TaskEvent::DemoProgress(DemoProgressEvent::DownloadProgress {
             downloaded, total, ..
-        }) => {
-            if *total > 0 {
-                entry.progress = Some(*downloaded as f32 / *total as f32);
-            }
+        }) if *total > 0 => {
+            entry.progress = Some(*downloaded as f32 / *total as f32);
         }
         TaskEvent::ResizeProgress(ResizeProgressEvent::ResizeProgress {
             completed,
             total_files,
             ..
-        }) => {
-            if *total_files > 0 {
-                entry.progress = Some(*completed as f32 / *total_files as f32);
-            }
+        }) if *total_files > 0 => {
+            entry.progress = Some(*completed as f32 / *total_files as f32);
         }
         TaskEvent::PipelineRemainingGroups(groups) => {
             // Count non-Config/Tool-Discovery stages (those with pipeline_stage_num > 0)

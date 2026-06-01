@@ -1,7 +1,9 @@
 use crate::mycomponents::{Banner, BannerType};
+#[cfg(target_arch = "wasm32")]
+use crate::server::get_project_output_bytes;
 use crate::server::{
-    clear_project_outputs, delete_project_output, get_project_output_bytes,
-    get_project_output_for_viewer, list_project_outputs, save_output_as,
+    clear_project_outputs, delete_project_output, get_project_output_for_viewer,
+    list_project_outputs,
 };
 use base64::Engine as _;
 use colmap_openmvs_api::OutputFile;
@@ -66,37 +68,34 @@ fn js_escape(s: &str) -> String {
 
 /// Trigger a browser "Save As" download for `bytes` with the given filename.
 ///
-/// On **WASM**: creates a native `Blob` URL, clicks a hidden `<a download>`,
-/// then revokes the URL — all via native browser APIs, no extra network round-trip.
-/// On **native** (desktop / Android): falls back to a `data:` URL which the
-/// embedded WebView can download from.
+/// Creates a native `Blob` URL, clicks a hidden `<a download>`, then revokes
+/// the URL. If Blob URL creation fails, falls back to a `data:` URL.
+#[cfg(target_arch = "wasm32")]
 async fn trigger_download(filename: &str, bytes: Vec<u8>) {
-    #[cfg(target_arch = "wasm32")]
-    {
-        use js_sys::{Array, Uint8Array};
-        use web_sys::{Blob, BlobPropertyBag, Url};
+    use js_sys::{Array, Uint8Array};
+    use web_sys::{Blob, BlobPropertyBag, Url};
 
-        let typed = Uint8Array::new_with_length(bytes.len() as u32);
-        typed.copy_from(&bytes);
-        let array = Array::of1(&typed);
-        let mut opts = BlobPropertyBag::new();
-        opts.type_("application/octet-stream");
-        if let Ok(blob) = Blob::new_with_u8_array_sequence_and_options(&array, &opts) {
-            if let Ok(blob_url) = Url::create_object_url_with_blob(&blob) {
-                let js = format!(
-                    r#"const a=document.createElement('a');
-                       a.href='{}';a.download='{}';a.style.display='none';
-                       document.body.appendChild(a);a.click();
-                       setTimeout(()=>{{URL.revokeObjectURL('{}');document.body.removeChild(a);}},100);"#,
-                    js_escape(&blob_url),
-                    js_escape(filename),
-                    js_escape(&blob_url),
-                );
-                let _ = eval(&js).await;
-                return;
-            }
+    let typed = Uint8Array::new_with_length(bytes.len() as u32);
+    typed.copy_from(&bytes);
+    let array = Array::of1(&typed);
+    let mut opts = BlobPropertyBag::new();
+    opts.type_("application/octet-stream");
+    if let Ok(blob) = Blob::new_with_u8_array_sequence_and_options(&array, &opts) {
+        if let Ok(blob_url) = Url::create_object_url_with_blob(&blob) {
+            let js = format!(
+                r#"const a=document.createElement('a');
+                   a.href='{}';a.download='{}';a.style.display='none';
+                   document.body.appendChild(a);a.click();
+                   setTimeout(()=>{{URL.revokeObjectURL('{}');document.body.removeChild(a);}},100);"#,
+                js_escape(&blob_url),
+                js_escape(filename),
+                js_escape(&blob_url),
+            );
+            let _ = eval(&js).await;
+            return;
         }
     }
+
     // Fallback: data URL (works in every embedded WebView).
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     let js = format!(

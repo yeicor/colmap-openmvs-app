@@ -433,6 +433,15 @@ pub async fn load_project_config(project_path: String) -> anyhow::Result<LoadedP
     })
 }
 
+pub async fn load_named_project_config(
+    project_name: String,
+) -> anyhow::Result<LoadedProjectConfig> {
+    let project_path = crate::project::resolve_project_path(&project_name)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    load_project_config(project_path.to_string_lossy().into_owned()).await
+}
+
 /// Parse a single environment variable export line
 fn parse_env_var_line(line: &str) -> Option<EnvVarConfig> {
     let line = line.trim();
@@ -553,6 +562,16 @@ pub async fn save_project_config(
     }
 
     Ok(())
+}
+
+pub async fn save_named_project_config(
+    project_name: String,
+    config: SavedProjectConfig,
+) -> anyhow::Result<()> {
+    let project_path = crate::project::resolve_project_path(&project_name)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    save_project_config(project_path.to_string_lossy().into_owned(), config).await
 }
 
 #[cfg(test)]

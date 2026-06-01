@@ -17,7 +17,6 @@ use chrono::{DateTime, Duration, Utc};
 use colmap_openmvs_api::{
     ImageTagInfo, PreparedImageInfo, RuntimeInfo, TaskEvent, TaskKind, TaskState,
 };
-use dioxus::document::eval;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
     BsBox, BsDownload, BsFolder, BsGear, BsHdd, BsTerminal, BsTrash3,
@@ -833,16 +832,30 @@ fn DockerPanel(on_default_changed: EventHandler<()>) -> Element {
 // ---------------------------------------------------------------------------
 
 /// Build the event callback for a prepare-image task.
+#[derive(Clone, Copy)]
+struct PrepareUiSignals {
+    ready_tags: Signal<Vec<PreparedImageInfo>>,
+    prepare_status: Signal<String>,
+    preparing: Signal<bool>,
+    preparing_tag: Signal<String>,
+    error: Signal<String>,
+    success: Signal<String>,
+}
+
 fn build_prepare_cb(
     tag: String,
-    mut ready_tags: Signal<Vec<PreparedImageInfo>>,
-    mut prepare_status: Signal<String>,
-    mut preparing: Signal<bool>,
-    mut preparing_tag: Signal<String>,
-    mut error: Signal<String>,
-    mut success: Signal<String>,
     runtime_type: String,
+    signals: PrepareUiSignals,
 ) -> impl FnMut(TaskEvent) + 'static {
+    let PrepareUiSignals {
+        mut ready_tags,
+        mut prepare_status,
+        mut preparing,
+        mut preparing_tag,
+        mut error,
+        mut success,
+    } = signals;
+
     move |event: TaskEvent| match event {
         TaskEvent::PrepareProgress(colmap_openmvs_api::PrepareProgress::Downloading {
             downloaded_bytes,
@@ -983,13 +996,15 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                             .register(task_id.clone(), label, TaskKind::PrepareImage);
                         let cb = build_prepare_cb(
                             tag,
-                            ready_tags,
-                            prepare_status,
-                            preparing,
-                            preparing_tag,
-                            error,
-                            success,
                             rt_inner.clone(),
+                            PrepareUiSignals {
+                                ready_tags,
+                                prepare_status,
+                                preparing,
+                                preparing_tag,
+                                error,
+                                success,
+                            },
                         );
                         drive_task(task_id, tasks_ctx, cb);
                     }
@@ -1022,13 +1037,15 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                 Ok(task_id) => {
                     let cb = build_prepare_cb(
                         tag,
-                        ready_tags,
-                        prepare_status,
-                        preparing,
-                        preparing_tag,
-                        error,
-                        success,
                         rt_spawn,
+                        PrepareUiSignals {
+                            ready_tags,
+                            prepare_status,
+                            preparing,
+                            preparing_tag,
+                            error,
+                            success,
+                        },
                     );
                     start_task(task_id, label, TaskKind::PrepareImage, tasks_ctx, cb);
                 }

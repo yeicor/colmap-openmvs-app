@@ -56,11 +56,9 @@ fn validate_and_canonicalize_image_path(
 
 pub async fn get_project_images(project_name: String) -> dioxus::Result<Vec<String>> {
     debug!(project_name = %project_name, "Retrieving project images list");
-    validate_project_name(&project_name)?;
     let settings = crate::get_settings().await?;
-    let images_path = Path::new(&settings.projects_folder)
-        .join(&project_name)
-        .join("images");
+    let images_path =
+        crate::project::project_images_path(&project_name, &settings.projects_folder)?;
     debug!(images_path = %images_path.display(), "Resolved images directory path");
 
     let lock = lock_for_image_path(&images_path).await;
@@ -99,11 +97,9 @@ pub async fn get_project_image(
     image_name: String,
 ) -> dioxus::Result<FileStream> {
     debug!(project_name = %project_name, image_name = %image_name, "Retrieving project image");
-    validate_project_name(&project_name)?;
     let settings = crate::get_settings().await?;
-    let images_path = Path::new(&settings.projects_folder)
-        .join(&project_name)
-        .join("images");
+    let images_path =
+        crate::project::project_images_path(&project_name, &settings.projects_folder)?;
     debug!(images_path = %images_path.display(), "Resolved images directory");
 
     let canonical_image = validate_and_canonicalize_image_path(&images_path, &image_name)?;
@@ -126,11 +122,9 @@ pub async fn get_project_image_bytes(
     image_name: String,
 ) -> dioxus::Result<Vec<u8>> {
     debug!(project_name = %project_name, image_name = %image_name, "Retrieving project image bytes");
-    validate_project_name(&project_name)?;
     let settings = crate::get_settings().await?;
-    let images_path = Path::new(&settings.projects_folder)
-        .join(&project_name)
-        .join("images");
+    let images_path =
+        crate::project::project_images_path(&project_name, &settings.projects_folder)?;
     let canonical_image = validate_and_canonicalize_image_path(&images_path, &image_name)?;
     let lock = lock_for_image_path(&canonical_image).await;
     let _guard = lock.lock().await;
@@ -145,12 +139,10 @@ pub async fn add_project_image(
     body: Vec<u8>,
 ) -> dioxus::Result<()> {
     debug!(project_name = %project_name, image_name = %image_name, body_size = body.len(), "Adding image to project");
-    validate_project_name(&project_name)?;
     validate_image_name(&image_name)?;
     let settings = crate::get_settings().await?;
-    let images_path = Path::new(&settings.projects_folder)
-        .join(&project_name)
-        .join("images");
+    let images_path =
+        crate::project::project_images_path(&project_name, &settings.projects_folder)?;
     debug!(images_path = %images_path.display(), "Resolved images directory");
 
     std::fs::create_dir_all(&images_path)
@@ -183,11 +175,9 @@ pub async fn add_project_image(
 
 pub async fn delete_project_image(project_name: String, image_name: String) -> dioxus::Result<()> {
     debug!(project_name = %project_name, image_name = %image_name, "Deleting image from project");
-    validate_project_name(&project_name)?;
     let settings = crate::get_settings().await?;
-    let images_path = Path::new(&settings.projects_folder)
-        .join(&project_name)
-        .join("images");
+    let images_path =
+        crate::project::project_images_path(&project_name, &settings.projects_folder)?;
     debug!(images_path = %images_path.display(), "Resolved images directory");
 
     let canonical_image = validate_and_canonicalize_image_path(&images_path, &image_name)?;
@@ -206,11 +196,9 @@ pub async fn delete_project_image(project_name: String, image_name: String) -> d
 
 pub async fn clear_project_images(project_name: String) -> dioxus::Result<()> {
     debug!(project_name = %project_name, "Clearing all images from project");
-    validate_project_name(&project_name)?;
     let settings = crate::get_settings().await?;
-    let images_path = Path::new(&settings.projects_folder)
-        .join(&project_name)
-        .join("images");
+    let images_path =
+        crate::project::project_images_path(&project_name, &settings.projects_folder)?;
     debug!(images_path = %images_path.display(), "Resolved images directory");
 
     if images_path.exists() {
@@ -234,7 +222,7 @@ pub async fn batch_resize_images(
     max_dimension: u32,
 ) -> dioxus::Result<String> {
     debug!(project_name = %project_name, max_dimension = max_dimension, "Starting batch image resize");
-    validate_project_name(&project_name)?;
+    crate::project::validate_project_name(&project_name)?;
 
     if !(64..=8192).contains(&max_dimension) {
         warn!(max_dimension = max_dimension, "Invalid max dimension value");
@@ -291,7 +279,7 @@ pub async fn download_demo_images(
     source_id: String,
 ) -> dioxus::Result<String> {
     debug!(project_name = %project_name, source_id = %source_id, "Starting demo image download");
-    validate_project_name(&project_name)?;
+    crate::project::validate_project_name(&project_name)?;
 
     let task_id = crate::task_registry::TASK_REGISTRY
         .create_task(TaskKind::DownloadDemo, project_name.clone());
@@ -605,13 +593,6 @@ async fn batch_resize_images_stream(
         }
     }
 
-    Ok(())
-}
-
-fn validate_project_name(name: &str) -> dioxus::Result<()> {
-    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
-        Err(anyhow!("Invalid project name"))?;
-    }
     Ok(())
 }
 

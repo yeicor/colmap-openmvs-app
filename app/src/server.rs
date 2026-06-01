@@ -9,9 +9,6 @@ use colmap_openmvs_api::{
 };
 
 #[cfg(feature = "server")]
-use tracing::{info, warn};
-
-#[cfg(feature = "server")]
 use colmap_openmvs_backend as backend;
 
 #[get("/api/startup")]
@@ -163,26 +160,12 @@ pub async fn get_image_config(image_tag: String) -> Result<ConfigSchema> {
 
 #[get("/api/projects/{project_name}/config")]
 pub async fn load_project_config(project_name: String) -> Result<LoadedProjectConfig> {
-    // Get the project to retrieve its path
-    let project = backend::get_projects()
-        .await?
-        .into_iter()
-        .find(|p| p.name == project_name)
-        .ok_or_else(|| dioxus::prelude::ServerFnError::new("Project not found"))?;
-
-    Ok(backend::load_project_config(project.path).await?)
+    Ok(backend::load_named_project_config(project_name).await?)
 }
 
 #[post("/api/projects/{project_name}/config")]
 pub async fn save_project_config(project_name: String, config: SavedProjectConfig) -> Result<()> {
-    // Get the project to retrieve its path
-    let project = backend::get_projects()
-        .await?
-        .into_iter()
-        .find(|p| p.name == project_name)
-        .ok_or_else(|| dioxus::prelude::ServerFnError::new("Project not found"))?;
-
-    Ok(backend::save_project_config(project.path, config).await?)
+    Ok(backend::save_named_project_config(project_name, config).await?)
 }
 
 // ---------------------------------------------------------------------------

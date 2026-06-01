@@ -5,6 +5,7 @@ use colmap_openmvs_api::{PipelineStageStatus, TaskEvent, TaskKind};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
+use tokio::io::AsyncRead;
 use tracing::{debug, error, info, span, Level};
 
 use crate::{
@@ -52,20 +53,13 @@ pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String>
         .to_string();
     debug!(runtime = %runtime, image_tag = %image_tag, "Using runtime and container image");
 
-    let project_path = {
-        let projects = crate::projects::get_projects()
-            .await
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        projects
-            .into_iter()
-            .find(|p| p.name == project_name)
-            .map(|p| p.path)
-            .ok_or_else(|| {
-                error!("Project not found");
-                anyhow::anyhow!("Project not found: {}", project_name)
-            })?
-    };
-    debug!(project_path = %project_path, "Resolved project path");
+    let project_path = crate::project::resolve_project_path(&project_name)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Project path resolution failed");
+            anyhow::anyhow!("{}", e)
+        })?;
+    debug!(project_path = %project_path.display(), "Resolved project path");
 
     let task_kind = if dry_run {
         TaskKind::DryRunPipeline
@@ -82,7 +76,7 @@ pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String>
             task_id_clone.clone(),
             runtime,
             image_tag,
-            project_path,
+            project_path.to_string_lossy().into_owned(),
             dry_run,
         )
         .await
@@ -178,13 +172,7 @@ async fn run_pipeline_task(
         loop {
             tokio::select! {
                 // ── stdout arm ───────────────────────────────────────────
-                line = async {
-                    if stdout_reader.is_some() && stdout.is_some() {
-                        stdout_reader.as_mut().unwrap().read_line(stdout.as_mut().unwrap()).await
-                    } else {
-                        std::future::pending::<std::io::Result<(Option<String>, bool)>>().await
-                    }
-                } => {
+                line = read_optional_line(&mut stdout_reader, &mut stdout) => {
                     match line {
                         Ok((Some(l), has_more)) => {
                             process_line(
@@ -208,13 +196,7 @@ async fn run_pipeline_task(
                 }
 
                 // ── stderr arm ───────────────────────────────────────────
-                line = async {
-                    if stderr_reader.is_some() && stderr.is_some() {
-                        stderr_reader.as_mut().unwrap().read_line(stderr.as_mut().unwrap()).await
-                    } else {
-                        std::future::pending::<std::io::Result<(Option<String>, bool)>>().await
-                    }
-                } => {
+                line = read_optional_line(&mut stderr_reader, &mut stderr) => {
                     match line {
                         Ok((Some(l), has_more)) => {
                             process_line(
@@ -268,6 +250,16 @@ async fn run_pipeline_task(
     crate::task_registry::publish_event(&task_id, TaskEvent::Completed);
     info!("Pipeline task completed successfully");
     Ok(())
+}
+
+async fn read_optional_line<R: AsyncRead + Unpin>(
+    reader: &mut Option<LineReader>,
+    stream: &mut Option<R>,
+) -> std::io::Result<(Option<String>, bool)> {
+    match (reader.as_mut(), stream.as_mut()) {
+        (Some(reader), Some(stream)) => reader.read_line(stream).await,
+        _ => std::future::pending().await,
+    }
 }
 
 // ---------------------------------------------------------------------------

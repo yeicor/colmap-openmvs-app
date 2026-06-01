@@ -14,23 +14,8 @@ pub async fn get_project_output_for_viewer(
     project_name: String,
     relative_path: String,
 ) -> DioxusResult<Vec<u8>> {
-    let project_path = {
-        let projects = crate::get_projects().await?;
-        projects
-            .into_iter()
-            .find(|p| p.name == project_name)
-            .map(|p| p.path)
-            .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
-    };
-
-    let sanitised = relative_path.trim_start_matches('/');
-    for component in std::path::Path::new(sanitised).components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            return Err(anyhow::anyhow!("Path traversal is not allowed").into());
-        }
-    }
-
-    let full_path = std::path::Path::new(&project_path).join(sanitised);
+    let project_path = crate::project::resolve_project_path(&project_name).await?;
+    let full_path = crate::project::resolve_project_relative_path(&project_path, &relative_path)?;
     if !full_path.exists() {
         return Err(anyhow::anyhow!("Output file not found: {:?}", full_path).into());
     }
@@ -43,22 +28,21 @@ pub async fn get_project_output_for_viewer(
 
     if file_name == "points3d.bin" {
         debug!("Converting points3D.bin → GLB");
-        let bytes = tokio::fs::read(&full_path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to read points3D.bin: {}", e)
-        })?;
+        let bytes = tokio::fs::read(&full_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read points3D.bin: {}", e))?;
         let glb = points3d_bin_to_glb(&bytes)
             .map_err(|e| anyhow::anyhow!("Failed to convert points3D.bin: {}", e))?;
         Ok(glb)
     } else {
         // PLY (or any other supported file)
         debug!("Converting PLY → GLB: {:?}", full_path);
-        let bytes = tokio::fs::read(&full_path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to read output file: {}", e)
-        })?;
+        let bytes = tokio::fs::read(&full_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e))?;
 
         // Check for a companion texture in the same directory
-        let companion_png = if let Some(tex_name) =
-            crate::ply_to_glb::ply_texture_file_name(&bytes)
+        let companion_png = if let Some(tex_name) = crate::ply_to_glb::ply_texture_file_name(&bytes)
         {
             let tex_path = full_path
                 .parent()
@@ -129,19 +113,25 @@ use std::io::Read;
 
 fn read_u8(cursor: &mut std::io::Cursor<&[u8]>) -> anyhow::Result<u8> {
     let mut buf = [0u8; 1];
-    cursor.read_exact(&mut buf).map_err(|e| anyhow::anyhow!("EOF reading u8: {}", e))?;
+    cursor
+        .read_exact(&mut buf)
+        .map_err(|e| anyhow::anyhow!("EOF reading u8: {}", e))?;
     Ok(buf[0])
 }
 
 fn read_u64(cursor: &mut std::io::Cursor<&[u8]>) -> anyhow::Result<u64> {
     let mut buf = [0u8; 8];
-    cursor.read_exact(&mut buf).map_err(|e| anyhow::anyhow!("EOF reading u64: {}", e))?;
+    cursor
+        .read_exact(&mut buf)
+        .map_err(|e| anyhow::anyhow!("EOF reading u64: {}", e))?;
     Ok(u64::from_le_bytes(buf))
 }
 
 fn read_f64(cursor: &mut std::io::Cursor<&[u8]>) -> anyhow::Result<f64> {
     let mut buf = [0u8; 8];
-    cursor.read_exact(&mut buf).map_err(|e| anyhow::anyhow!("EOF reading f64: {}", e))?;
+    cursor
+        .read_exact(&mut buf)
+        .map_err(|e| anyhow::anyhow!("EOF reading f64: {}", e))?;
     Ok(f64::from_le_bytes(buf))
 }
 

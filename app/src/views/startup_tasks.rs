@@ -24,7 +24,7 @@ struct LogEntry {
 #[component]
 pub fn StartupTasks() -> Element {
     let mut task_id = use_signal(|| None::<String>);
-    let mut logs = use_signal(|| VecDeque::<LogEntry>::new());
+    let mut logs = use_signal(VecDeque::<LogEntry>::new);
     let mut task_state = use_signal(|| None::<TaskState>);
     let mut is_completed = use_signal(|| false);
 

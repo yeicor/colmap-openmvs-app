@@ -220,10 +220,10 @@ impl PreparedImage {
 ///
 /// # Example
 /// ```no_run
-/// use colmap_openmvs_backend::runtimes::{RuntimeFactory, Runtime, prepare_progress_channel, PrepareProgress};
+/// use colmap_openmvs_backend::runtimes::{prepare_progress_channel, Runtime, RuntimeFactory};
 ///
 /// # async fn example() -> anyhow::Result<()> {
-/// let rt = RuntimeFactory::proot();
+/// let rt = RuntimeFactory::proot().await;
 /// rt.is_supported()?;
 ///
 /// // Stream prepare progress while awaiting completion

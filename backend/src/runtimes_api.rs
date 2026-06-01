@@ -487,23 +487,9 @@ pub async fn get_project_run_status(project_name: String) -> Result<ProjectRunSt
             let is_dry_run = task_info.kind == TaskKind::DryRunPipeline;
 
             // Try to extract progress from the task's event log
-            let progress = if is_running {
-                if let Some(entry) = TASK_REGISTRY.get_task_entry(&task_info.id) {
-                    let events = entry.events.lock().unwrap();
-                    // Look for the most recent PipelineStageProgress event
-                    events.iter().rev().find_map(|event| {
-                        if let TaskEvent::PipelineStageProgress { progress: p, .. } = event {
-                            Some(p.clone())
-                        } else {
-                            None
-                        }
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let progress = is_running
+                .then(|| TASK_REGISTRY.latest_pipeline_progress(&task_info.id))
+                .flatten();
 
             return Ok(ProjectRunStatus {
                 is_running,

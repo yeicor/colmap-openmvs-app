@@ -3,7 +3,7 @@
 //! Returns the preferred color scheme as seen by the *server* process:
 //!
 //! * `None`         – no preference known; let the browser CSS media query
-//!                    (`prefers-color-scheme`) decide.
+//!   (`prefers-color-scheme`) decide.
 //! * `Some(false)`  – force light mode.
 //! * `Some(true)`   – force dark mode.
 //!

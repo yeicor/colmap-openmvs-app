@@ -672,7 +672,7 @@ impl PRoot {
                 }
             }
             done += 1;
-            if done % 500 == 0 {
+            if done.is_multiple_of(500) {
                 let _ = tx
                     .send(colmap_openmvs_api::PrepareProgress::ExtractingLayer {
                         layer: "Building rootfs skeleton".to_string(),
@@ -1150,7 +1150,7 @@ impl Runtime for PRoot {
             for (cuda_path_k, cuda_path_v) in cuda_paths.iter() {
                 debug!(host = %cuda_path_k, container = %cuda_path_v, "run: adding CUDA mount");
                 cmd.arg("-b")
-                    .arg(&format!("{}:{}", cuda_path_v, cuda_path_v));
+                    .arg(format!("{}:{}", cuda_path_v, cuda_path_v));
             }
         }
 

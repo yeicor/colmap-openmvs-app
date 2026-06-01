@@ -16,8 +16,6 @@ pub mod views;
 use logging::init as init_logging;
 pub use views::{Project, Projects, ProjectsSidebar, SettingsView, StartupTasks};
 
-use crate::server::startup;
-
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
 pub enum Route {

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, RwLock};
 /// Maximum number of events buffered per task (oldest are dropped if exceeded).
 const MAX_EVENTS: usize = 100_000;
 
-pub struct TaskEntry {
+struct TaskEntry {
     /// Task metadata (state, timestamps, etc.)
     pub info: Mutex<TaskInfo>,
     /// Append-only event log.
@@ -148,6 +148,23 @@ impl TaskRegistry {
         Some(info)
     }
 
+    /// Return the latest stage progress event recorded for a task.
+    pub fn latest_pipeline_progress(&self, task_id: &str) -> Option<f32> {
+        let entry = {
+            let tasks = self.tasks.read().unwrap();
+            tasks.get(task_id)?.clone()
+        };
+
+        let events = entry.events.lock().unwrap();
+        events.iter().rev().find_map(|event| {
+            if let TaskEvent::PipelineStageProgress { progress, .. } = event {
+                Some(*progress)
+            } else {
+                None
+            }
+        })
+    }
+
     /// Cancel a running task.
     pub fn cancel_task(&self, task_id: &str) {
         let entry = {
@@ -179,12 +196,6 @@ impl TaskRegistry {
         };
 
         *entry.kill_fn.lock().unwrap() = Some(Box::new(kill_fn));
-    }
-
-    /// Return the `Arc<TaskEntry>` for a task.
-    pub fn get_task_entry(&self, task_id: &str) -> Option<Arc<TaskEntry>> {
-        let tasks = self.tasks.read().unwrap();
-        tasks.get(task_id).cloned()
     }
 }
 

@@ -57,11 +57,10 @@ fn bytes_to_display_url(bytes: &[u8]) -> String {
 /// Release a blob URL created by `bytes_to_display_url`.  Safe to call with
 /// data URLs (they start with `"data:"`, not `"blob:"`) — no-op in that case.
 fn revoke_display_url(url: &str) {
-    if !url.starts_with("blob:") {
-        return;
+    if url.starts_with("blob:") {
+        #[cfg(target_arch = "wasm32")]
+        let _ = web_sys::Url::revoke_object_url(url);
     }
-    #[cfg(target_arch = "wasm32")]
-    let _ = web_sys::Url::revoke_object_url(url);
 }
 
 // ---------------------------------------------------------------------------
@@ -623,9 +622,8 @@ pub fn ImagesTab(project_name: String) -> Element {
                 if let Some(fullscreen_name) = fullscreen_image() {
                     // Reuse the cached Blob / data URL — no extra network request.
                     let cache_entry = img_cache().get(&fullscreen_name).cloned();
-                    let (full_image_url, size_bytes) = cache_entry
-                        .map(|(u, s)| (u, s))
-                        .unwrap_or_else(|| (String::new(), 0));
+                    let (full_image_url, size_bytes) =
+                        cache_entry.unwrap_or_else(|| (String::new(), 0));
                     let size_mb = size_bytes as f64 / 1024.0 / 1024.0;
                     let img_id = format!("fullscreen-img-{}", fullscreen_name);
                     let metadata_id = format!("metadata-fullscreen-{}", fullscreen_name);

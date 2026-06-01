@@ -14,7 +14,7 @@ impl AndroidSettingsValidation {
         #[cfg(not(target_os = "android"))]
         {
             // On non-Android platforms, paths are always valid
-            return Ok(false);
+            Ok(false)
         }
 
         #[cfg(target_os = "android")]
@@ -58,7 +58,7 @@ impl AndroidSettingsValidation {
         #[cfg(not(target_os = "android"))]
         {
             // On non-Android platforms, nothing to repair
-            return Ok(false);
+            Ok(false)
         }
 
         #[cfg(target_os = "android")]

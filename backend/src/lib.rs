@@ -2,7 +2,10 @@
 //! Contains all implementations for server functions with access to heavy native dependencies
 
 mod config;
-pub use config::{get_image_config, load_project_config, save_project_config};
+pub use config::{
+    get_image_config, load_named_project_config, load_project_config, save_named_project_config,
+    save_project_config,
+};
 
 mod line_reader;
 pub use line_reader::LineReader;
@@ -48,7 +51,7 @@ pub use runtimes_api::{
 pub mod runtimes;
 
 pub mod task_registry;
-pub use task_registry::{publish_event, task_registry, TaskEntry, TaskRegistry};
+pub use task_registry::{publish_event, task_registry, TaskRegistry};
 
 mod pipeline;
 pub use pipeline::run_pipeline;
@@ -71,18 +74,10 @@ use tracing::debug;
 /// List output files in a project's work directory.
 /// Scans for *.ply files and known COLMAP output files (points3D.bin, database.db).
 pub async fn list_project_outputs(project_name: String) -> DioxusResult<Vec<OutputFile>> {
-    let project_path = {
-        let projects = get_projects().await?;
-        projects
-            .into_iter()
-            .find(|p| p.name == project_name)
-            .map(|p| p.path)
-            .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
-    };
+    let root = project::resolve_project_path(&project_name).await?;
 
-    debug!("Scanning project outputs from: {}", project_path);
+    debug!("Scanning project outputs from: {}", root.display());
 
-    let root = std::path::PathBuf::from(&project_path);
     let mut outputs: Vec<OutputFile> = Vec::new();
 
     walk_for_outputs(&root, &root, &mut outputs)
@@ -168,23 +163,8 @@ pub async fn get_project_output_bytes(
     project_name: String,
     relative_path: String,
 ) -> DioxusResult<Vec<u8>> {
-    let project_path = {
-        let projects = get_projects().await?;
-        projects
-            .into_iter()
-            .find(|p| p.name == project_name)
-            .map(|p| p.path)
-            .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
-    };
-
-    let sanitized = relative_path.trim_start_matches('/');
-    for component in std::path::Path::new(sanitized).components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            return Err(anyhow::anyhow!("Path traversal is not allowed").into());
-        }
-    }
-
-    let full_path = std::path::Path::new(&project_path).join(sanitized);
+    let project_path = project::resolve_project_path(&project_name).await?;
+    let full_path = project::resolve_project_relative_path(&project_path, &relative_path)?;
     debug!("Reading output file bytes: {}", full_path.display());
     tokio::fs::read(&full_path)
         .await
@@ -196,24 +176,8 @@ pub async fn get_project_output(
     project_name: String,
     relative_path: String,
 ) -> DioxusResult<dioxus::fullstack::FileStream> {
-    let project_path = {
-        let projects = get_projects().await?;
-        projects
-            .into_iter()
-            .find(|p| p.name == project_name)
-            .map(|p| p.path)
-            .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
-    };
-
-    // Sanitize: strip leading slashes and reject path traversal components.
-    let sanitized = relative_path.trim_start_matches('/');
-    for component in std::path::Path::new(sanitized).components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            return Err(anyhow::anyhow!("Path traversal is not allowed").into());
-        }
-    }
-
-    let full_path = std::path::Path::new(&project_path).join(sanitized);
+    let project_path = project::resolve_project_path(&project_name).await?;
+    let full_path = project::resolve_project_relative_path(&project_path, &relative_path)?;
     debug!("Reading output file from: {}", full_path.display());
     dioxus::fullstack::FileStream::from_path(full_path)
         .await
@@ -225,24 +189,8 @@ pub async fn delete_project_output(
     project_name: String,
     relative_path: String,
 ) -> DioxusResult<()> {
-    let project_path = {
-        let projects = get_projects().await?;
-        projects
-            .into_iter()
-            .find(|p| p.name == project_name)
-            .map(|p| p.path)
-            .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
-    };
-
-    // Sanitize: strip leading slashes and reject path traversal components.
-    let sanitized = relative_path.trim_start_matches('/');
-    for component in std::path::Path::new(sanitized).components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            return Err(anyhow::anyhow!("Path traversal is not allowed").into());
-        }
-    }
-
-    let full_path = std::path::Path::new(&project_path).join(sanitized);
+    let project_path = project::resolve_project_path(&project_name).await?;
+    let full_path = project::resolve_project_relative_path(&project_path, &relative_path)?;
 
     debug!("Deleting output file: {}", full_path.display());
 
@@ -263,16 +211,8 @@ pub async fn delete_project_output(
 /// Delete all output files/directories in a project, preserving only the
 /// `images/` input directory and the `config.sh` configuration file.
 pub async fn clear_project_outputs(project_name: String) -> DioxusResult<()> {
-    let project_path = {
-        let projects = get_projects().await?;
-        projects
-            .into_iter()
-            .find(|p| p.name == project_name)
-            .map(|p| p.path)
-            .ok_or_else(|| anyhow::anyhow!("Project not found: {}", project_name))?
-    };
-
-    let root = std::path::Path::new(&project_path);
+    let project_path = project::resolve_project_path(&project_name).await?;
+    let root = project_path.as_path();
     let entries = std::fs::read_dir(root)
         .map_err(|e| anyhow::anyhow!("Failed to read project directory: {}", e))?;
 
