@@ -1,3 +1,4 @@
+use crate::mycomponents::{Banner, BannerType};
 use crate::server::{
     clear_project_outputs, delete_project_output, get_project_output_bytes,
     get_project_output_for_viewer, list_project_outputs, save_output_as,
@@ -304,6 +305,7 @@ pub fn OutputsTab(project_name: String) -> Element {
 
     let mut refresh_counter = use_signal(|| 0u32);
     let mut error_msg = use_signal(String::new);
+    let mut info_msg = use_signal(String::new);
     let mut viewing = use_signal(|| Option::<String>::None);
     let mut confirming_delete = use_signal(|| Option::<String>::None);
     let mut deleting_path = use_signal(|| Option::<String>::None);
@@ -405,17 +407,16 @@ pub fn OutputsTab(project_name: String) -> Element {
                 }
             }
 
-            // ── Error banner ──────────────────────────────────────────────
-            if !error_msg().is_empty() {
-                div {
-                    class: "outputs-error-banner",
-                    span { "{error_msg}" }
-                    button {
-                        class: "outputs-error-dismiss",
-                        onclick: move |_| error_msg.set(String::new()),
-                        "✕"
-                    }
-                }
+            // ── Banners ──────────────────────────────────────────────────
+            Banner {
+                message: error_msg(),
+                banner_type: BannerType::Error,
+                on_close: move |_| error_msg.set(String::new()),
+            }
+            Banner {
+                message: info_msg(),
+                banner_type: BannerType::Info,
+                on_close: move |_| info_msg.set(String::new()),
             }
 
             // ── File tree ─────────────────────────────────────────────────
@@ -551,31 +552,35 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                 let pn = pn_dl.clone();
                                                                 let rp = rp_dl.clone();
                                                                 let fname = fname_dl.clone();
-                                                                let mut err = error_msg;
-                                                                spawn(async move {
-                                                                    #[cfg(target_arch = "wasm32")]
-                                                                    {
-                                                                        // Web: fetch bytes then trigger browser Save As via Blob URL
-                                                                        match get_project_output_bytes(pn, rp).await {
-                                                                            Ok(bytes) => trigger_download(&fname, bytes).await,
-                                                                            Err(e) => {
-                                                                                error!(error = %e, "Download failed");
-                                                                                err.set(format!("Download failed: {e}"));
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                    #[cfg(not(target_arch = "wasm32"))]
-                                                                    {
-                                                                        // Native: open save dialog on the server via rrfd
-                                                                        match crate::server::save_output_as(pn, rp).await {
-                                                                            Ok(()) => info!(file = %fname, "Saved via native dialog"),
-                                                                            Err(e) => {
-                                                                                error!(error = %e, "Save dialog failed");
-                                                                                err.set(format!("Save failed: {e}"));
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                });
+                                                                 let mut err = error_msg;
+                                                                 let mut info = info_msg;
+                                                                 spawn(async move {
+                                                                     #[cfg(target_arch = "wasm32")]
+                                                                     {
+                                                                         // Web: fetch bytes then trigger browser Save As via Blob URL
+                                                                         match get_project_output_bytes(pn, rp).await {
+                                                                             Ok(bytes) => trigger_download(&fname, bytes).await,
+                                                                             Err(e) => {
+                                                                                 error!(error = %e, "Download failed");
+                                                                                 err.set(format!("Download failed: {e}"));
+                                                                             }
+                                                                         }
+                                                                     }
+                                                                     #[cfg(not(target_arch = "wasm32"))]
+                                                                     {
+                                                                         // Native: save via server (desktop dialog or Android direct write)
+                                                                         match crate::server::save_output_as(pn, rp).await {
+                                                                             Ok(msg) => {
+                                                                                 info!(file = %fname, "Saved");
+                                                                                 info.set(msg);
+                                                                             }
+                                                                             Err(e) => {
+                                                                                 error!(error = %e, "Save failed");
+                                                                                 err.set(format!("Save failed: {e}"));
+                                                                             }
+                                                                         }
+                                                                     }
+                                                                 });
                                                             },
                                                             Icon { icon: BsDownload }
                                                             span { class: "btn-label", " Download" }

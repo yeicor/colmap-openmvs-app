@@ -1,0 +1,32 @@
+// Initialize Android runtime environment on first server startup
+#[cfg(target_os = "android")]
+static ANDROID_STARTUP: std::sync::OnceLock<std::sync::Arc<tokio::sync::Mutex<bool>>> =
+    std::sync::OnceLock::new();
+
+pub async fn on_frontend_started() -> dioxus::Result<()> {
+    #[cfg(target_os = "android")]
+    {
+        // TODO: Would be best to run this only on backend startup, not on frontend startup.
+        use tracing::{debug, info, warn};
+
+        debug!("- Initializing android runtime");
+        let started =
+            ANDROID_STARTUP.get_or_init(|| std::sync::Arc::new(tokio::sync::Mutex::new(false)));
+
+        let mut done = started.lock().await;
+        if !*done {
+            // First repair any invalid settings paths from a previous app install
+            if let Err(e) = crate::repair_android_settings().await {
+                warn!(error = %e, "Android startup: settings repair failed or skipped");
+            }
+            // Then set up the runtime with the repaired/validated settings
+            match crate::setup_android_runtime().await {
+                Ok(()) => info!("Android startup: completed successfully"),
+                Err(e) => warn!(error = %e, "Android startup: failed or skipped"),
+            }
+            *done = true;
+        }
+    }
+
+    Ok(())
+}

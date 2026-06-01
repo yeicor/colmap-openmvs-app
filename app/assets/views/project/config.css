@@ -398,7 +398,7 @@
     font-size: 0.875rem;
     font-family: inherit;
     background-color: var(--primary-color-3);
-    color: var(--primary-color);
+    color: var(--secondary-color);
     border: 1px solid var(--primary-color-6);
     border-radius: 0.25rem;
     transition: all 0.2s ease;

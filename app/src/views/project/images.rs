@@ -11,8 +11,8 @@ use colmap_openmvs_api::TaskState;
 use dioxus::document::eval;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
-    BsArrowsFullscreen, BsBoxArrowUpRight, BsCheckAll, BsCloudDownload, BsImage, BsStar,
-    BsTextareaResize, BsTrash3, BsUpload, BsXCircle,
+    BsArrowsFullscreen, BsBoxArrowUpRight, BsCheckAll, BsCloudDownload, BsGrid, BsImage, BsStar,
+    BsTextareaResize, BsTrash3, BsUpload, BsViewList, BsXCircle,
 };
 use dioxus_free_icons::Icon;
 use std::collections::HashMap;
@@ -110,7 +110,7 @@ fn build_demo_cb(
                         image_paths.set(paths);
                         list_version += 1;
                         info_message.set(Some(format!(
-                            "Demo ready ({} images). You may want to optimize them using the 'Optimize Images' button.",
+                            "Demo ready ({} images). You may want to optimize them using the 'Resize Images' button.",
                             n
                         )));
                     }
@@ -131,6 +131,7 @@ fn build_resize_cb(
     project_name: String,
     mut image_paths: Signal<Vec<String>>,
     mut list_version: Signal<u64>,
+    mut img_cache: Signal<HashMap<String, (String, usize)>>,
     mut info_message: Signal<Option<String>>,
     mut error_message: Signal<Option<String>>,
     mut resize_loading: Signal<bool>,
@@ -156,6 +157,10 @@ fn build_resize_cb(
             let p = project_name.clone();
             spawn(async move {
                 if let Ok(paths) = crate::server::get_project_images(p).await {
+                    // Evict all cached URLs since every image's byte content changed.
+                    for (_, (url, _)) in img_cache.write().drain() {
+                        revoke_display_url(&url);
+                    }
                     image_paths.set(paths);
                     list_version += 1;
                 }
@@ -192,6 +197,7 @@ pub fn ImagesTab(project_name: String) -> Element {
     let mut info_message = use_signal::<Option<String>>(|| None);
     let mut fullscreen_image = use_signal::<Option<String>>(|| None);
     let mut uploading = use_signal(|| false);
+    let mut show_images = use_signal(|| cfg!(not(target_os = "android")));
 
     // ── Load image list on mount + reconnect any running task ────────────
     let project_name_clone = project_name.clone();
@@ -210,6 +216,7 @@ pub fn ImagesTab(project_name: String) -> Element {
             project_name.clone(),
             image_paths,
             list_version,
+            img_cache,
             info_message,
             error_message,
             resize_loading,
@@ -288,30 +295,42 @@ pub fn ImagesTab(project_name: String) -> Element {
     });
 
     // ── Blob-URL cache management ─────────────────────────────────────────
-    // Reacts to both `image_paths` and `list_version`.  Any change (add,
-    // delete, resize, re-upload of an existing file) revokes all existing
-    // Blob URLs and re-fetches the current image set through the Dioxus
-    // server-function mechanism.  Because the framework owns the URL routing
-    // this works identically for every deployment topology: bundled desktop,
-    // Android, web pointing to a remote backend via set_server_url, etc.
+    // Incrementally updates the cache: removes entries for deleted images,
+    // fetches display URLs only for newly added ones, and leaves existing
+    // entries untouched.  Callers that modify byte content (e.g. resize)
+    // must clear `img_cache` before bumping `image_paths` to force a re-fetch.
     let project_name_cache = project_name.clone();
     use_effect(move || {
-        let paths = image_paths(); // reactive: re-runs when list changes
-        let version = list_version(); // reactive: re-runs when content changes
+        let paths = image_paths();
+        let version = list_version();
 
-        // Revoke all existing Blob URLs synchronously before spawning the fetch.
-        for (_, (url, _)) in img_cache.write().drain() {
-            revoke_display_url(&url);
-        }
+        let mut cache = img_cache.write();
 
-        if paths.is_empty() {
+        // Evict entries for images no longer in the project.
+        cache.retain(|name, (url, _)| {
+            if !paths.contains(name) {
+                revoke_display_url(url);
+                false
+            } else {
+                true
+            }
+        });
+
+        // Only fetch images that aren't already cached.
+        let needs_fetch: Vec<String> = paths
+            .iter()
+            .filter(|p| !cache.contains_key(*p))
+            .cloned()
+            .collect();
+        drop(cache);
+
+        if needs_fetch.is_empty() {
             return;
         }
 
         let project = project_name_cache.clone();
         spawn(async move {
-            for name in paths {
-                // Abort if a newer mutation superseded this fetch run.
+            for name in needs_fetch {
                 if list_version() != version {
                     break;
                 }
@@ -435,6 +454,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                 project_name.clone(),
                 image_paths,
                 list_version,
+                img_cache,
                 info_message,
                 error_message,
                 resize_loading,
@@ -677,11 +697,17 @@ pub fn ImagesTab(project_name: String) -> Element {
                         onclick: {
                             let project_name = project_name.clone();
                             move |_| {
+                                // Temporarily hide thumbnails before opening the native
+                                // file-picker — on Android the app may go to background
+                                // and rendering many <img> elements can trigger OOM.
+                                let was_showing = show_images();
+                                show_images.set(false);
                                 uploading.set(true);
                                 error_message.set(None);
                                 let pn = project_name.clone();
                                 spawn(async move {
-                                    match crate::server::pick_and_import_images(pn.clone()).await {
+                                    let result = crate::server::pick_and_import_images(pn.clone()).await;
+                                    match result {
                                         Ok(imported) if imported.is_empty() => {
                                             // User cancelled — no error
                                         }
@@ -698,6 +724,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                                         }
                                     }
                                     uploading.set(false);
+                                    show_images.set(was_showing);
                                 });
                             }
                         },
@@ -727,13 +754,13 @@ pub fn ImagesTab(project_name: String) -> Element {
                             class: "btn btn-secondary",
                             onclick: on_open_resize_dialog,
                             disabled: resize_loading() || uploading() || demo_loading(),
-                            title: "Optimize ALL images by resizing to a maximum dimension",
+                            title: "Resize ALL images by resizing to a maximum dimension",
                             Icon { icon: BsTextareaResize }
                             span {
                                 if resize_loading() {
-                                    "Optimizing..."
+                                    "Resizing..."
                                 } else {
-                                    "Optimize Images"
+                                    "Resize Images"
                                 }
                             }
                         }
@@ -742,6 +769,19 @@ pub fn ImagesTab(project_name: String) -> Element {
 
                 div {
                     class: "toolbar-group",
+
+                    button {
+                        class: "btn btn-tertiary view-mode-toggle",
+                        onclick: move |_| show_images.set(!show_images()),
+                        title: if show_images() { "Switch to compact list view" } else { "Switch to image gallery" },
+                        if show_images() {
+                            Icon { icon: BsViewList }
+                            span { "List" }
+                        } else {
+                            Icon { icon: BsGrid }
+                            span { "Gallery" }
+                        }
+                    }
 
                     if has_images {
                         button {
@@ -783,94 +823,141 @@ pub fn ImagesTab(project_name: String) -> Element {
                 if has_images {
                     div {
                         class: "btn images-info",
-                        "{num_images} " Icon { icon: BsImage }  // TODO: better icon and pluralization
+                        "{num_images} " Icon { icon: BsImage }
                     }
                 }
             }
 
             if has_images {
-                div {
-                    class: "image-gallery",
-                    {
-                        let paths = image_paths();
-                        let selected = selected_images();
-                        let cache = img_cache();
-                        let mut elements = Vec::new();
-                        for image_name in paths.into_iter() {
-                            let is_selected = selected.contains(&image_name);
-                            // Blob / data URL from the cache.  Shows nothing until the
-                            // background fetch completes — the img element is simply not
-                            // rendered, keeping the tile visible as a loading placeholder.
-                            let Some((image_url, size_bytes)) = cache.get(&image_name).cloned()
-                                else { continue; };
-                            let size_mb = size_bytes as f64 / 1024.0 / 1024.0;
-                            // Safe ID (avoid special chars from file names).
-                            let safe_image_name = urlencoding::encode(&image_name);
-                            let img_id = format!("thumbnail-{}", safe_image_name);
-                            let metadata_id = format!("metadata-{}", safe_image_name);
-                            let image_name_for_checkbox = image_name.clone();
-                            let image_name_for_fullscreen = image_name.clone();
-                            let image_name_for_img = image_name.clone();
-                            elements.push(rsx! {
-                                div {
-                                    class: if is_selected { "image-item selected" } else { "image-item" },
-
+                if show_images() {
+                    div {
+                        class: "image-gallery",
+                        {
+                            let paths = image_paths();
+                            let selected = selected_images();
+                            let cache = img_cache();
+                            let mut elements = Vec::new();
+                            for image_name in paths.into_iter() {
+                                let is_selected = selected.contains(&image_name);
+                                // Blob / data URL from the cache.  Shows nothing until the
+                                // background fetch completes — the img element is simply not
+                                // rendered, keeping the tile visible as a loading placeholder.
+                                let Some((image_url, size_bytes)) = cache.get(&image_name).cloned()
+                                    else { continue; };
+                                let size_mb = size_bytes as f64 / 1024.0 / 1024.0;
+                                // Safe ID (avoid special chars from file names).
+                                let safe_image_name = urlencoding::encode(&image_name);
+                                let img_id = format!("thumbnail-{}", safe_image_name);
+                                let metadata_id = format!("metadata-{}", safe_image_name);
+                                let image_name_for_checkbox = image_name.clone();
+                                let image_name_for_fullscreen = image_name.clone();
+                                let image_name_for_img = image_name.clone();
+                                elements.push(rsx! {
                                     div {
-                                        class: "image-checkbox",
-                                        input {
-                                            r#type: "checkbox",
-                                            checked: is_selected,
-                                            onchange: move |_| toggle_select(image_name_for_checkbox.clone()),
-                                            id: format!("checkbox-{}", safe_image_name),
-                                        }
-                                    }
+                                        key: "{image_name}",
+                                        class: if is_selected { "image-item selected" } else { "image-item" },
 
-                                    button {
-                                        class: "image-fullscreen-btn",
-                                        title: "View fullscreen",
-                                        onclick: move |_| fullscreen_image.set(Some(image_name_for_fullscreen.clone())),
-                                        Icon { icon: BsArrowsFullscreen }
-                                    }
-
-                                    div {
-                                        class: "image-info-overlay",
                                         div {
-                                            class: "image-name",
-                                            div {
-                                                class: "image-metadata",
-                                                id: metadata_id.clone(),
-                                                "Loading..."
+                                            class: "image-checkbox",
+                                            input {
+                                                r#type: "checkbox",
+                                                checked: is_selected,
+                                                onchange: move |_| toggle_select(image_name_for_checkbox.clone()),
+                                                id: format!("checkbox-{}", safe_image_name),
                                             }
-                                            "{image_name}"
+                                        }
+
+                                        button {
+                                            class: "image-fullscreen-btn",
+                                            title: "View fullscreen",
+                                            onclick: move |_| fullscreen_image.set(Some(image_name_for_fullscreen.clone())),
+                                            Icon { icon: BsArrowsFullscreen }
+                                        }
+
+                                        div {
+                                            class: "image-info-overlay",
+                                            div {
+                                                class: "image-name",
+                                                div {
+                                                    class: "image-metadata",
+                                                    id: metadata_id.clone(),
+                                                    "Loading..."
+                                                }
+                                                "{image_name}"
+                                            }
+                                        }
+
+                                        img {
+                                            src: image_url.clone(),
+                                            alt: image_name.clone(),
+                                            id: img_id.clone(),
+                                            onclick: move |_| toggle_select(image_name_for_img.clone()),
+                                            class: "thumbnail",
+                                            onload: move |_| {
+                                                // Size is already known; read only dimensions from the DOM.
+                                                let js = format!(
+                                                    r#"const img = document.getElementById('{id}');
+                                                       const meta = document.getElementById('{mid}');
+                                                       if (img && meta) {{
+                                                         meta.innerHTML = img.naturalWidth + 'x' + img.naturalHeight
+                                                           + '<br/>{sz:.3} MB';
+                                                       }}"#,
+                                                    id = img_id,
+                                                    mid = metadata_id,
+                                                    sz = size_mb,
+                                                );
+                                                eval(&js);
+                                            }
                                         }
                                     }
-
-                                    img {
-                                        src: image_url.clone(),
-                                        alt: image_name.clone(),
-                                        id: img_id.clone(),
-                                        onclick: move |_| toggle_select(image_name_for_img.clone()),
-                                        class: "thumbnail",
-                                        onload: move |_| {
-                                            // Size is already known; read only dimensions from the DOM.
-                                            let js = format!(
-                                                r#"const img = document.getElementById('{id}');
-                                                   const meta = document.getElementById('{mid}');
-                                                   if (img && meta) {{
-                                                     meta.innerHTML = img.naturalWidth + 'x' + img.naturalHeight
-                                                       + '<br/>{sz:.3} MB';
-                                                   }}"#,
-                                                id = img_id,
-                                                mid = metadata_id,
-                                                sz = size_mb,
-                                            );
-                                            eval(&js);
+                                });
+                            }
+                            rsx! { for element in elements { {element} } }
+                        }
+                    }
+                } else {
+                    div {
+                        class: "image-list-compact",
+                        for image_name in image_paths() {
+                            div {
+                                key: "{image_name}",
+                                class: if selected_images().contains(&image_name) { "image-list-item selected" } else { "image-list-item" },
+                                input {
+                                    r#type: "checkbox",
+                                    checked: selected_images().contains(&image_name),
+                                    onchange: {
+                                        let name = image_name.clone();
+                                        move |_| toggle_select(name.clone())
+                                    },
+                                }
+                                span {
+                                    class: "item-name",
+                                    onclick: {
+                                        let name = image_name.clone();
+                                        move |_| fullscreen_image.set(Some(name.clone()))
+                                    },
+                                    "{image_name}"
+                                }
+                                button {
+                                    class: "list-fullscreen-btn",
+                                    title: "View fullscreen",
+                                    onclick: {
+                                        let name = image_name.clone();
+                                        move |_| fullscreen_image.set(Some(name.clone()))
+                                    },
+                                    Icon { icon: BsArrowsFullscreen }
+                                }
+                                span { class: "item-size",
+                                    {
+                                        let sz = img_cache().get(&image_name).map(|(_, s)| *s);
+                                        match sz {
+                                            Some(s) => format!("{:.2} MB", s as f64 / 1048576.0),
+                                            None => String::new(),
                                         }
                                     }
                                 }
-                            });
+                            }
                         }
-                        rsx! { for element in elements { {element} } }
                     }
                 }
 
@@ -889,7 +976,7 @@ pub fn ImagesTab(project_name: String) -> Element {
             AlertDialogRoot {
                 open: resize_dialog_open(),
                 AlertDialogContent {
-                    AlertDialogTitle { "Optimize ALL Images" }
+                    AlertDialogTitle { "Resize ALL Images" }
                     div {
                         class: "resize-dialog-content",
                         p { "Maximum dimension (in pixels):" }
@@ -916,7 +1003,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                     AlertDialogActions {
                         AlertDialogAction {
                             on_click: on_confirm_resize,
-                            "Optimize"
+                            "Resize"
                         }
                         AlertDialogCancel {
                             on_click: move |_| resize_dialog_open.set(false),

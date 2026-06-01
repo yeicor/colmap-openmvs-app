@@ -7,7 +7,9 @@ pub use config::{get_image_config, load_project_config, save_project_config};
 mod line_reader;
 pub use line_reader::LineReader;
 
+#[cfg(target_os = "android")]
 mod android_startup;
+#[cfg(target_os = "android")]
 pub use android_startup::setup_android_runtime;
 
 mod android_settings_validation;
@@ -18,6 +20,15 @@ pub use project::{
     add_project_image, batch_resize_images, clear_project_images, delete_project_image,
     download_demo_images, get_project_image, get_project_image_bytes, get_project_images,
 };
+
+mod files;
+pub use files::{
+    init as init_files, pick_and_import_images, pick_projects_folder, pick_settings_file,
+    save_output_as,
+};
+
+mod init;
+pub use init::on_frontend_started;
 
 mod projects;
 pub use projects::{create_project, delete_project, get_projects, rename_project};
@@ -44,9 +55,6 @@ pub use pipeline::run_pipeline;
 
 mod theme;
 pub use theme::get_dark_mode;
-
-mod files;
-pub use files::{pick_and_import_images, pick_projects_folder, pick_settings_file, save_output_as};
 
 mod process;
 pub use process::kill_process_tree;

@@ -76,17 +76,6 @@ if [ ! -f "$GRADLE_PROJECT/gradlew" ]; then
 fi
 
 # =============================================================================
-# STEP 1b — Overlay custom Android sources (android/ at workspace root)
-# =============================================================================
-ANDROID_OVERLAY="$SCRIPT_DIR/android"
-if [ -d "$ANDROID_OVERLAY" ]; then
-    echo ""
-    echo "─── Step 1b: copying Android overlay ───────────────────────────────"
-    cp -r "$ANDROID_OVERLAY/"* "$GRADLE_PROJECT/"
-    echo "Android overlay applied."
-fi
-
-# =============================================================================
 # STEP 2 — Download proot (Termux APT) if not cached
 # =============================================================================
 if [ "$SKIP_EMBED" -eq 0 ]; then
@@ -424,20 +413,6 @@ fi
 # Note: eruda and three.js are vendored into app/assets/lib/ automatically by
 # Cargo's build.rs (app/build.rs) during the `dx build` step above. No extra
 # download step is needed here.
-
-# =============================================================================
-# STEP 6.5 — Copy custom Kotlin sources (e.g. file-picker MainActivity.kt)
-# =============================================================================
-echo ""
-echo "─── Step 6.5: Copy custom Kotlin sources ───────────────────────────"
-ANDROID_GEN_KT="$GRADLE_PROJECT/app/src/main/kotlin/dev/dioxus/main"
-if [ -d "android/app/src/main/kotlin/dev/dioxus/main" ]; then
-    mkdir -p "$ANDROID_GEN_KT"
-    cp android/app/src/main/kotlin/dev/dioxus/main/*.kt "$ANDROID_GEN_KT/"
-    echo "Copied custom Kotlin files to $ANDROID_GEN_KT"
-else
-    echo "No custom Kotlin sources found in android/app/src/main/kotlin/dev/dioxus/main — skipping."
-fi
 
 # =============================================================================
 # STEP 7 — Rebuild APK with Gradle

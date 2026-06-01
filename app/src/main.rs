@@ -16,6 +16,8 @@ pub mod views;
 use logging::init as init_logging;
 pub use views::{Project, Projects, ProjectsSidebar, SettingsView, StartupTasks};
 
+use crate::server::startup;
+
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
 pub enum Route {
@@ -52,6 +54,12 @@ pub fn App() -> Element {
 
     use crate::task_manager::{TasksCtx, TasksState};
     use_context_provider(|| Signal::new(TasksState::default()) as TasksCtx);
+
+    use_future(move || async move {
+        if let Err(e) = server::startup().await {
+            tracing::error!(error = ?e, "Server startup failed");
+        }
+    });
 
     // Fetch the server-side color-scheme preference once on startup.
     // On Android the WebView may not propagate `prefers-color-scheme` CSS media
@@ -97,6 +105,12 @@ fn main() {
         let leaked: &'static str = Box::leak(backend_url_str.clone().into_boxed_str());
         dioxus::fullstack::set_server_url(leaked);
     }
+    info!(
+        "Backend URL resolved to '{}'",
+        backend_url::BACKEND_URL
+            .get()
+            .unwrap_or(&"<empty>".to_string())
+    );
 
     info!("Starting colmap-openmvs-app client");
     dioxus::launch(App);

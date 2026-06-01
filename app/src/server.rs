@@ -14,35 +14,13 @@ use tracing::{info, warn};
 #[cfg(feature = "server")]
 use colmap_openmvs_backend as backend;
 
-// Initialize Android runtime environment on first server startup
-#[cfg(feature = "server")]
-static ANDROID_STARTUP: std::sync::OnceLock<std::sync::Arc<tokio::sync::Mutex<bool>>> =
-    std::sync::OnceLock::new();
-
-#[cfg(feature = "server")]
-async fn ensure_android_startup() {
-    let started =
-        ANDROID_STARTUP.get_or_init(|| std::sync::Arc::new(tokio::sync::Mutex::new(false)));
-
-    let mut done = started.lock().await;
-    if !*done {
-        // First repair any invalid settings paths from a previous app install
-        if let Err(e) = backend::repair_android_settings().await {
-            warn!(error = %e, "Android startup: settings repair failed or skipped");
-        }
-        // Then set up the runtime with the repaired/validated settings
-        match backend::setup_android_runtime().await {
-            Ok(()) => info!("Android startup: completed successfully"),
-            Err(e) => warn!(error = %e, "Android startup: failed or skipped"),
-        }
-        *done = true;
-    }
+#[get("/api/startup")]
+pub async fn startup() -> Result<()> {
+    backend::on_frontend_started().await
 }
 
 #[get("/api/projects")]
 pub async fn get_projects() -> Result<Vec<Project>> {
-    #[cfg(feature = "server")]
-    ensure_android_startup().await;
     backend::get_projects().await
 }
 
@@ -126,8 +104,6 @@ pub async fn download_demo_images(project_name: String, source_id: String) -> Re
 
 #[get("/api/runtimes/proot/info")]
 pub async fn get_runtime_info() -> Result<RuntimeInfo> {
-    #[cfg(feature = "server")]
-    ensure_android_startup().await;
     backend::get_runtime_info().await
 }
 
@@ -148,8 +124,6 @@ pub async fn delete_runtime_binary() -> Result<()> {
 
 #[get("/api/runtimes/proot/images")]
 pub async fn list_runtime_images() -> Result<Vec<PreparedImageInfo>> {
-    #[cfg(feature = "server")]
-    ensure_android_startup().await;
     backend::list_runtime_images().await
 }
 
@@ -165,8 +139,6 @@ pub async fn remove_runtime_image(image_tag: String) -> Result<()> {
 
 #[get("/api/runtimes/proot/images/available-tags")]
 pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
-    #[cfg(feature = "server")]
-    ensure_android_startup().await;
     backend::list_available_image_tags().await
 }
 
@@ -271,8 +243,6 @@ pub async fn get_project_run_status(project_name: String) -> Result<ProjectRunSt
 
 #[get("/api/runtimes/docker/info")]
 pub async fn get_docker_runtime_info() -> Result<RuntimeInfo> {
-    #[cfg(feature = "server")]
-    ensure_android_startup().await;
     backend::get_docker_runtime_info().await
 }
 
@@ -368,11 +338,11 @@ pub async fn pick_settings_file() -> Result<String> {
     backend::pick_settings_file().await
 }
 
-/// Open a native save-file dialog on the server and write the output file to
-/// the user-chosen location.  Used by the Outputs tab on native platforms.
-/// On web/WASM the client uses the browser Blob-URL download instead.
+/// Save an output file to disk.  On desktop opens a save-dialog; on Android
+/// writes directly to `/sdcard/Download/`.  Returns a human-readable
+/// confirmation/success message.
 #[post("/api/projects/{project_name}/outputs/save-as")]
-pub async fn save_output_as(project_name: String, relative_path: String) -> Result<()> {
+pub async fn save_output_as(project_name: String, relative_path: String) -> Result<String> {
     backend::save_output_as(project_name, relative_path).await
 }
 

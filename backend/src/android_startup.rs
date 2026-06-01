@@ -11,9 +11,7 @@
 
 use std::collections::HashMap;
 
-#[cfg(target_os = "android")]
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "android")]
 use tracing::{debug, info, warn};
 
 /// Set up the Android runtime environment for PRoot and the embedded rootfs.
@@ -26,7 +24,6 @@ use tracing::{debug, info, warn};
 /// 4. Recreates symlinks for directory/file aliases from the manifest
 ///
 /// This is idempotent and safe to call multiple times.
-#[cfg(target_os = "android")]
 pub async fn setup_android_runtime() -> anyhow::Result<()> {
     info!("Android startup: initializing PRoot runtime environment");
 
@@ -142,7 +139,11 @@ pub async fn setup_android_runtime() -> anyhow::Result<()> {
                 // If executable, chmod the symlink to 0755
                 if file_info.executable {
                     use std::os::unix::fs::PermissionsExt;
-                    let _ = tokio::fs::set_permissions(&dest_path, std::fs::Permissions::from_mode(0o755)).await;
+                    let _ = tokio::fs::set_permissions(
+                        &dest_path,
+                        std::fs::Permissions::from_mode(0o755),
+                    )
+                    .await;
                 }
                 if symlink_count % 100 == 0 {
                     debug!(
@@ -244,7 +245,6 @@ pub async fn setup_android_runtime() -> anyhow::Result<()> {
 ///
 /// Checks up to 5 file entries from the manifest; if any symlink's target
 /// does not exist the rootfs is considered invalid and must be rebuilt.
-#[cfg(target_os = "android")]
 async fn verify_rootfs_symlinks(rootfs_dir: &Path, manifest: &EmbeddedManifest) -> bool {
     let check_count = manifest.files.len().min(5);
     let mut checked = 0usize;
@@ -264,12 +264,6 @@ async fn verify_rootfs_symlinks(rootfs_dir: &Path, manifest: &EmbeddedManifest) 
         }
     }
     true
-}
-
-/// No-op on non-Android platforms.
-#[cfg(not(target_os = "android"))]
-pub async fn setup_android_runtime() -> anyhow::Result<()> {
-    Ok(())
 }
 
 #[allow(dead_code)]

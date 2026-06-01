@@ -49,42 +49,8 @@
 }
 
 /* ============================================================================
-   Error banner
+   Banners (error / info) — styled by shared Banner component
    ============================================================================ */
-
-.outputs-error-banner {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.35rem 0.6rem;
-    background: var(--primary-error-color);
-    color: var(--secondary-error-color);
-    border: 1px solid var(--secondary-error-color);
-    border-radius: 0.3rem;
-    font-size: 0.82rem;
-    flex-shrink: 0;
-}
-
-.outputs-error-banner span {
-    flex: 1;
-}
-
-.outputs-error-dismiss {
-    background: transparent;
-    border: none;
-    color: var(--secondary-error-color);
-    cursor: pointer;
-    font-size: 0.95rem;
-    padding: 0.05rem 0.25rem;
-    border-radius: 0.2rem;
-    line-height: 1;
-    flex-shrink: 0;
-    transition: background 0.12s ease;
-}
-
-.outputs-error-dismiss:hover {
-    background: color-mix(in srgb, var(--secondary-error-color) 20%, transparent);
-}
 
 /* ============================================================================
    Placeholder (loading / empty / error)

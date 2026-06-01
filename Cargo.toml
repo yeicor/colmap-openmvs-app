@@ -1,5 +1,5 @@
 [workspace]
-members = ["app", "backend", "api", "rrfd"]
+members = ["app", "backend", "api"]
 default-members = ["app"]
 resolver = "2"
 
