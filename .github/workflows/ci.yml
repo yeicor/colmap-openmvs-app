@@ -98,7 +98,10 @@ jobs:
           set -euo pipefail
           mkdir -p artifact_out
           echo "📂 Scanning files..."
-          mapfile -t FILES < <(find target -type f ${{ matrix.artifact-find }} || true)
+          FILES=()
+          while IFS= read -r f; do
+            FILES+=("$f")
+          done < <(find target -type f ${{ matrix.artifact-find }} || true)
           echo "📊 Match summary: ${#FILES[@]} file(s)"
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "❌ No artifacts found."
@@ -279,3 +282,19 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  success: # Meta job that always runs and serves as a simple success signal for the entire workflow
+    needs: [build-and-test, deploy-docker] # May not always run: deploy-pages, deploy-android, deploy-release
+    if: "!cancelled()"
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          all_needs=(echo "${{ toJson(needs) }}" | jq -r 'keys[]')
+          for job in $all_needs; do
+            echo "$job: ${needs[$job].result}"
+            if [ "${needs[$job].result}" != "success" ]; then
+              echo "⚠️ Warning: $job did not succeed"
+              exit 1
+            fi
+          done
+          echo "🎉 All jobs succeeded!"
