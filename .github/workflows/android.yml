@@ -25,8 +25,8 @@ jobs:
   check-image-updates:
     runs-on: ubuntu-latest
     outputs:
-      should-build: ${{ steps.check-image-updates.outputs.should-build }}
-      digest: ${{ steps.check-image-updates.outputs.digest }}
+      should-build: ${{ steps.check.outputs.should-build }}
+      digest: ${{ steps.check.outputs.digest }}
 
     steps:
       - name: Get current digest
@@ -140,12 +140,12 @@ jobs:
         with:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.github.yeicor.colmap_openmvs_app
-          releaseFiles: ${{ steps.track.upload-info.release-files }}
-          tracks: ${{ steps.track.upload-info.tracks }}
+          releaseFiles: ${{ steps.upload-info.outputs.release-files }}
+          tracks: ${{ steps.upload-info.outputs.tracks }}
 
       - name: Save source digest
         run: |
-          echo '${{ needs.check.outputs.digest }}' > digest.txt
+          echo '${{ needs.check-image-updates.outputs.digest }}' > digest.txt
 
       - name: Upload digest artifact
         uses: actions/upload-artifact@v4
