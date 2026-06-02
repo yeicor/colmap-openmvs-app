@@ -13,7 +13,7 @@ FROM chef AS builder
 ARG BUILD_TYPE
 
 RUN apt-get update && apt-get install -y \
-    curl nodejs npm pkg-config \
+    curl nodejs npm pkg-config libwayland-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -L --proto '=https' --tlsv1.2 -sSf \
@@ -23,17 +23,17 @@ COPY --from=planner /app/recipe.json recipe.json
 
 RUN if [ "$BUILD_TYPE" = "debug" ]; then \
     cargo chef cook --recipe-path recipe.json; \
-  else \
+    else \
     cargo chef cook --release --recipe-path recipe.json; \
-  fi
+    fi
 
 COPY . .
 
 RUN if [ "$BUILD_TYPE" = "debug" ]; then \
     /usr/local/cargo/bin/dx bundle --web; \
-  else \
+    else \
     /usr/local/cargo/bin/dx bundle --web --release; \
-  fi
+    fi
 
 
 # ---------------------------
@@ -44,14 +44,14 @@ FROM ${RUNTIME_IMAGE} AS runtime
 ARG BUILD_TYPE
 ARG ENABLE_DOCKER=true  # proot runtime is a valid alternative to avoid messing with docker socket and too many permissions issues, but it is not as performant as docker runtime
 RUN if [ "$ENABLE_DOCKER" = "true" ]; then \
-      apt-get update && apt-get install -y docker.io && rm -rf /var/lib/apt/lists/*; \
+    apt-get update && apt-get install -y docker.io && rm -rf /var/lib/apt/lists/*; \
     fi
 
 WORKDIR /usr/local/app
 
 # minimal deps for running binary (adjust if needed)
 RUN apt-get update && apt-get install -y \
-    ca-certificates \
+    ca-certificates libwayland-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder \
