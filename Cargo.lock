@@ -650,6 +650,7 @@ dependencies = [
  "dioxus-primitives",
  "futures",
  "gloo-timers",
+ "http 1.4.1",
  "js-sys",
  "tokio",
  "tracing",

@@ -107,6 +107,22 @@ pub fn backend_url_configurable() -> bool {
     true
 }
 
+/// Validates a backend URL using the same parsing that Dioxus uses internally
+/// when constructing server-function requests (`http::Uri::from_str`).
+///
+/// A valid backend URL must be parseable as an `http::Uri` and have a scheme
+/// of `http` or `https`.
+pub fn is_valid_backend_url(url: &str) -> bool {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    match trimmed.parse::<http::Uri>() {
+        Ok(u) => u.scheme_str().is_some_and(|s| s == "http" || s == "https"),
+        Err(_) => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // WASM helpers
 // ---------------------------------------------------------------------------

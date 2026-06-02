@@ -97,7 +97,19 @@ fn main() {
     // Resolve the backend URL from URL params / localStorage before launching.
     // On web (WASM) this also calls `dioxus::fullstack::set_server_url` so that
     // all generated server-function HTTP requests go to the configured origin.
-    let backend_url_str = backend_url::read_initial_backend_url();
+    let mut backend_url_str = backend_url::read_initial_backend_url();
+
+    // Validate the backend URL using `http::Uri` parsing (same as Dioxus
+    // uses internally). If invalid, warn and reset to empty (same-origin
+    // fallback) so the app doesn't silently fail on all requests.
+    if !backend_url_str.is_empty() && !backend_url::is_valid_backend_url(&backend_url_str) {
+        tracing::warn!(
+            url = %backend_url_str,
+            "Invalid backend URL configured — resetting to empty (same-origin)"
+        );
+        backend_url::save_backend_url("");
+        backend_url_str = String::new();
+    }
     backend_url::BACKEND_URL.set(backend_url_str.clone()).ok();
     if !backend_url_str.is_empty() {
         let leaked: &'static str = Box::leak(backend_url_str.clone().into_boxed_str());

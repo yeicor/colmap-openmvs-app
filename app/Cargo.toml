@@ -21,6 +21,7 @@ urlencoding = { version = "2.1" }
 base64 = { version = "0.22" }
 chrono = { workspace = true }
 futures = { version = "0.3" }
+http = { version = "1.4" }
 
 # Logging
 tracing = { workspace = true }

@@ -144,6 +144,9 @@ pub fn SettingsView() -> Element {
 fn GeneralTab() -> Element {
     let mut projects_folder = use_signal(String::new);
     let mut settings_file_path = use_signal(String::new);
+    let mut proot_images_dir = use_signal(String::new);
+    let mut custom_mounts = use_signal(Vec::<String>::new);
+    let mut new_mount_input = use_signal(String::new);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(String::new);
     let mut success = use_signal(String::new);
@@ -165,6 +168,8 @@ fn GeneralTab() -> Element {
                 Ok(s) => {
                     projects_folder.set(s.projects_folder);
                     settings_file_path.set(s.settings_file_path.unwrap_or_default());
+                    proot_images_dir.set(s.proot_images_dir);
+                    custom_mounts.set(s.custom_mounts);
                 }
                 Err(e) => error.set(format!("Failed to load settings: {}", e)),
             }
@@ -186,10 +191,17 @@ fn GeneralTab() -> Element {
             } else {
                 Some(settings_file_path().trim().to_string())
             };
+            let images_dir = proot_images_dir().trim().to_string();
+            if images_dir.is_empty() {
+                error.set("Images directory path cannot be empty".to_string());
+                return;
+            }
             match get_settings().await {
                 Ok(mut settings) => {
                     settings.projects_folder = projects;
                     settings.settings_file_path = settings_path;
+                    settings.proot_images_dir = images_dir;
+                    settings.custom_mounts.clone_from(&custom_mounts());
                     match update_settings(settings).await {
                         Ok(_) => {
                             success.set("Settings saved.".to_string());
@@ -208,6 +220,8 @@ fn GeneralTab() -> Element {
             if let Ok(s) = get_settings().await {
                 projects_folder.set(s.projects_folder);
                 settings_file_path.set(s.settings_file_path.unwrap_or_default());
+                proot_images_dir.set(s.proot_images_dir);
+                custom_mounts.set(s.custom_mounts);
                 has_changed.set(false);
                 error.set(String::new());
             }
@@ -254,7 +268,7 @@ fn GeneralTab() -> Element {
                 }
 
                 div { class: "form-group",
-                    label { title: "Override the settings.json path. Leave empty to use projects_folder/settings.json. Can also be set via COLMAP_SETTINGS_PATH env var.", "Settings File (optional)" }
+                    label { title: "Override the settings.json path. Leave empty to use projects_folder/settings.json. Can also be set via COLMAP_SETTINGS_PATH env var.", "Settings File" }
                     div { class: "folder-row",
                         input {
                             r#type: "text",
@@ -280,6 +294,89 @@ fn GeneralTab() -> Element {
                                 });
                             },
                             Icon { icon: BsFolder }
+                        }
+                    }
+                }
+
+                div { class: "form-group",
+                    label { title: "Directory where PRoot container image rootfs archives are extracted and stored.", "PRoot Images Directory" }
+                    div { class: "folder-row",
+                        input {
+                            r#type: "text",
+                            value: "{proot_images_dir}",
+                            placeholder: "./proot-images",
+                            class: "folder-input",
+                            oninput: move |e| { proot_images_dir.set(e.value()); has_changed.set(true); error.set(String::new()); success.set(String::new()); },
+                        }
+                        Button {
+                            variant: ButtonVariant::Secondary,
+                            title: "Browse for folder (server-side dialog)",
+                            onclick: move |_| {
+                                spawn(async move {
+                                    match pick_projects_folder().await {
+                                        Ok(path) if !path.is_empty() => {
+                                            proot_images_dir.set(path);
+                                            has_changed.set(true);
+                                            error.set(String::new());
+                                        }
+                                        Ok(_) => {} // user cancelled
+                                        Err(e) => error.set(format!("Folder picker: {}", e)),
+                                    }
+                                });
+                            },
+                            Icon { icon: BsFolder }
+                        }
+                    }
+                }
+
+                // Custom mounts — list of "host_path:container_path" entries
+                div { class: "form-group",
+                    label { title: "Additional filesystem mounts for the PRoot/Docker runtime. Format: /host/path:/container/path or just /host/path (same path in container).", "Custom Mounts" }
+                    div { class: "mounts-list",
+                        for (i, mount) in custom_mounts().iter().enumerate() {
+                            div { class: "mount-item",
+                                span { class: "mount-path", "{mount}" }
+                                Button {
+                                    variant: ButtonVariant::Ghost,
+                                    title: "Remove this mount",
+                                    onclick: {
+                                        let idx = i;
+                                        move |_| {
+                                            let mut mounts = custom_mounts();
+                                            if idx < mounts.len() {
+                                                mounts.remove(idx);
+                                                custom_mounts.set(mounts);
+                                                has_changed.set(true);
+                                            }
+                                        }
+                                    },
+                                    "×"
+                                }
+                            }
+                        }
+                        div { class: "mount-add-row",
+                            input {
+                                r#type: "text",
+                                value: "{new_mount_input}",
+                                placeholder: "/host/path:/container/path",
+                                class: "folder-input",
+                                oninput: move |e| { new_mount_input.set(e.value()); },
+                            }
+                            Button {
+                                variant: ButtonVariant::Secondary,
+                                disabled: new_mount_input().trim().is_empty(),
+                                onclick: move |_| {
+                                    let val = new_mount_input().trim().to_string();
+                                    if !val.is_empty() {
+                                        let mut mounts = custom_mounts();
+                                        mounts.push(val);
+                                        custom_mounts.set(mounts);
+                                        new_mount_input.set(String::new());
+                                        has_changed.set(true);
+                                    }
+                                },
+                                "Add"
+                            }
                         }
                     }
                 }
@@ -530,7 +627,6 @@ fn ProotPanel(on_default_changed: EventHandler<()>) -> Element {
     let mut deleting = use_signal(|| false);
     let mut error = use_signal(String::new);
     let mut success = use_signal(String::new);
-    let mut dir_changed = use_signal(|| false);
 
     use_effect(move || {
         spawn(async move {
@@ -587,29 +683,6 @@ fn ProotPanel(on_default_changed: EventHandler<()>) -> Element {
                 Err(e) => error.set(format!("Failed: {}", e)),
             }
             deleting.set(false);
-        });
-    };
-
-    let handle_save_dir = move |_| {
-        spawn(async move {
-            let folder = proot_images_dir().trim().to_string();
-            if folder.is_empty() {
-                error.set("Path cannot be empty.".to_string());
-                return;
-            }
-            match get_settings().await {
-                Ok(mut s) => {
-                    s.proot_images_dir = folder;
-                    match update_settings(s).await {
-                        Ok(_) => {
-                            success.set("Images directory saved.".to_string());
-                            dir_changed.set(false);
-                        }
-                        Err(e) => error.set(format!("Failed: {}", e)),
-                    }
-                }
-                Err(e) => error.set(format!("Failed to load settings: {}", e)),
-            }
         });
     };
 
@@ -708,44 +781,9 @@ fn ProotPanel(on_default_changed: EventHandler<()>) -> Element {
                                 class: "folder-input",
                                 value: "{proot_images_dir}",
                                 placeholder: "./proot-images",
-                                oninput: move |e| { proot_images_dir.set(e.value()); dir_changed.set(true); error.set(String::new()); success.set(String::new()); },
+                                disabled: true,
                             }
-                            Button {
-                                variant: ButtonVariant::Secondary,
-                                title: "Browse for folder (server-side dialog)",
-                                onclick: move |_| {
-                                    spawn(async move {
-                                        match crate::server::pick_projects_folder().await {
-                                            Ok(path) if !path.is_empty() => {
-                                                proot_images_dir.set(path);
-                                                dir_changed.set(true);
-                                                error.set(String::new());
-                                            }
-                                            Ok(_) => {}
-                                            Err(e) => error.set(format!("Folder picker: {}", e)),
-                                        }
-                                    });
-                                },
-                                Icon { icon: BsFolder }
-                            }
-                        }
-                        if dir_changed() {
-                            div { class: "form-actions",
-                                Button { variant: ButtonVariant::Primary, onclick: handle_save_dir, "Save" }
-                                Button {
-                                    variant: ButtonVariant::Secondary,
-                                    onclick: move |_| {
-                                        spawn(async move {
-                                            if let Ok(s) = get_settings().await {
-                                                proot_images_dir.set(s.proot_images_dir);
-                                                dir_changed.set(false);
-                                                error.set(String::new());
-                                            }
-                                        });
-                                    },
-                                    "Cancel"
-                                }
-                            }
+                            span { class: "config-note", "Configured in the General settings tab" }
                         }
                     }
                 }
@@ -955,7 +993,10 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                 Ok(imgs) => {
                     if rt_inner == "docker" {
                         let prefix = format!("{}:", COLMAP_IMAGE);
-                        let filtered: Vec<_> = imgs.into_iter().filter(|img| img.tag.starts_with(&prefix) || img.tag == COLMAP_IMAGE).collect();
+                        let filtered: Vec<_> = imgs
+                            .into_iter()
+                            .filter(|img| img.tag.starts_with(&prefix) || img.tag == COLMAP_IMAGE)
+                            .collect();
                         ready_tags.set(filtered);
                     } else {
                         ready_tags.set(imgs);
@@ -1084,7 +1125,12 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                     if let Ok(imgs) = imgs {
                         if rt_rm == "docker" {
                             let prefix = format!("{}:", COLMAP_IMAGE);
-                            let filtered: Vec<_> = imgs.into_iter().filter(|img| img.tag.starts_with(&prefix) || img.tag == COLMAP_IMAGE).collect();
+                            let filtered: Vec<_> = imgs
+                                .into_iter()
+                                .filter(|img| {
+                                    img.tag.starts_with(&prefix) || img.tag == COLMAP_IMAGE
+                                })
+                                .collect();
                             ready_tags.set(filtered);
                         } else {
                             ready_tags.set(imgs);
