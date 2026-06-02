@@ -1,7 +1,10 @@
 //! Server functions with Dioxus fullstack macros
 //! These wrap the backend implementations and provide the RPC interface for the client
 
-use dioxus::{fullstack::FileStream, prelude::*};
+use dioxus::{
+    fullstack::{ByteStream, FileStream},
+    prelude::*,
+};
 
 use colmap_openmvs_api::{
     ConfigSchema, ImageTagInfo, LoadedProjectConfig, OutputFile, PreparedImageInfo, Project,
@@ -70,7 +73,7 @@ pub async fn get_project_image_bytes(project_name: String, image_name: String) -
 pub async fn add_project_image(
     project_name: String,
     image_name: String,
-    body: Vec<u8>,
+    body: ByteStream,
 ) -> Result<()> {
     backend::add_project_image(project_name, image_name, body).await
 }

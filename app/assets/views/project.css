@@ -1,8 +1,7 @@
 /* Project view styles - scoped under #project */
 #project {
     width: calc(100% - 1rem);
-    min-height: 100vh;
-    padding: 0.5rem;
+    padding: 0.5rem 0;
     max-width: 1200px;
     margin: 0 auto;
 }

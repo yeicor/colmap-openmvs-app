@@ -9,6 +9,8 @@ use colmap_openmvs_api::TaskEvent;
 use colmap_openmvs_api::TaskKind;
 use colmap_openmvs_api::TaskState;
 use dioxus::document::eval;
+#[cfg(target_arch = "wasm32")]
+use dioxus::fullstack::ByteStream;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
     BsArrowsFullscreen, BsBoxArrowUpRight, BsCheckAll, BsCloudDownload, BsGrid, BsImage, BsStar,
@@ -695,32 +697,148 @@ pub fn ImagesTab(project_name: String) -> Element {
                         onclick: {
                             let project_name = project_name.clone();
                             move |_| {
-                                // Temporarily hide thumbnails before opening the native
-                                // file-picker — on Android the app may go to background
-                                // and rendering many <img> elements can trigger OOM.
+                                // Temporarily hide thumbnails before opening the file-picker
+                                // — on Android the app may go to background and rendering
+                                // many <img> elements can trigger OOM.
                                 let was_showing = show_images();
                                 show_images.set(false);
                                 uploading.set(true);
                                 error_message.set(None);
                                 let pn = project_name.clone();
                                 spawn(async move {
-                                    let result = crate::server::pick_and_import_images(pn.clone()).await;
-                                    match result {
-                                        Ok(imported) if imported.is_empty() => {
-                                            // User cancelled — no error
+                                    // ── Native (Android, desktop could do this but the browser's modal popup is slightly better) path ──────────────
+                                    // Uses the server's native file dialog to pick and
+                                    // import images in a single round-trip.
+                                    #[cfg(target_os = "android")]
+                                    {
+                                        let result = crate::server::pick_and_import_images(pn.clone()).await;
+                                        match result {
+                                            Ok(imported) if imported.is_empty() => {
+                                                // User cancelled — no error
+                                            }
+                                            Ok(imported) => {
+                                                let count = imported.len();
+                                                info_message.set(Some(format!("Imported {} image(s)", count)));
+                                                if let Ok(paths) = crate::server::get_project_images(pn).await {
+                                                    image_paths.set(paths);
+                                                    list_version += 1;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                error_message.set(Some(format!("Failed to import images: {}", e)));
+                                            }
                                         }
-                                        Ok(imported) => {
-                                            let count = imported.len();
-                                            info_message.set(Some(format!("Imported {} image(s)", count)));
+                                    }
+
+                                    // ── Common path (supports remote frontend, better system integration) ─────────────────────────────
+                                    // Opens the browser's native file-picker via a hidden
+                                    // <input type="file"> element, reads each selected
+                                    // file as bytes in the browser, and uploads them to
+                                    // the server one-by-one through the existing
+                                    // add_project_image endpoint.
+                                    #[cfg(not(target_os = "android"))]
+                                    {
+                                        let mut imported: Vec<String> = Vec::new();
+                                        let mut failed: Vec<String> = Vec::new();
+
+                                        let js = r#"
+                                            var input = document.createElement('input');
+                                            input.type = 'file';
+                                            input.multiple = true;
+                                            input.accept = 'image/*';
+                                            input.style.display = 'none';
+                                            document.body.appendChild(input);
+                                            input.addEventListener('change', async function() {
+                                                var files = input.files;
+                                                for (var i = 0; i < files.length; i++) {
+                                                    var f = files[i];
+                                                    var buf = await f.arrayBuffer();
+                                                    var bytes = new Uint8Array(buf);
+                                                    var binary = '';
+                                                    for (var j = 0; j < bytes.length; j++) {
+                                                        binary += String.fromCharCode(bytes[j]);
+                                                    }
+                                                    dioxus.send(f.name);
+                                                    dioxus.send(btoa(binary));
+                                                }
+                                                document.body.removeChild(input);
+                                                dioxus.send(null);
+                                            });
+                                            input.addEventListener('cancel', function() {
+                                                document.body.removeChild(input);
+                                                dioxus.send(null);
+                                            });
+                                            input.click();
+                                        "#;
+
+                                        let mut eval = document::eval(js);
+
+                                        loop {
+                                            match eval.recv::<Option<String>>().await {
+                                                Ok(Some(name)) => {
+                                                    match eval.recv::<Option<String>>().await {
+                                                        Ok(Some(data_b64)) => {
+                                                            match base64::engine::general_purpose::STANDARD.decode(&data_b64) {
+                                                                Ok(bytes) => {
+                                                                    let byte_stream = dioxus::fullstack::ByteStream::new(
+                                                                        futures::stream::once(async {
+                                                                            dioxus::fullstack::body::Bytes::from(bytes)
+                                                                        }),
+                                                                    );
+                                                                    match crate::server::add_project_image(
+                                                                        pn.clone(),
+                                                                        name.clone(),
+                                                                        byte_stream,
+                                                                    )
+                                                                    .await
+                                                                    {
+                                                                        Ok(_) => imported.push(name),
+                                                                        Err(e) => {
+                                                                            error!("Failed to import image '{}': {}", name, e);
+                                                                            failed.push(name);
+                                                                        }
+                                                                    }
+                                                                }
+                                                                Err(e) => {
+                                                                    error!("Failed to decode image data for '{}': {}", name, e);
+                                                                    failed.push(name);
+                                                                }
+                                                            }
+                                                        }
+                                                        Ok(None) => {
+                                                            error!("Missing image data for '{}'", name);
+                                                            failed.push(name);
+                                                        }
+                                                        Err(e) => {
+                                                            error!("Failed to receive image data for '{}': {:?}", name, e);
+                                                            failed.push(name);
+                                                        }
+                                                    }
+                                                }
+                                                Ok(None) => break,
+                                                Err(_) => break,
+                                            }
+                                        }
+
+                                        let count = imported.len();
+                                        let fail_count = failed.len();
+                                        if count > 0 {
+                                            info_message.set(Some(
+                                                if fail_count > 0 {
+                                                    format!("Imported {} image(s), {} failed", count, fail_count)
+                                                } else {
+                                                    format!("Imported {} image(s)", count)
+                                                },
+                                            ));
                                             if let Ok(paths) = crate::server::get_project_images(pn).await {
                                                 image_paths.set(paths);
                                                 list_version += 1;
                                             }
-                                        }
-                                        Err(e) => {
-                                            error_message.set(Some(format!("Failed to import images: {}", e)));
+                                        } else if fail_count > 0 {
+                                            error_message.set(Some(format!("Failed to import {} image(s)", fail_count)));
                                         }
                                     }
+
                                     uploading.set(false);
                                     show_images.set(was_showing);
                                 });

@@ -17,42 +17,71 @@ on:
   schedule:
     - cron: "0 3 * * *" # nightly UTC
 
-jobs:
-  check-image:
-    runs-on: ubuntu-24.04
+permissions:
+  actions: read
+  contents: read
 
+jobs:
+  check-image-updates:
+    runs-on: ubuntu-latest
     outputs:
-      should-build: ${{ steps.check.outputs.should-build }}
+      should-build: ${{ steps.check-image-updates.outputs.should-build }}
+      digest: ${{ steps.check-image-updates.outputs.digest }}
 
     steps:
-      - id: check
+      - name: Get current digest
+        id: digest
+        run: |
+          DIGEST=$(docker buildx imagetools inspect \
+            mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest \
+            --format '{{json .Manifest}}' |
+            jq -r '.manifests[] | select(.platform.architecture=="amd64") | .digest')
+
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "$DIGEST" > current-digest.txt
+
+      - name: Download previous digest artifact
+        id: previous
+        uses: dawidd6/action-download-artifact@v11
+        continue-on-error: true
+        with:
+          workflow: android.yml
+          branch: main
+          name: source-image-digest
+          path: previous
+          if_no_artifact_found: warn
+
+      - name: Compare digests
+        id: check
         env:
           FORCE: ${{ inputs.force || false }}
+          CURRENT_DIGEST: ${{ steps.digest.outputs.digest }}
         run: |
           if [ "$FORCE" = "true" ]; then
             echo "should-build=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          CREATED=$(docker buildx imagetools inspect \
-            mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest \
-            --format '{{json .Manifest}}' |
-            jq -r '.annotations["org.opencontainers.image.created"]')
+          if [ ! -f previous/digest.txt ]; then
+            echo "No previous digest found"
+            echo "should-build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-          echo "Image created: $CREATED"
+          PREVIOUS_DIGEST=$(cat previous/digest.txt)
 
-          CREATED_EPOCH=$(date -d "$CREATED" +%s)
-          NOW_EPOCH=$(date +%s)
+          echo "Current:  $CURRENT_DIGEST"
+          echo "Previous: $PREVIOUS_DIGEST"
 
-          if [ $((NOW_EPOCH - CREATED_EPOCH)) -lt 86400 ]; then
+          if [ "$CURRENT_DIGEST" != "$PREVIOUS_DIGEST" ]; then
             echo "should-build=true" >> "$GITHUB_OUTPUT"
           else
             echo "should-build=false" >> "$GITHUB_OUTPUT"
           fi
 
-  build:
-    needs: check-image
-    if: needs.check-image.outputs.should-build == 'true'
+  build-and-deploy:
+    needs: check-image-updates
+    if: needs.check-image-updates.outputs.should-build == 'true'
     runs-on: ubuntu-24.04
 
     steps:
@@ -98,3 +127,13 @@ jobs:
           packageName: com.github.yeicor.colmap_openmvs_app
           releaseFiles: ${{ steps.track.upload-info.release-files }}
           tracks: ${{ steps.track.upload-info.tracks }}
+
+      - name: Save source digest
+        run: |
+          echo '${{ needs.check.outputs.digest }}' > digest.txt
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-image-digest
+          path: digest.txt

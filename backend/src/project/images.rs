@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use dioxus::fullstack::FileStream;
+use dioxus::fullstack::{ByteStream, FileStream};
 use futures::StreamExt;
 use image::{DynamicImage, ImageDecoder, ImageReader};
 use once_cell::sync::Lazy;
@@ -136,9 +136,9 @@ pub async fn get_project_image_bytes(
 pub async fn add_project_image(
     project_name: String,
     image_name: String,
-    body: Vec<u8>,
+    mut body: ByteStream,
 ) -> dioxus::Result<()> {
-    debug!(project_name = %project_name, image_name = %image_name, body_size = body.len(), "Adding image to project");
+    debug!(project_name = %project_name, image_name = %image_name, "Adding image to project");
     validate_image_name(&image_name)?;
     let settings = crate::get_settings().await?;
     let images_path =
@@ -163,12 +163,18 @@ pub async fn add_project_image(
     let lock = lock_for_image_path(&image_path).await;
     let _guard = lock.lock().await;
 
-    debug!(image_path = %image_path.display(), "Writing image file");
-    std::fs::write(&image_path, body).map_err(|e| {
+    let mut image_bytes = Vec::new();
+    while let Some(chunk) = body.next().await {
+        let chunk = chunk?;
+        image_bytes.extend_from_slice(&chunk);
+    }
+
+    debug!(image_path = %image_path.display(), body_size = image_bytes.len(), "Writing image file");
+    std::fs::write(&image_path, &image_bytes).map_err(|e| {
         error!(image_path = %image_path.display(), error = %e, "Failed to write image file");
         anyhow!("Failed to write image file: {}", e)
     })?;
-    info!(project_name = %project_name, image_name = %image_name, image_path = %image_path.display(), "Image added successfully");
+    info!(project_name = %project_name, image_name = %image_name, image_path = %image_path.display(), body_size = image_bytes.len(), "Image added successfully");
 
     Ok(())
 }

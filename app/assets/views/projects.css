@@ -1,6 +1,5 @@
 #projects {
     width: calc(100% - 1rem);
-    min-height: 100vh;
     padding: 0.5rem;
     max-width: 1200px;
     margin: 0 auto;
