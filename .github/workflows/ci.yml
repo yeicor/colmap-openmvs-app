@@ -33,9 +33,7 @@ jobs:
           - os: ubuntu-24.04-arm # Architecture matters for the server binary
             build-type: web
             artifact-find: "-path '*/release/web/*' -not -name '.manifest.json'"
-          - os: ubuntu-24.04 # Includes both AMD64 and ARM64 builds, which are merged into a single AAB artifact
-            build-type: android
-            artifact-find: "-path '*/release/android/*/app-release.aab'"
+          # build-type: android is handled in a separate workflow (see android.yml)
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -77,16 +75,6 @@ jobs:
         run: |
           echo -e "\n\n[web.app]\nbase_path = \"/${{ github.event.repository.name }}\"" >> Dioxus.toml  # Ensure correct base path for GitHub Pages
           $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --verbose
-      - shell: bash
-        if: matrix.build-type == 'android'
-        run: | # Note: keep in sync with android.yml
-          ./build_android.sh --release --target=arm64
-          ./build_android.sh --release --target=x86_64  # Merges both architectures into a single signed AAB
-        env:
-          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       - shell: bash
         run: |
           set -euo pipefail
