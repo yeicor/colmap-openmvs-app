@@ -1,0 +1,112 @@
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Force Android rebuild
+        required: false
+        type: boolean
+        default: true
+
+  workflow_call:
+    inputs:
+      force:
+        required: false
+        type: boolean
+        default: false
+
+  schedule:
+    - cron: "0 3 * * *" # nightly UTC
+
+permissions:
+  contents: write
+
+jobs:
+  check-image:
+    runs-on: ubuntu-24.04
+
+    outputs:
+      should-build: ${{ steps.check.outputs.should-build }}
+
+    steps:
+      - id: check
+        env:
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            echo "should-build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CREATED=$(docker buildx imagetools inspect \
+            mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest \
+            --format '{{json .Manifest}}' |
+            jq -r '.annotations["org.opencontainers.image.created"]')
+
+          echo "Image created: $CREATED"
+
+          CREATED_EPOCH=$(date -d "$CREATED" +%s)
+          NOW_EPOCH=$(date +%s)
+
+          if [ $((NOW_EPOCH - CREATED_EPOCH)) -lt 86400 ]; then
+            echo "should-build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should-build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check-image
+    if: needs.check-image.outputs.should-build == 'true'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+          cache: npm
+
+      - shell: bash
+        run: curl -sSL https://dioxus.dev/install.sh | bash
+
+      - shell: bash
+        run: | # Note: keep in sync with ci.yml
+          ./build_android.sh --release --target=arm64
+          ./build_android.sh --release --target=x86_64
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - id: upload-info
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "tracks=production,beta,qa" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
+            echo "tracks=beta,qa" >> "$GITHUB_OUTPUT"
+          else
+            echo "tracks=qa" >> "$GITHUB_OUTPUT"
+          fi
+          echo "release-files=$(find target -type f -path '*/release/android/*/app-release.aab' | tr '\n' ',')" >> "$GITHUB_OUTPUT"
+
+      - uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.github.yeicor.colmap_openmvs_app
+          releaseFiles: ${{ steps.track.upload-info.release-files }}
+          tracks: ${{ steps.track.upload-info.tracks }}
+
+      - shell: bash
+        run: |
+          echo "${{ needs.check-image.outputs.digest }}" > .image-digest
+
+      - uses: actions/cache/save@v4
+        with:
+          path: .image-digest
+          key: android-image-digest
