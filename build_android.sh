@@ -326,7 +326,7 @@ sign_aab() {
 
     [[ -f "$aab" ]] || die "AAB not found: $aab"
 
-    if [[ -n "$ANDROID_KEYSTORE_B64" ]]; then
+    if [[ -n "${ANDROID_KEYSTORE_B64:-}" ]]; then
         echo "🔐 Decoding keystore from environment variable"
         echo "$ANDROID_KEYSTORE_B64" | base64 -d > "$CACHE_DIR/keystore.jks"
         export ANDROID_KEYSTORE_PATH="$CACHE_DIR/keystore.jks"
