@@ -142,6 +142,7 @@ jobs:
           packageName: com.github.yeicor.colmap_openmvs_app
           releaseFiles: ${{ steps.upload-info.outputs.release-files }}
           tracks: ${{ steps.upload-info.outputs.tracks }}
+          status: draft # Only releases with status draft may be created on draft app.  # TODO: Remove when draft app is promoted to production.
 
       - name: Save source digest
         run: |
