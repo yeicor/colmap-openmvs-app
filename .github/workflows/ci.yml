@@ -210,6 +210,9 @@ jobs:
 
   deploy-android:
     needs: build-and-test
+    permissions:
+      actions: read
+      contents: read
     uses: ./.github/workflows/android.yml
     with:
       force: true
