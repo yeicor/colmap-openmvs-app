@@ -953,7 +953,13 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
 
             match images_result {
                 Ok(imgs) => {
-                    ready_tags.set(imgs);
+                    if rt_inner == "docker" {
+                        let prefix = format!("{}:", COLMAP_IMAGE);
+                        let filtered: Vec<_> = imgs.into_iter().filter(|img| img.tag.starts_with(&prefix) || img.tag == COLMAP_IMAGE).collect();
+                        ready_tags.set(filtered);
+                    } else {
+                        ready_tags.set(imgs);
+                    }
                 }
                 Err(e) => error.set(format!("Failed to load images: {}", e)),
             }
@@ -1076,7 +1082,13 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                         list_runtime_images().await
                     };
                     if let Ok(imgs) = imgs {
-                        ready_tags.set(imgs);
+                        if rt_rm == "docker" {
+                            let prefix = format!("{}:", COLMAP_IMAGE);
+                            let filtered: Vec<_> = imgs.into_iter().filter(|img| img.tag.starts_with(&prefix) || img.tag == COLMAP_IMAGE).collect();
+                            ready_tags.set(filtered);
+                        } else {
+                            ready_tags.set(imgs);
+                        }
                     }
                 }
                 Err(e) => error.set(format!("Failed to remove: {}", e)),
@@ -1153,10 +1165,11 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                         let size_readable = image.size_readable.clone();
                         let size = image.size;
                         let is_default = tag == default_image_tag();
+                        let display_name = tag.rsplit_once(':').map(|(_, t)| t).unwrap_or(&tag);
                         rsx! {
                             li { key: "{remove_id}", class: "tags-item",
                                 div { class: "tags-item-top",
-                                    span { class: "tag-name", title: "{tag}", "{tag}" }
+                                    span { class: "tag-name", title: "{tag}", "{display_name}" }
                                     div { class: "tag-actions",
                                         if is_default {
                                             Button {

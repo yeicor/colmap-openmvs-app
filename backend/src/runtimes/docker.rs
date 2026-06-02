@@ -288,8 +288,33 @@ impl Runtime for Docker {
             ));
         }
 
+        // Add custom mounts from settings
+        if let Ok(settings) = crate::settings::get_settings().await {
+            for mount_spec in &settings.custom_mounts {
+                let (host_path, container_path) = if mount_spec.contains(':') {
+                    let parts: Vec<&str> = mount_spec.splitn(2, ':').collect();
+                    (parts[0].to_string(), parts[1].to_string())
+                } else {
+                    (mount_spec.clone(), mount_spec.clone())
+                };
+
+                if std::path::Path::new(&host_path).exists() {
+                    debug!(host_path = %host_path, container_path = %container_path, "run: adding custom mount");
+                    cmd.arg("-v").arg(format!("{}:{}", host_path, container_path));
+                } else {
+                    warn!(host_path = %host_path, "run: skipping custom mount, host path does not exist");
+                }
+            }
+        }
+
         for (key, val) in env_vars {
             cmd.arg("-e").arg(format!("{}={}", key, val));
+        }
+
+        // Add --gpus=all for CUDA images
+        if image.contains("cuda") {
+            debug!("run: CUDA image detected, adding --gpus=all");
+            cmd.arg("--gpus").arg("all");
         }
 
         cmd.arg(image);
