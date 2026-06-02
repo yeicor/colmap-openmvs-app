@@ -17,9 +17,6 @@ on:
   schedule:
     - cron: "0 3 * * *" # nightly UTC
 
-permissions:
-  contents: write
-
 jobs:
   check-image:
     runs-on: ubuntu-24.04
@@ -101,12 +98,3 @@ jobs:
           packageName: com.github.yeicor.colmap_openmvs_app
           releaseFiles: ${{ steps.track.upload-info.release-files }}
           tracks: ${{ steps.track.upload-info.tracks }}
-
-      - shell: bash
-        run: |
-          echo "${{ needs.check-image.outputs.digest }}" > .image-digest
-
-      - uses: actions/cache/save@v4
-        with:
-          path: .image-digest
-          key: android-image-digest
