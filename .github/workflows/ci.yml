@@ -61,15 +61,11 @@ jobs:
             lld
       - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
-      - name: Cargo build
-        if: matrix.build-type == 'desktop'
-        run: cargo build --release --features server,desktop -vv
-        env:
-          CARGO_TERM_VERBOSE: true
-          CARGO_TERM_COLOR: always
       - shell: bash
         if: matrix.build-type == 'desktop'
-        run: $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --features server --verbose
+        run: |
+          # cargo build --release --features server,desktop -vv # helps detect errors
+          $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --features server --verbose
         env:
           CARGO_TERM_VERBOSE: true
           CARGO_TERM_COLOR: always

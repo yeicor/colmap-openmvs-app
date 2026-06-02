@@ -107,13 +107,20 @@ run_dx_build() {
 compute_cache_dir() {
     docker pull --platform "$DOCKER_PLATFORM" "$DOCKER_IMAGE" >/dev/null
 
-    IMAGE_DIGEST="$(docker image inspect \
-        --format='{{index .RepoDigests 0}}' \
+    IMAGE_ID="$(docker image inspect \
+        --format='{{.Id}}' \
         "$DOCKER_IMAGE")"
 
-    CACHE_KEY="$(printf '%s' "$IMAGE_DIGEST" | sha256sum | cut -c1-16)"
-    CACHE_DIR="$SCRIPT_DIR/target/android-cache/$CACHE_KEY"
+    IMAGE_TAG="$(docker image inspect \
+        --format='{{join .RepoTags ","}}' \
+        "$DOCKER_IMAGE" 2>/dev/null || true)"
 
+    CACHE_KEY="$(printf '%s|%s|%s' \
+        "$DOCKER_IMAGE" \
+        "$IMAGE_ID" \
+        "$DOCKER_PLATFORM" | sha256sum | cut -c1-16)"
+
+    CACHE_DIR="$SCRIPT_DIR/target/android-cache/$CACHE_KEY"
     mkdir -p "$CACHE_DIR"
 }
 
