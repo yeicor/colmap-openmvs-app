@@ -1,436 +1,405 @@
 #!/usr/bin/env bash
-# =============================================================================
-# build_android.sh — Build the Android APK with embedded proot + rootfs
-# (to avoid the "security" feature that blocks exec from writeable app data dirs on Android 10+)
-# =============================================================================
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
 
-# ─── Parse flags ──────────────────────────────────────────────────────────────
 BUILD_MODE="${BUILD_MODE:-debug}"
+TARGET_PLATFORM="${TARGET_PLATFORM:-arm64}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest}"
-TARGET_ARCH="${TARGET_ARCH:-aarch64-linux-android}"
-ARCH_ABI="${ARCH_ABI:-arm64-v8a}"
+
 SKIP_DX=0
 SKIP_EMBED=0
 
-for arg in "$@"; do
-    case "$arg" in
-        --release)    BUILD_MODE="release" ;;
-        --image=*)    DOCKER_IMAGE="${arg#*=}" ;;
-        --skip-dx)              SKIP_DX=1 ;;
-        --skip-embed)           SKIP_EMBED=1 ;;
-        --help|-h)
-            grep '^#' "$0" | head -20 | sed 's/^# \?//'
-            exit 0 ;;
+TEMP_DIRS=()
+CONTAINERS=()
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+cleanup() {
+    for c in "${CONTAINERS[@]:-}"; do
+        docker rm -f "$c" >/dev/null 2>&1 || true
+    done
+    for d in "${TEMP_DIRS[@]:-}"; do
+        rm -rf "$d" || true
+    done
+}
+trap cleanup EXIT INT TERM
+
+parse_args() {
+    for arg in "$@"; do
+        case "$arg" in
+            --release) BUILD_MODE=release ;;
+            --debug) BUILD_MODE=debug ;;
+            --skip-dx) SKIP_DX=1 ;;
+            --skip-embed) SKIP_EMBED=1 ;;
+            --target=*) TARGET_PLATFORM="${arg#*=}" ;;
+            --image=*) DOCKER_IMAGE="${arg#*=}" ;;
+            -h|--help)
+                cat <<EOF
+Usage:
+  ./build_android.sh [options]
+
+Options:
+  --release
+  --debug
+  --target=arm64|x86_64|x86|armv7
+  --image=<docker-image>
+  --skip-dx
+  --skip-embed
+EOF
+                exit 0
+                ;;
+        esac
+    done
+}
+
+resolve_platform() {
+    case "$TARGET_PLATFORM" in
+        arm64|aarch64)
+            DOCKER_PLATFORM="linux/arm64"
+            TARGET_ARCH="aarch64-linux-android"
+            ARCH_ABI="arm64-v8a"
+            TERMUX_ARCH="aarch64"
+            ;;
+        x86_64|amd64)
+            DOCKER_PLATFORM="linux/amd64"
+            TARGET_ARCH="x86_64-linux-android"
+            ARCH_ABI="x86_64"
+            TERMUX_ARCH="x86_64"
+            ;;
+        *)
+            die "Unsupported target platform: $TARGET_PLATFORM"
+            ;;
     esac
-done
+}
 
-# ─── Environment ──────────────────────────────────────────────────────────────
-ANDROID_HOME="${ANDROID_HOME:-$HOME/Projects/AndroidSdk}"
-ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/30.0.14904198}"
-export ANDROID_HOME ANDROID_NDK_HOME
-export PATH="$ANDROID_HOME/platform-tools:$HOME/.cargo/bin:$PATH"
+require_tools() {
+    local tools=(curl tar ar python3)
+    [[ $SKIP_EMBED -eq 0 ]] && tools+=(docker)
+    for t in "${tools[@]}"; do
+        command -v "$t" >/dev/null || die "Missing dependency: $t"
+    done
+}
 
-echo "=================================================================="
-echo " colmap-openmvs-app Android build"
-echo "   BUILD_MODE           : $BUILD_MODE"
-echo "   DOCKER_IMAGE         : $DOCKER_IMAGE"
-echo "   TARGET_ARCH          : $TARGET_ARCH"
-echo "   ARCH_ABI             : $ARCH_ABI"
-echo "=================================================================="
+setup_android_env() {
+    ANDROID_HOME="${ANDROID_HOME:-$HOME/Projects/AndroidSdk}"
+    ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/30.0.14904198}"
+    export ANDROID_HOME ANDROID_NDK_HOME
+    export PATH="$ANDROID_HOME/platform-tools:$HOME/.cargo/bin:$PATH"
+}
 
-# Capitalise mode name for Gradle (e.g. debug→Debug, release→Release)
-GRADLE_MODE="$(echo "${BUILD_MODE:0:1}" | tr '[:lower:]' '[:upper:]')${BUILD_MODE:1}"
+run_dx_build() {
+    [[ $SKIP_DX -eq 1 ]] && return
 
-GRADLE_PROJECT="$SCRIPT_DIR/target/dx/colmap-openmvs-app/$BUILD_MODE/android/app"
-JNILIB_DIR="$GRADLE_PROJECT/app/src/main/jniLibs/$ARCH_ABI"
-CACHE_DIR="$SCRIPT_DIR/target/android-embed-cache"
-
-mkdir -p "$CACHE_DIR"
-
-# =============================================================================
-# STEP 1 — dx build (compile Rust → gradle project)
-# =============================================================================
-if [ "$SKIP_DX" -eq 0 ]; then
-    echo ""
-    echo "─── Step 1: dx build --android ──────────────────────────────────────"
-    DX_FLAGS="--android --features server --target $TARGET_ARCH"
-    if [ "$BUILD_MODE" = "release" ]; then
-        DX_FLAGS="$DX_FLAGS --release"
-    fi
-    # shellcheck disable=SC2086
-    dx build $DX_FLAGS
-    echo "dx build complete."
-else
-    echo "─── Step 1: skipped (--skip-dx) ─────────────────────────────────────"
-fi
-
-# Verify the gradle project was generated
-if [ ! -f "$GRADLE_PROJECT/gradlew" ]; then
-    echo "ERROR: gradle project not found at $GRADLE_PROJECT"
-    echo "       Run without --skip-dx first."
-    exit 1
-fi
-
-# =============================================================================
-# STEP 2 — Download proot (Termux APT) if not cached
-# =============================================================================
-if [ "$SKIP_EMBED" -eq 0 ]; then
-
-echo ""
-echo "─── Step 2: proot / libtalloc from Termux ───────────────────────────"
-
-PROOT_BASE_URL="https://packages.termux.dev/apt/termux-main/pool/main/p/proot/"
-TALLOC_BASE_URL="https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/"
-
-# ── proot binary ──
-if [ ! -f "$CACHE_DIR/proot" ]; then
-    echo "Fetching latest proot package index..."
-    PROOT_DEB_NAME="$(curl -fsSL "$PROOT_BASE_URL" \
-        | grep -oP 'href="\K[^"]*proot_[^"]*_aarch64\.deb' \
-        | sort -V | tail -1)"
-    if [ -z "$PROOT_DEB_NAME" ]; then
-        echo "ERROR: could not find proot deb on $PROOT_BASE_URL" >&2
-        exit 1
-    fi
-    echo "Downloading proot: $PROOT_DEB_NAME"
-    curl -fsSL -o "$CACHE_DIR/proot.deb" "${PROOT_BASE_URL}${PROOT_DEB_NAME}"
-    echo "Extracting proot binary and loader..."
-    WORK_DIR="$(mktemp -d)"
-    cp "$CACHE_DIR/proot.deb" "$WORK_DIR/pkg.deb"
-    (
-        cd "$WORK_DIR"
-        ar x pkg.deb
-        DATA_TAR="$(ls data.tar.* 2>/dev/null | head -1)"
-        tar --wildcards -xf "$DATA_TAR" "*/bin/proot" "*/libexec/proot/loader"
-        PROOT_BIN="$(find . -path "*/bin/proot" | head -1)"
-        cp -L "$PROOT_BIN" "$CACHE_DIR/proot"
-        LOADER="$(find . -path "*/libexec/proot/loader" | head -1)"
-        if [ -n "$LOADER" ]; then
-            cp -L "$LOADER" "$CACHE_DIR/loader"
-            echo "loader extracted → $CACHE_DIR/loader"
-        else
-            echo "WARNING: loader not found in proot deb"
-        fi
+    local flags=(
+        --android
+        --codesign
+        --package-types aab
+        --features server
+        --target "$TARGET_ARCH"
     )
-    rm -rf "$WORK_DIR"
+
+    [[ "$BUILD_MODE" == release ]] && flags+=(--release)
+
+    dx bundle "${flags[@]}"
+}
+
+compute_cache_dir() {
+    docker pull --platform "$DOCKER_PLATFORM" "$DOCKER_IMAGE" >/dev/null
+
+    IMAGE_DIGEST="$(docker image inspect \
+        --format='{{index .RepoDigests 0}}' \
+        "$DOCKER_IMAGE")"
+
+    CACHE_KEY="$(printf '%s' "$IMAGE_DIGEST" | sha256sum | cut -c1-16)"
+    CACHE_DIR="$SCRIPT_DIR/target/android-cache/$CACHE_KEY"
+
+    mkdir -p "$CACHE_DIR"
+}
+
+download_termux_package() {
+    local package="$1"
+    local arch="$2"
+    local base="$3"
+
+    curl -fsSL "$base" |
+        grep -oP "href=\"\K[^\"]*${package}_[^\"]*_${arch}\.deb" |
+        sort -V |
+        tail -1
+}
+
+fetch_proot() {
+    [[ -f "$CACHE_DIR/proot" ]] && return
+
+    local base="https://packages.termux.dev/apt/termux-main/pool/main/p/proot/"
+    local deb
+
+    deb="$(download_termux_package proot "$TERMUX_ARCH" "$base")"
+    [[ -n "$deb" ]] || die "Failed locating proot package"
+
+    curl -fsSL -o "$CACHE_DIR/proot.deb" "${base}${deb}"
+
+    local work
+    work="$(mktemp -d)"
+    TEMP_DIRS+=("$work")
+
+    cp "$CACHE_DIR/proot.deb" "$work/pkg.deb"
+
+    (
+        cd "$work"
+        ar x pkg.deb
+        tar -xf data.tar.*
+
+        cp -L "$(find . -path '*/bin/proot' | head -1)" "$CACHE_DIR/proot"
+
+        loader="$(find . -path '*/libexec/proot/loader' | head -1 || true)"
+        [[ -n "$loader" ]] && cp -L "$loader" "$CACHE_DIR/loader"
+    )
+
     chmod +x "$CACHE_DIR/proot"
-    rm -f "$CACHE_DIR/proot.deb"
-    echo "proot extracted → $CACHE_DIR/proot"
-else
-    echo "proot already cached."
-fi
+}
 
-# ── libtalloc ──
-if [ ! -f "$CACHE_DIR/libtalloc.so.2" ]; then
-    echo "Fetching latest libtalloc package index..."
-    TALLOC_DEB_NAME="$(curl -fsSL "$TALLOC_BASE_URL" \
-        | grep -oP 'href="\K[^"]*libtalloc_[^"]*_aarch64\.deb' \
-        | sort -V | tail -1)"
-    if [ -z "$TALLOC_DEB_NAME" ]; then
-        echo "ERROR: could not find libtalloc deb on $TALLOC_BASE_URL" >&2
-        exit 1
-    fi
-    echo "Downloading libtalloc: $TALLOC_DEB_NAME"
-    curl -fsSL -o "$CACHE_DIR/libtalloc.deb" "${TALLOC_BASE_URL}${TALLOC_DEB_NAME}"
-    echo "Extracting libtalloc..."
-    WORK_DIR="$(mktemp -d)"
-    cp "$CACHE_DIR/libtalloc.deb" "$WORK_DIR/pkg.deb"
+fetch_libtalloc() {
+    [[ -f "$CACHE_DIR/libtalloc.so.2" ]] && return
+
+    local base="https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/"
+    local deb
+
+    deb="$(download_termux_package libtalloc "$TERMUX_ARCH" "$base")"
+    [[ -n "$deb" ]] || die "Failed locating libtalloc package"
+
+    curl -fsSL -o "$CACHE_DIR/libtalloc.deb" "${base}${deb}"
+
+    local work
+    work="$(mktemp -d)"
+    TEMP_DIRS+=("$work")
+
+    cp "$CACHE_DIR/libtalloc.deb" "$work/pkg.deb"
+
     (
-        cd "$WORK_DIR"
+        cd "$work"
         ar x pkg.deb
-        DATA_TAR="$(ls data.tar.* 2>/dev/null | head -1)"
-        tar --wildcards -xf "$DATA_TAR" "*/usr/lib/libtalloc.so*"
-        for f in $(find . -name "libtalloc.so*" -path "*/usr/lib/*"); do
-            cp -L "$f" "$CACHE_DIR/$(basename "$f")"
-        done
+        tar -xf data.tar.*
+
+        find . -name 'libtalloc.so*' -exec cp -L {} "$CACHE_DIR/" \;
     )
-    rm -rf "$WORK_DIR"
-    rm -f "$CACHE_DIR/libtalloc.deb"
-    echo "libtalloc extracted → $CACHE_DIR/libtalloc.so*"
-else
-    echo "libtalloc already cached."
-fi
+}
 
-# =============================================================================
-# STEP 3 — Export Docker image rootfs (linux/arm64) if not cached
-# =============================================================================
-echo ""
-echo "─── Step 3: Docker rootfs export ───────────────────────────────────"
+export_rootfs() {
+    local manifest="$CACHE_DIR/embedded_rootfs_manifest.json"
 
-ROOTFS_STAGE="$CACHE_DIR/rootfs_stage"
-MANIFEST_CACHE="$CACHE_DIR/embedded_rootfs_manifest.json"
+    [[ -f "$manifest" ]] && return
 
-if [ ! -f "$MANIFEST_CACHE" ]; then
-    # Verify docker is available
-    if ! command -v docker &>/dev/null; then
-        echo "ERROR: docker is required to export the rootfs." >&2
-        echo "       Install Docker and try again, or use --skip-embed to build" >&2
-        echo "       without the embedded rootfs (will require network on device)." >&2
-        exit 1
-    fi
+    local stage="$CACHE_DIR/rootfs_stage"
+    mkdir -p "$stage"
 
-    echo "Pulling Docker image for linux/arm64: $DOCKER_IMAGE"
-    docker pull --platform linux/arm64 "$DOCKER_IMAGE"
+    local cid
+    cid="$(docker create --platform "$DOCKER_PLATFORM" "$DOCKER_IMAGE")"
+    CONTAINERS+=("$cid")
 
-    echo "Creating container for export..."
-    CONTAINER_ID="$(docker create --platform linux/arm64 "$DOCKER_IMAGE")"
+    docker export "$cid" | tar -C "$stage" --no-same-owner -xf -
 
-    echo "Exporting rootfs (this may take several minutes)..."
-    mkdir -p "$ROOTFS_STAGE"
-    docker export "$CONTAINER_ID" | tar -C "$ROOTFS_STAGE" --no-same-owner --no-same-permissions -xf -
+    python3 - "$stage" "$CACHE_DIR" "$DOCKER_IMAGE" "$cid" <<'PY'
+import datetime, hashlib, json, os, shutil, stat, subprocess, sys
 
-    echo "Building rootfs manifest and copying individual files..."
-    python3 - "$ROOTFS_STAGE" "$CACHE_DIR" "$DOCKER_IMAGE" "$CONTAINER_ID" <<'PYEOF'
-import os, json, hashlib, shutil, stat, subprocess, datetime, sys
+root, cache, image, cid = sys.argv[1:]
 
-source, cache_dir, docker_image, container_id = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+files_dir = os.path.join(cache, "rootfs_files")
+os.makedirs(files_dir, exist_ok=True)
 
-dest_files = os.path.join(cache_dir, "rootfs_files")
-os.makedirs(dest_files, exist_ok=True)
-
-config_raw = subprocess.check_output(
-    ["docker", "inspect", "--format", "{{json .Config}}", container_id],
+cfg = json.loads(subprocess.check_output(
+    ["docker", "inspect", "--format", "{{json .Config}}", cid],
     text=True
-).strip()
-config = json.loads(config_raw)
+))
 
-now_iso = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 manifest = {
-    "version": 1,
-    "tag": docker_image,
-    "build_date": now_iso,
-    "env": config.get("Env") or [],
-    "entrypoint": config.get("Entrypoint"),
-    "cmd": config.get("Cmd"),
-    "working_dir": "/",
+    "version": 2,
+    "docker_image": image,
+    "created": datetime.datetime.utcnow().isoformat() + "Z",
+    "env": cfg.get("Env") or [],
+    "entrypoint": cfg.get("Entrypoint"),
+    "cmd": cfg.get("Cmd"),
     "files": {},
     "symlinks": {}
 }
 
-for dirpath, dirnames, filenames in os.walk(source, followlinks=False):
-    # Handle symlinks-to-dirs only (actual dirs are redundant; derived from file paths)
-    for dname in list(dirnames):
-        dir_full = os.path.join(dirpath, dname)
-        rel = os.path.relpath(dir_full, source)
-        container_path = "/" + rel
-        if os.path.islink(dir_full):
-            manifest["symlinks"][container_path] = os.readlink(dir_full)
-            dirnames.remove(dname)
+for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for name in filenames:
+        p = os.path.join(dirpath, name)
+        rel = "/" + os.path.relpath(p, root)
 
-    # Handle files (and symlinks-to-files)
-    for filename in filenames:
-        full_path = os.path.join(dirpath, filename)
-        rel = os.path.relpath(full_path, source)
-        container_path = "/" + rel
-        if os.path.islink(full_path):
-            manifest["symlinks"][container_path] = os.readlink(full_path)
-        else:
-            path_hash = hashlib.sha256(container_path.encode()).hexdigest()[:16]
-            dest_path = os.path.join(dest_files, path_hash)
-            shutil.copy2(full_path, dest_path)
-            file_stat = os.stat(full_path)
-            is_exec = bool(file_stat.st_mode & 0o111)
-            os.chmod(dest_path, 0o755 if is_exec else 0o644)
-            manifest["files"][path_hash] = {
-                "path": container_path,
-                "executable": is_exec,
-                "size": file_stat.st_size
-            }
+        if os.path.islink(p):
+            manifest["symlinks"][rel] = os.readlink(p)
+            continue
 
-manifest_path = os.path.join(cache_dir, "embedded_rootfs_manifest.json")
-with open(manifest_path, "w") as f:
-    json.dump(manifest, f, separators=(",", ":"))
+        st = os.stat(p)
+        h = hashlib.sha256(rel.encode()).hexdigest()[:16]
 
-print(f"Manifest written: {len(manifest['files'])} files, {len(manifest['symlinks'])} symlinks")
-PYEOF
+        dst = os.path.join(files_dir, h)
+        shutil.copy2(p, dst)
 
-    docker rm "$CONTAINER_ID"
-else
-    echo "Rootfs manifest already cached."
-fi
-
-# =============================================================================
-# STEP 4 — Copy assets into jniLibs + ensure all native dependencies are present
-# =============================================================================
-echo ""
-echo "─── Step 4: Copying assets into jniLibs ────────────────────────────"
-mkdir -p "$JNILIB_DIR"
-
-# proot executable → libproot.so (auto-included by AGP as a native lib)
-cp "$CACHE_DIR/proot" "$JNILIB_DIR/libproot.so"
-chmod +x "$JNILIB_DIR/libproot.so"
-# proot loader → libloader.so (auto-included by AGP as a native lib)
-cp "$CACHE_DIR/loader" "$JNILIB_DIR/libloader.so"
-chmod +x "$JNILIB_DIR/libloader.so"
-# libtalloc - copy all libtalloc.so* files with original names (already *.so)
-for f in "$CACHE_DIR"/libtalloc.so*; do
-    [ -f "$f" ] && cp "$f" "$JNILIB_DIR/$(basename "$f")"
-done
-# rootfs content files → librootfs-<hash>.so (auto-included by AGP)
-echo "Copying rootfs files to jniLibs as librootfs-*.so (this may take a while)..."
-for f in "$CACHE_DIR/rootfs_files"/*; do
-    [ -f "$f" ] || continue
-    hash="$(basename "$f")"
-    cp "$f" "$JNILIB_DIR/librootfs-${hash}.so"
-done
-# manifest → librootfs-manifest.so (auto-included by AGP)
-cp "$CACHE_DIR/embedded_rootfs_manifest.json" "$JNILIB_DIR/librootfs-manifest.so"
-
-# ===== Patch libproot.so with patchelf =======================================
-echo ""
-echo "Patching libproot.so with patchelf to use local rpath"
-
-if ! command -v patchelf &>/dev/null; then
-    echo "ERROR: patchelf is required but not found in PATH" >&2
-    exit 1
-fi
-
-PROOT_SO="$JNILIB_DIR/libproot.so"
-if [ -f "$PROOT_SO" ]; then
-    echo "Setting RPATH in $PROOT_SO to look for dependencies in same directory"
-    patchelf --set-rpath '$ORIGIN' "$PROOT_SO"
-    echo "Changing the name of the $PROOT_SO dependency on libtalloc to just 'libtalloc.so'"
-    patchelf --replace-needed libtalloc.so.2 libtalloc.so "$PROOT_SO"
-    echo "Successfully patched libproot.so"
-else
-    echo "WARNING: $PROOT_SO not found, skipping patchelf"
-fi
-
-fi  # end SKIP_EMBED==0
-
-# =============================================================================
-# STEP 5 — Patch the gradle app-module build.gradle.kts
-# =============================================================================
-echo ""
-echo "─── Step 5: Patching app build.gradle.kts ──────────────────────────"
-
-APP_BUILD_GRADLE="$GRADLE_PROJECT/app/build.gradle.kts"
-if [ ! -f "$APP_BUILD_GRADLE" ]; then
-    echo "WARNING: $APP_BUILD_GRADLE not found — skipping gradle patch."
-else
-    if grep -q "useLegacyPackaging" "$APP_BUILD_GRADLE"; then
-        echo "build.gradle.kts already patched."
-    else
-        python3 - <<PYEOF
-import re, sys
-
-path = "${APP_BUILD_GRADLE}"
-with open(path, "r") as f:
-    content = f.read()
-
-# Add packaging block with useLegacyPackaging = true.
-# All rootfs payload files are now named *.so (librootfs-*.so, libproot.so)
-# so AGP picks them up automatically — no custom merge task is needed.
-packaging_block = """    packaging {
-        jniLibs {
-            // Extract native libs to disk (extractNativeLibs = true).
-            // Required so libproot.so is executable and all librootfs-*.so
-            // payload files are accessible as real paths by the Rust runtime.
-            //useLegacyPackaging = true
+        manifest["files"][h] = {
+            "path": rel,
+            "size": st.st_size,
+            "mode": stat.S_IMODE(st.st_mode)
         }
-    }
-"""
 
-# Find the android {} block and insert packaging inside it (before the closing }).
-# We use a regex to find the android { line, then locate its matching closing brace.
-def find_matching_brace(s, start_pos):
-    """Find the position of the closing brace that matches the opening one at start_pos."""
-    count = 0
-    for i in range(start_pos, len(s)):
-        if s[i] == '{':
-            count += 1
-        elif s[i] == '}':
-            count -= 1
-            if count == 0:
-                return i
-    return -1
+with open(os.path.join(cache, "embedded_rootfs_manifest.json"), "w") as f:
+    json.dump(manifest, f, separators=(",", ":"))
+PY
+}
 
-# Find 'android {'
-android_match = re.search(r'\bandroid\s*\{', content)
-if android_match:
-    android_open = android_match.start() + len(android_match.group()) - 1  # Position of '{'
-    android_close = find_matching_brace(content, android_open)
+copy_assets() {
+    local jni="$JNILIB_DIR"
 
-    if android_close != -1:
-        # Insert the packaging block just before the closing brace
-        content = content[:android_close] + packaging_block + content[android_close:]
-        print(f"Inserted packaging block at position {android_close}", file=sys.stderr)
-    else:
-        print("ERROR: could not find matching closing brace for android block", file=sys.stderr)
-else:
-    print("ERROR: android {} block not found in build.gradle.kts", file=sys.stderr)
-    sys.exit(1)
+    mkdir -p "$jni"
 
-with open(path, "w") as f:
-    f.write(content)
+    cp "$CACHE_DIR/proot" "$jni/libproot.so"
+    cp "$CACHE_DIR/loader" "$jni/libloader.so"
+    cp "$CACHE_DIR/embedded_rootfs_manifest.json" \
+       "$jni/librootfs-manifest.so"
 
-print("Patched: " + path)
-PYEOF
-    fi
-fi
+    find "$CACHE_DIR" -maxdepth 1 -name 'libtalloc.so*' \
+        -exec cp {} "$jni/" \;
 
-# =============================================================================
-# STEP 6 — Patch AndroidManifest.xml (android:extractNativeLibs="true")
-# =============================================================================
-echo ""
-echo "─── Step 6: Patching AndroidManifest.xml ───────────────────────────"
+    find "$CACHE_DIR/rootfs_files" -type f | while read -r f; do
+        cp "$f" "$jni/librootfs-$(basename "$f").so"
+    done
+}
 
-MANIFEST="$GRADLE_PROJECT/app/src/main/AndroidManifest.xml"
-if [ ! -f "$MANIFEST" ]; then
-    echo "WARNING: $MANIFEST not found — skipping manifest patch."
-else
-    if grep -q "extractNativeLibs" "$MANIFEST"; then
-        echo "AndroidManifest.xml already has extractNativeLibs."
+patch_proot() {
+    command -v patchelf >/dev/null || return 0
+
+    local p="$JNILIB_DIR/libproot.so"
+    [[ -f "$p" ]] || return 0
+
+    patchelf --set-rpath '$ORIGIN' "$p" || true
+    patchelf --replace-needed libtalloc.so.2 libtalloc.so "$p" || true
+}
+
+patch_gradle() {
+    local file="$APP_BUILD_GRADLE"
+    [[ -f "$file" ]] || return 0
+    sed 's/android {/android {\n    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }\n/' -i "$file"
+}
+
+patch_manifest() {
+    local file="$MANIFEST"
+    [[ -f "$file" ]] || return 0
+
+    grep -q "extractNativeLibs" "$file" && return 0
+
+    python3 - "$file" <<'PY'
+import re,sys
+p=sys.argv[1]
+s=open(p).read()
+s=re.sub(r'(<application\b)',
+            r'\1\n        android:extractNativeLibs="true"',
+            s, count=1)
+open(p,"w").write(s)
+PY
+}
+
+build_android() {
+    (
+        cd "$GRADLE_PROJECT"
+        chmod +x gradlew
+
+        if [[ "$BUILD_MODE" == "release" ]]; then
+            ./gradlew bundleRelease --no-daemon
+        else
+            ./gradlew assembleDebug --no-daemon
+        fi
+    )
+}
+
+get_artifact_path() {
+    if [[ "$BUILD_MODE" == "release" ]]; then
+        echo "$GRADLE_PROJECT/app/build/outputs/bundle/release"
     else
-        python3 - <<PYEOF
-import re
-
-path = "${MANIFEST}"
-with open(path, "r") as f:
-    content = f.read()
-
-# Add android:extractNativeLibs="true" to the <application tag.
-# Handles both self-closing and regular application tags.
-content = re.sub(
-    r'(<application\b)',
-    r'\1\n        android:extractNativeLibs="true"',
-    content,
-    count=1
-)
-
-with open(path, "w") as f:
-    f.write(content)
-
-print("Patched: " + path)
-PYEOF
+        echo "$GRADLE_PROJECT/app/build/outputs/apk/debug"
     fi
-fi
+}
 
-# Note: eruda and three.js are vendored into app/assets/lib/ automatically by
-# Cargo's build.rs (app/build.rs) during the `dx build` step above. No extra
-# download step is needed here.
+sign_aab() {
+    local aab="$1"
 
-# =============================================================================
-# STEP 7 — Rebuild APK with Gradle
-# =============================================================================
-echo ""
-echo "─── Step 7: gradle assemble${GRADLE_MODE} ──────────────────────────────────"
+    [[ -f "$aab" ]] || die "AAB not found: $aab"
 
-(
-    cd "$GRADLE_PROJECT"
-    chmod +x gradlew
-    ./gradlew "assemble${GRADLE_MODE}" --no-daemon
-)
+    if [[ -n "$ANDROID_KEYSTORE_B64" ]]; then
+        echo "🔐 Decoding keystore from environment variable"
+        echo "$ANDROID_KEYSTORE_B64" | base64 -d > "$CACHE_DIR/keystore.jks"
+        export ANDROID_KEYSTORE_PATH="$CACHE_DIR/keystore.jks"
+    fi
 
-APK_DIR="$GRADLE_PROJECT/app/build/outputs/apk/${BUILD_MODE}"
-echo ""
-echo "==================================================================="
-echo " Build complete!"
-echo ""
-echo " APK(s) in: $APK_DIR"
-ls -lh "$APK_DIR/"*.apk 2>/dev/null || echo " (no .apk found — check Gradle output above)"
-echo "==================================================================="
+    : "${ANDROID_KEYSTORE_PATH:?Missing ANDROID_KEYSTORE_PATH}"
+    : "${ANDROID_KEYSTORE_PASSWORD:?Missing ANDROID_KEYSTORE_PASSWORD}"
+    : "${ANDROID_KEY_ALIAS:?Missing ANDROID_KEY_ALIAS}"
+    : "${ANDROID_KEY_PASSWORD:?Missing ANDROID_KEY_PASSWORD}"
+
+    command -v jarsigner >/dev/null || die "jarsigner not found (install JDK)"
+
+    echo "🔐 Signing AAB: $aab"
+
+    jarsigner \
+        -sigalg SHA256withRSA \
+        -digestalg SHA-256 \
+        -keystore "$ANDROID_KEYSTORE_PATH" \
+        -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+        -keypass "$ANDROID_KEY_PASSWORD" \
+        "$aab" \
+        "$ANDROID_KEY_ALIAS"
+
+    echo "✔ Signature applied"
+
+    echo "🔎 Verifying signature..."
+    jarsigner -verify -verbose -certs "$aab" >/dev/null \
+        || die "AAB signature verification failed"
+
+    echo "✔ AAB verified successfully"
+}
+
+main() {
+    parse_args "$@"
+    resolve_platform
+    require_tools
+    setup_android_env
+
+    GRADLE_MODE="$(tr '[:lower:]' '[:upper:]' <<< "${BUILD_MODE:0:1}")${BUILD_MODE:1}"
+
+    run_dx_build
+
+    GRADLE_PROJECT="$SCRIPT_DIR/target/dx/colmap-openmvs-app/$BUILD_MODE/android/app"
+    APP_BUILD_GRADLE="$GRADLE_PROJECT/app/build.gradle.kts"
+    MANIFEST="$GRADLE_PROJECT/app/src/main/AndroidManifest.xml"
+    JNILIB_DIR="$GRADLE_PROJECT/app/src/main/jniLibs/$ARCH_ABI"
+
+    [[ -f "$GRADLE_PROJECT/gradlew" ]] || die "Gradle project missing"
+
+    if [[ $SKIP_EMBED -eq 0 ]]; then
+        compute_cache_dir
+        fetch_proot
+        fetch_libtalloc
+        export_rootfs
+        copy_assets
+        patch_proot
+    fi
+
+    patch_gradle
+    patch_manifest
+    build_android
+
+    ARTIFACT_DIR="$(get_artifact_path)"
+    if [[ "$BUILD_MODE" == "release" ]]; then
+        AAB_FILE="$ARTIFACT_DIR/app-release.aab"
+        [[ -n "$AAB_FILE" ]] || die "AAB not found"
+        find "$ARTIFACT_DIR" -type f ! -name "app-release.aab" -delete
+        sign_aab "$AAB_FILE"
+    fi
+
+    echo
+    echo "Build complete"
+    ls -lh "$ARTIFACT_DIR"
+}
+
+main "$@"

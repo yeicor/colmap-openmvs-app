@@ -24,10 +24,13 @@ impl AndroidSettingsValidation {
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to load settings: {}", e))?;
 
-            let binary_dir = std::path::Path::new(&settings.proot_binary_dir);
-            let images_dir = std::path::Path::new(&settings.proot_images_dir);
+            use std::fs;
+            use std::path::Path;
 
-            // Check if paths are accessible
+            let binary_dir = Path::new(&settings.proot_binary_dir);
+            let images_dir = Path::new(&settings.proot_images_dir);
+
+            // Check if base paths exist
             let binary_accessible = binary_dir.exists();
             let images_accessible = images_dir.exists();
 
@@ -46,6 +49,67 @@ impl AndroidSettingsValidation {
                 );
                 return Ok(true);
             }
+
+            // Symlink validation (limited to 100 files for performance)
+            let mut broken_links = false;
+            let mut checked = 0usize;
+            const MAX_CHECK: usize = 100;
+
+            if let Ok(entries) = fs::read_dir(images_dir) {
+                for entry in entries.flatten() {
+                    if checked >= MAX_CHECK {
+                        debug!("Reached symlink check limit (100 files), stopping early");
+                        break;
+                    }
+
+                    let path = entry.path();
+
+                    if let Ok(metadata) = fs::symlink_metadata(&path) {
+                        if metadata.file_type().is_symlink() {
+                            checked += 1;
+
+                            match fs::read_link(&path) {
+                                Ok(target) => {
+                                    let resolved = if target.is_absolute() {
+                                        target.clone()
+                                    } else {
+                                        images_dir.join(&target)
+                                    };
+
+                                    let ok = resolved.starts_with(binary_dir) && resolved.exists();
+
+                                    if !ok {
+                                        warn!(
+                                            symlink = %path.display(),
+                                            target = %target.display(),
+                                            resolved = %resolved.display(),
+                                            "Broken or outdated symlink detected"
+                                        );
+                                        broken_links = true;
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        symlink = %path.display(),
+                                        error = %e,
+                                        "Failed to read symlink"
+                                    );
+                                    broken_links = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if broken_links {
+                return Ok(true);
+            }
+
+            debug!(
+                "Android settings validation: symlinks seemed valid after checking {} files",
+                checked
+            );
 
             Ok(false)
         }
