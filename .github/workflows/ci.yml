@@ -35,7 +35,7 @@ jobs:
             artifact-find: "-path '*/release/web/*' -not -name '.manifest.json'"
           - os: ubuntu-24.04 # Includes both AMD64 and ARM64 builds, which are merged into a single AAB artifact
             build-type: android
-            artifact-find: "*/release/android/*/app-release.aab"
+            artifact-find: "-path '*/release/android/*/app-release.aab'"
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
