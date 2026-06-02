@@ -273,6 +273,7 @@ jobs:
           echo "📦 Final release assets:"
           ls -lah release_out
       - uses: softprops/action-gh-release@v3
+        id: release
         if: github.event_name != 'pull_request'
         with:
           files: release_out/*
@@ -284,7 +285,7 @@ jobs:
       - uses: liudonghua123/delete-release-action@v1 # Test that release would succeed, but delete it immediately if it's a non-tag push
         if: "!startsWith(github.ref, 'refs/tags/v')"
         with:
-          release_name: ${{ github.ref_name }}
+          release_id: ${{ steps.release.outputs.id }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
