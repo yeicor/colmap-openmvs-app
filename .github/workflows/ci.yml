@@ -199,7 +199,6 @@ jobs:
           DOCKER_BUILD_SUMMARY: "false"
 
   deploy-pages:
-    if: github.event_name != 'pull_request'
     needs: build-and-test
     runs-on: ubuntu-24.04
     permissions:
@@ -216,11 +215,10 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web-artifact/public
-      - id: deployment
+      - if: github.event_name != 'pull_request'
         uses: actions/deploy-pages@v4
 
   deploy-android:
-    if: github.event_name != 'pull_request'
     needs: build-and-test
     runs-on: ubuntu-24.04
     steps:
@@ -233,10 +231,9 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.github.yeicor.colmap_openmvs_app
           releaseFiles: android-artifact/app-release.aab
-          tracks: ${{ startsWith(github.ref, 'refs/tags/v') && 'production,beta' || 'beta' }}
+          tracks: ${{ startsWith(github.ref, 'refs/tags/v') && 'production,beta,qa' || (github.event_name != 'pull_request' && 'beta,qa' || 'qa') }}
 
   deploy-release:
-    if: startsWith(github.ref, 'refs/tags/v')
     needs: build-and-test
     runs-on: ubuntu-24.04
     permissions:
@@ -282,26 +279,26 @@ jobs:
           echo "📦 Final release assets:"
           ls -lah release_out
       - uses: softprops/action-gh-release@v3
+        if: github.event_name != 'pull_request'
         with:
           files: release_out/*
-          draft: false
-          prerelease: false
-          generate_release_notes: true
+          draft: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: liudonghua123/delete-release-action@v1 # Test that release would succeed, but delete it immediately if it's a non-tag push
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        with:
+          release_name: ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   success: # Meta job that always runs and serves as a simple success signal for the entire workflow
-    needs: [build-and-test, deploy-docker] # May not always run: deploy-pages, deploy-android, deploy-release
+    needs: [build-and-test, deploy-docker, deploy-pages, deploy-android, deploy-release]
     if: "!cancelled()"
     runs-on: ubuntu-24.04
     steps:
-      - run: |
-          all_needs=(echo "${{ toJson(needs) }}" | jq -r 'keys[]')
-          for job in $all_needs; do
-            echo "$job: ${needs[$job].result}"
-            if [ "${needs[$job].result}" != "success" ]; then
-              echo "⚠️ Warning: $job did not succeed"
-              exit 1
-            fi
-          done
-          echo "🎉 All jobs succeeded!"
+      - env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: echo "$NEEDS_JSON" | jq -e 'all(.[].result; . == "success")'
