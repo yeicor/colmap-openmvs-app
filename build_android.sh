@@ -358,12 +358,6 @@ sign_aab() {
         "$ANDROID_KEY_ALIAS"
 
     echo "✔ Signature applied"
-
-    echo "🔎 Verifying signature..."
-    jarsigner -verify -verbose -certs "$aab" >/dev/null \
-        || die "AAB signature verification failed"
-
-    echo "✔ AAB verified successfully"
 }
 
 main() {

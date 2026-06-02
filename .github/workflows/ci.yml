@@ -195,6 +195,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
           cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
+        env:
+          DOCKER_BUILD_SUMMARY: "false"
 
   deploy-pages:
     if: github.event_name != 'pull_request'
