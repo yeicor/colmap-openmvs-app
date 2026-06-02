@@ -74,7 +74,9 @@ jobs:
         run: cargo test --workspace --all-targets --all-features
       - shell: bash
         if: matrix.build-type == 'web'
-        run: $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --verbose
+        run: |
+          $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --verbose
+          sed -i 's|/./|./|g' target/dx/*/release/web/public/* target/dx/*/release/web/public/*/*  # Forces relative paths for all assets.
       - shell: bash
         if: matrix.build-type == 'android'
         run: |
