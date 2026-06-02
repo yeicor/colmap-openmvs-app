@@ -128,11 +128,11 @@ jobs:
         shell: bash
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "tracks=production,beta,qa" >> "$GITHUB_OUTPUT"
+            echo "tracks=production,beta,internal" >> "$GITHUB_OUTPUT"
           elif [[ "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
-            echo "tracks=beta,qa" >> "$GITHUB_OUTPUT"
+            echo "tracks=beta,internal" >> "$GITHUB_OUTPUT"
           else
-            echo "tracks=qa" >> "$GITHUB_OUTPUT"
+            echo "tracks=internal" >> "$GITHUB_OUTPUT"
           fi
           echo "release-files=$(find target -type f -path '*/release/android/*/app-release.aab' | tr '\n' ',')" >> "$GITHUB_OUTPUT"
 
