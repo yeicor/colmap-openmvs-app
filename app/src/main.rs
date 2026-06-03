@@ -13,6 +13,9 @@ pub mod server;
 pub mod task_manager;
 pub mod views;
 
+#[cfg(feature = "demo")]
+pub mod demo;
+
 use logging::init as init_logging;
 pub use views::{Project, Projects, ProjectsSidebar, SettingsView, StartupTasks};
 

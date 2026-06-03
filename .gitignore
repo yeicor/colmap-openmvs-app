@@ -9,3 +9,6 @@
 # Generated JS assets (produced by app/build.rs, not for committing)
 /app/assets/viewer3d.bundle.*
 /app/assets/lib/
+
+# Generated demo assets (produced by backend tests)
+/app/assets/demo/

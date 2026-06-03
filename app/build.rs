@@ -51,6 +51,87 @@ fn main() {
 
     // ── 4. Extract build metadata from Git, date, and Rust version ───────────
     extract_build_metadata();
+
+    // ── 5. Generate demo assets if the demo feature is enabled ────────────────
+    if std::env::var("CARGO_FEATURE_DEMO").is_ok() {
+        generate_demo_assets(&manifest_dir);
+    }
+}
+
+// ── Generate demo assets ──────────────────────────────────────────────────────
+
+fn generate_demo_assets(manifest_dir: &Path) {
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let dest_path = Path::new(&out_dir).join("demo_assets.rs");
+    
+    let demo_dir = manifest_dir.join("assets").join("demo");
+    println!("cargo:rerun-if-changed={}", demo_dir.display());
+
+    let manifest_path = demo_dir.join("manifest.json");
+    if !manifest_path.exists() {
+        // Just generate empty stubs if the assets don't exist yet so it builds
+        fs::write(
+            &dest_path,
+            "pub const DEMO_MANIFEST: &str = \"{}\";\n\
+             pub fn demo_image_bytes(_name: &str) -> Option<&'static [u8]> { None }\n\
+             pub fn demo_output_bytes(_path: &str) -> Option<&'static [u8]> { None }\n"
+        ).unwrap();
+        return;
+    }
+
+    let manifest_str = fs::read_to_string(&manifest_path).unwrap();
+    
+    let mut out = String::new();
+    out.push_str(&format!(
+        "pub const DEMO_MANIFEST: &str = r###\"{}\"###;\n\n",
+        manifest_str
+    ));
+    
+    // Images
+    out.push_str("pub fn demo_image_bytes(name: &str) -> Option<&'static [u8]> {\n");
+    out.push_str("    match name {\n");
+    let images_dir = demo_dir.join("images");
+    if images_dir.exists() {
+        for entry in fs::read_dir(&images_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_file() {
+                let name = path.file_name().unwrap().to_str().unwrap();
+                let abs_path = path.canonicalize().unwrap().to_string_lossy().into_owned();
+                let abs_path_escaped = abs_path.replace("\\", "\\\\");
+                out.push_str(&format!(
+                    "        \"{}\" => Some(include_bytes!(\"{}\")),\n",
+                    name, abs_path_escaped
+                ));
+            }
+        }
+    }
+    out.push_str("        _ => None,\n");
+    out.push_str("    }\n}\n\n");
+    
+    // Outputs
+    out.push_str("pub fn demo_output_bytes(path: &str) -> Option<&'static [u8]> {\n");
+    out.push_str("    match path {\n");
+    let outputs_dir = demo_dir.join("outputs");
+    if outputs_dir.exists() {
+        for entry in fs::read_dir(&outputs_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_file() {
+                let name = path.file_name().unwrap().to_str().unwrap();
+                let abs_path = path.canonicalize().unwrap().to_string_lossy().into_owned();
+                let abs_path_escaped = abs_path.replace("\\", "\\\\");
+                out.push_str(&format!(
+                    "        \"{}\" => Some(include_bytes!(\"{}\")),\n",
+                    name, abs_path_escaped
+                ));
+            }
+        }
+    }
+    out.push_str("        _ => None,\n");
+    out.push_str("    }\n}\n");
+
+    fs::write(&dest_path, out).unwrap();
 }
 
 // ── npm ci ────────────────────────────────────────────────────────────────────

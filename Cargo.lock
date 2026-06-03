@@ -652,6 +652,8 @@ dependencies = [
  "gloo-timers",
  "http 1.4.1",
  "js-sys",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-log",

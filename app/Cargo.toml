@@ -21,6 +21,8 @@ base64 = { version = "0.22" }
 chrono = { workspace = true }
 futures = { version = "0.3" }
 http = { version = "1.4" }
+serde = { workspace = true, optional = true }
+serde_json = { version = "1.0", optional = true }
 
 # Logging
 tracing = { workspace = true }
@@ -30,7 +32,7 @@ tracing-log = { workspace = true }
 [features]
 default = ["fullstack"]
 fullstack = ["dioxus/fullstack"]
-demo = [] # The demo showcases what this app can do without any server, by bundling pre-reconstructed demo data. The pre-reconstructed demo data and more is extracted from a e2e test suite that optionally saves this to assets if an env var is provided. This feature conditionally bundles those assets into the app so that the user can see the whole app for themselves without any server feature. Used for github pages. Incompatible with fullstack (default feature as it must be deployed as a static site).
+demo = ["serde", "serde_json"] # The demo showcases what this app can do without any server, by bundling pre-reconstructed demo data. The pre-reconstructed demo data and more is extracted from a e2e test suite that optionally saves this to assets if an env var is provided. This feature conditionally bundles those assets into the app so that the user can see the whole app for themselves without any server feature. Used for github pages. Incompatible with fullstack (default feature as it must be deployed as a static site).
 
 # Client target features
 web = ["dioxus/web"]
