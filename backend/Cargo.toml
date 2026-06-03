@@ -79,3 +79,6 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Diag
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "0.21", default-features = false }
 ndk-context = { version = "0.1" }
+
+[dev-dependencies]
+tempfile = "3.27.0"

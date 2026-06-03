@@ -11,6 +11,7 @@ pub mod logging;
 pub mod mycomponents;
 pub mod server;
 pub mod task_manager;
+pub mod viewer_conversion;
 pub mod views;
 
 #[cfg(feature = "demo")]

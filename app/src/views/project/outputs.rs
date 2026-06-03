@@ -1,9 +1,6 @@
 use crate::mycomponents::{Banner, BannerType};
-#[cfg(target_arch = "wasm32")]
-use crate::server::get_project_output_bytes;
 use crate::server::{
-    clear_project_outputs, delete_project_output, get_project_output_for_viewer,
-    list_project_outputs,
+    clear_project_outputs, delete_project_output, get_project_output_bytes, list_project_outputs,
 };
 use base64::Engine as _;
 use colmap_openmvs_api::OutputFile;
@@ -554,17 +551,31 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                  let mut err = error_msg;
                                                                  let mut info = info_msg;
                                                                  spawn(async move {
-                                                                     #[cfg(target_arch = "wasm32")]
-                                                                     {
-                                                                         // Web: fetch bytes then trigger browser Save As via Blob URL
-                                                                         match get_project_output_bytes(pn, rp).await {
-                                                                             Ok(bytes) => trigger_download(&fname, bytes).await,
-                                                                             Err(e) => {
-                                                                                 error!(error = %e, "Download failed");
-                                                                                 err.set(format!("Download failed: {e}"));
-                                                                             }
-                                                                         }
-                                                                     }
+                                                                      #[cfg(target_arch = "wasm32")]
+                                                                      {
+                                                                          // Web: fetch bytes then trigger browser Save As via Blob URL
+                                                                          match get_project_output_bytes(pn, rp).await {
+                                                                               Ok(stream) => {
+                                                                                   let mut bytes = Vec::new();
+                                                                                  let mut s = stream;
+                                                                                  while let Some(chunk) = s.next().await {
+                                                                                      match chunk {
+                                                                                          Ok(data) => bytes.extend_from_slice(&data),
+                                                                                          Err(e) => {
+                                                                                              error!(error = %e, "Download stream error");
+                                                                                              err.set(format!("Download failed: {e}"));
+                                                                                              return;
+                                                                                          }
+                                                                                      }
+                                                                                  }
+                                                                                  trigger_download(&fname, bytes).await;
+                                                                              }
+                                                                              Err(e) => {
+                                                                                  error!(error = %e, "Download failed");
+                                                                                  err.set(format!("Download failed: {e}"));
+                                                                              }
+                                                                          }
+                                                                      }
                                                                      #[cfg(not(target_arch = "wasm32"))]
                                                                      {
                                                                          // Native: save via server (desktop dialog or Android direct write)
@@ -599,12 +610,69 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                 viewing.set(Some(rel_path.clone()));
                                                                 let mut err = error_msg;
                                                                 spawn(async move {
-                                                                    match get_project_output_for_viewer(pn.clone(), rp.clone()).await {
-                                                                        Ok(bytes) => {
-                                                                            info!(file = %fn_, bytes = bytes.len(), "Loaded for 3D viewer");
-                                                                            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                                                                            let fname_safe = js_escape(&fn_);
-                                                                            launch_glb_viewer(&b64, &fname_safe).await;
+                                                                    match get_project_output_bytes(pn.clone(), rp.clone()).await {
+                                                                         Ok(stream) => {
+                                                                             let mut raw_bytes = Vec::new();
+                                                                            let mut s = stream;
+                                                                            while let Some(chunk) = s.next().await {
+                                                                                match chunk {
+                                                                                    Ok(data) => raw_bytes.extend_from_slice(&data),
+                                                                                    Err(e) => {
+                                                                                        error!(error = %e, "Viewer stream error");
+                                                                                        err.set(format!("Failed to load viewer data: {e}"));
+                                                                                        viewing.set(None);
+                                                                                        return;
+                                                                                    }
+                                                                                }
+                                                                            }
+
+                                                                            let companion_png = if let Some(tex_name) = crate::viewer_conversion::ply_texture_file_name(&raw_bytes) {
+                                                                                let tex_rp = std::path::Path::new(&rp)
+                                                                                    .parent()
+                                                                                    .map(|d| d.join(&tex_name).to_string_lossy().to_string())
+                                                                                    .unwrap_or(tex_name.clone());
+                                                                                debug!(texture = %tex_rp, "Fetching companion texture");
+                                                                                match get_project_output_bytes(pn.clone(), tex_rp).await {
+                                                                                    Ok(tex_stream) => {
+                                                                                        let mut tex_bytes = Vec::new();
+                                                                                        let mut ts = tex_stream;
+                                                                                        while let Some(chunk) = ts.next().await {
+                                                                                            match chunk {
+                                                                                                Ok(data) => tex_bytes.extend_from_slice(&data),
+                                                                                                Err(e) => {
+                                                                                                    error!(error = %e, "Texture stream error");
+                                                                                                    break;
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                        if tex_bytes.is_empty() {
+                                                                                            None
+                                                                                        } else {
+                                                                                            Some(tex_bytes)
+                                                                                        }
+                                                                                    }
+                                                                                    Err(e) => {
+                                                                                        warn!(error = %e, "Companion texture not found");
+                                                                                        None
+                                                                                    }
+                                                                                }
+                                                                            } else {
+                                                                                None
+                                                                            };
+
+                                                                            let glb = crate::viewer_conversion::convert_output_for_viewer(&fn_, &raw_bytes, companion_png);
+                                                                            match glb {
+                                                                                Ok(glb_bytes) => {
+                                                                                    info!(file = %fn_, bytes = glb_bytes.len(), "Converted to GLB for 3D viewer");
+                                                                                    let b64 = base64::engine::general_purpose::STANDARD.encode(&glb_bytes);
+                                                                                    let fname_safe = js_escape(&fn_);
+                                                                                    launch_glb_viewer(&b64, &fname_safe).await;
+                                                                                }
+                                                                                Err(e) => {
+                                                                                    error!(file = %fn_, error = %e, "GLB conversion failed");
+                                                                                    err.set(format!("Failed to convert for viewer: {e}"));
+                                                                                }
+                                                                            }
                                                                         }
                                                                         Err(e) => {
                                                                             error!(file = %fn_, error = %e, "Viewer load failed");

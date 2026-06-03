@@ -197,13 +197,13 @@ pub enum PipelineStatus {
 // ---------------------------------------------------------------------------
 
 async fn find_running_task(project_name: &str, dry_run: bool) -> Option<String> {
-    let kind_str = if dry_run {
-        "DryRunPipeline"
+    let kind_filter = if dry_run {
+        TaskKind::DryRunPipeline
     } else {
-        "RunPipeline"
+        TaskKind::RunPipeline
     };
 
-    let candidate_id = list_tasks(Some(kind_str.to_string()), Some(project_name.to_string()))
+    let candidate_id = list_tasks(Some(kind_filter), Some(project_name.to_string()))
         .await
         .ok()
         .and_then(|tasks| {

@@ -2,10 +2,7 @@
 //! Contains all implementations for server functions with access to heavy native dependencies
 
 mod config;
-pub use config::{
-    get_image_config, load_named_project_config, load_project_config, save_named_project_config,
-    save_project_config,
-};
+pub use config::{get_image_config, load_project_config, save_project_config};
 
 mod line_reader;
 pub use line_reader::LineReader;
@@ -62,12 +59,9 @@ pub use theme::get_dark_mode;
 mod process;
 pub use process::kill_process_tree;
 
-pub use output_viewer::get_project_output_for_viewer;
-mod output_viewer;
-
-pub mod ply_to_glb;
-
 use colmap_openmvs_api::OutputFile;
+use dioxus::fullstack::body::Bytes;
+use dioxus::fullstack::ByteStream;
 use dioxus::Result as DioxusResult;
 use tracing::debug;
 
@@ -157,18 +151,21 @@ fn walk_for_outputs(
     Ok(())
 }
 
-/// Read an output file as raw bytes — callable from the client via the Dioxus
+/// Stream an output file as raw bytes — callable from the client via the Dioxus
 /// server-function protocol so no URL needs to be constructed or hardcoded.
 pub async fn get_project_output_bytes(
     project_name: String,
     relative_path: String,
-) -> DioxusResult<Vec<u8>> {
+) -> DioxusResult<ByteStream> {
     let project_path = project::resolve_project_path(&project_name).await?;
     let full_path = project::resolve_project_relative_path(&project_path, &relative_path)?;
-    debug!("Reading output file bytes: {}", full_path.display());
-    tokio::fs::read(&full_path)
+    debug!("Streaming output file bytes: {}", full_path.display());
+    let bytes = tokio::fs::read(&full_path)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e).into())
+        .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e))?;
+    Ok(ByteStream::new(
+        futures::stream::once(async move { Bytes::from(bytes) }),
+    ))
 }
 
 /// Delete an output file from a project.

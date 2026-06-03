@@ -356,7 +356,7 @@ fn parse_bracketed_parameter(line: &str) -> Option<ConfigParameter> {
 }
 
 /// Load and parse project configuration from config.sh in a project directory.
-pub async fn load_project_config(project_path: String) -> dioxus::Result<LoadedProjectConfig> {
+async fn load_project_config_by_path(project_path: String) -> dioxus::Result<LoadedProjectConfig> {
     let project_path = Path::new(&project_path);
 
     if !project_path.exists() {
@@ -431,13 +431,11 @@ pub async fn load_project_config(project_path: String) -> dioxus::Result<LoadedP
     })
 }
 
-pub async fn load_named_project_config(
-    project_name: String,
-) -> dioxus::Result<LoadedProjectConfig> {
+pub async fn load_project_config(project_name: String) -> dioxus::Result<LoadedProjectConfig> {
     let project_path = crate::project::resolve_project_path(&project_name)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    load_project_config(project_path.to_string_lossy().into_owned()).await
+    load_project_config_by_path(project_path.to_string_lossy().into_owned()).await
 }
 
 /// Parse a single environment variable export line
@@ -487,7 +485,7 @@ fn parse_env_var_line(line: &str) -> Option<EnvVarConfig> {
 }
 
 /// Save environment variable configuration to config.sh in a project directory.
-pub async fn save_project_config(
+async fn save_project_config_by_path(
     project_path: String,
     config: SavedProjectConfig,
 ) -> dioxus::Result<()> {
@@ -561,14 +559,14 @@ pub async fn save_project_config(
     Ok(())
 }
 
-pub async fn save_named_project_config(
+pub async fn save_project_config(
     project_name: String,
     config: SavedProjectConfig,
 ) -> dioxus::Result<()> {
     let project_path = crate::project::resolve_project_path(&project_name)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    save_project_config(project_path.to_string_lossy().into_owned(), config).await
+    save_project_config_by_path(project_path.to_string_lossy().into_owned(), config).await
 }
 
 #[cfg(test)]

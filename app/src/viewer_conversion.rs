@@ -1,15 +1,18 @@
-//! PLY → GLB (binary glTF 2.0) converter.
+//! PLY/points3D.bin → GLB (binary glTF 2.0) converter.
+//!
+//! Runs on the frontend (WASM) so the server can serve raw output files without
+//! server-side conversion.
 //!
 //! Handles the variants produced by COLMAP and OpenMVS:
 //!   - Point cloud (xyz + optional rgb)
 //!   - Indexed triangle mesh (xyz + optional rgb, face vertex_indices)
 //!   - Textured mesh  (xyz, face vertex_indices + per-face texcoord, companion PNG)
+//!   - COLMAP points3D.bin  → GLB point cloud
 
 use anyhow::anyhow;
+use std::io::Read;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Public API
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Public API ────────────────────────────────────────────────────────────────
 
 /// Convert PLY bytes + optional companion texture PNG → GLB bytes.
 pub fn ply_to_glb(ply_bytes: &[u8], companion_png: Option<Vec<u8>>) -> anyhow::Result<Vec<u8>> {
@@ -48,9 +51,86 @@ pub fn points_to_glb(
     build_glb(parsed, None)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Internal types
-// ─────────────────────────────────────────────────────────────────────────────
+/// Convert a raw output file (PLY or points3D.bin) to GLB for the 3D viewer.
+///
+/// `companion_png` is an optional texture image for textured PLY meshes.
+/// Returns the GLB bytes, ready to base64-encode and pass to the JS viewer.
+pub fn convert_output_for_viewer(
+    file_name: &str,
+    raw_bytes: &[u8],
+    companion_png: Option<Vec<u8>>,
+) -> anyhow::Result<Vec<u8>> {
+    let lower = file_name.to_lowercase();
+    if lower == "points3d.bin" {
+        points3d_bin_to_glb(raw_bytes)
+    } else {
+        ply_to_glb(raw_bytes, companion_png)
+    }
+}
+
+// ── points3D.bin → GLB ────────────────────────────────────────────────────────
+
+fn points3d_bin_to_glb(data: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut cursor = std::io::Cursor::new(data);
+    let num_points = read_u64(&mut cursor)? as usize;
+
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(num_points);
+    let mut colors: Vec<[u8; 3]> = Vec::with_capacity(num_points);
+
+    for _ in 0..num_points {
+        let _id = read_u64(&mut cursor)?;
+        let x = read_f64(&mut cursor)? as f32;
+        let y = read_f64(&mut cursor)? as f32;
+        let z = read_f64(&mut cursor)? as f32;
+        let r = read_u8(&mut cursor)?;
+        let g = read_u8(&mut cursor)?;
+        let b = read_u8(&mut cursor)?;
+        let _error = read_f64(&mut cursor)?;
+        let track_length = read_u64(&mut cursor)? as usize;
+        skip_bytes(&mut cursor, track_length * 8)?;
+
+        positions.push([x, y, z]);
+        colors.push([r, g, b]);
+    }
+
+    points_to_glb(&positions, Some(&colors))
+}
+
+fn read_u8(cursor: &mut std::io::Cursor<&[u8]>) -> anyhow::Result<u8> {
+    let mut buf = [0u8; 1];
+    cursor
+        .read_exact(&mut buf)
+        .map_err(|e| anyhow!("EOF reading u8: {}", e))?;
+    Ok(buf[0])
+}
+
+fn read_u64(cursor: &mut std::io::Cursor<&[u8]>) -> anyhow::Result<u64> {
+    let mut buf = [0u8; 8];
+    cursor
+        .read_exact(&mut buf)
+        .map_err(|e| anyhow!("EOF reading u64: {}", e))?;
+    Ok(u64::from_le_bytes(buf))
+}
+
+fn read_f64(cursor: &mut std::io::Cursor<&[u8]>) -> anyhow::Result<f64> {
+    let mut buf = [0u8; 8];
+    cursor
+        .read_exact(&mut buf)
+        .map_err(|e| anyhow!("EOF reading f64: {}", e))?;
+    Ok(f64::from_le_bytes(buf))
+}
+
+fn skip_bytes(cursor: &mut std::io::Cursor<&[u8]>, n: usize) -> anyhow::Result<()> {
+    let pos = cursor.position() as usize;
+    let new_pos = pos + n;
+    if new_pos > cursor.get_ref().len() {
+        return Err(anyhow!("EOF while skipping {} bytes", n));
+    }
+    cursor.set_position(new_pos as u64);
+    Ok(())
+}
+
+// ── Internal types ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Fmt {
@@ -126,18 +206,15 @@ struct ParsedPly {
     positions: Vec<[f32; 3]>,
     normals_from_file: Vec<[f32; 3]>,
     colors: Vec<[u8; 3]>,
-    face_indices: Vec<u32>,  // multiple of 3
-    face_uvs: Vec<[f32; 2]>, // same length as face_indices when present
+    face_indices: Vec<u32>,
+    face_uvs: Vec<[f32; 2]>,
     #[allow(dead_code)]
     texture_file: Option<String>,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Header parser
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Header parser ─────────────────────────────────────────────────────────────
 
 fn parse_header(bytes: &[u8]) -> anyhow::Result<Header> {
-    // Find end_header to determine data_offset
     let end_marker = b"end_header\n";
     let end_pos = bytes
         .windows(end_marker.len())
@@ -215,9 +292,7 @@ fn parse_header(bytes: &[u8]) -> anyhow::Result<Header> {
     })
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Binary reader
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Binary reader ─────────────────────────────────────────────────────────────
 
 struct BinReader<'a> {
     buf: &'a [u8],
@@ -327,9 +402,7 @@ impl<'a> BinReader<'a> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PLY parser dispatch
-// ─────────────────────────────────────────────────────────────────────────────
+// ── PLY parser dispatch ───────────────────────────────────────────────────────
 
 fn parse_ply(bytes: &[u8]) -> anyhow::Result<ParsedPly> {
     let hdr = parse_header(bytes)?;
@@ -346,9 +419,7 @@ fn parse_ply(bytes: &[u8]) -> anyhow::Result<ParsedPly> {
     Ok(out)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Binary parser
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Binary parser ─────────────────────────────────────────────────────────────
 
 fn parse_binary(hdr: &Header, data: &[u8], le: bool, out: &mut ParsedPly) -> anyhow::Result<()> {
     let mut r = BinReader::new(data, le);
@@ -496,7 +567,6 @@ fn read_faces(elem: &ElemDef, r: &mut BinReader, out: &mut ParsedPly) -> anyhow:
             }
         }
 
-        // Fan-triangulate
         let nv = verts.len();
         for j in 1..nv.saturating_sub(1) {
             out.face_indices.push(verts[0]);
@@ -529,9 +599,7 @@ fn skip_element(elem: &ElemDef, r: &mut BinReader) -> anyhow::Result<()> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ASCII parser (vertices only; faces with vertex_indices, no texcoord)
-// ─────────────────────────────────────────────────────────────────────────────
+// ── ASCII parser ──────────────────────────────────────────────────────────────
 
 fn parse_ascii(hdr: &Header, data: &[u8], out: &mut ParsedPly) -> anyhow::Result<()> {
     let text = std::str::from_utf8(data).map_err(|_| anyhow!("PLY ASCII: invalid UTF-8"))?;
@@ -551,8 +619,6 @@ fn parse_ascii(hdr: &Header, data: &[u8], out: &mut ParsedPly) -> anyhow::Result
                 for _ in 0..elem.count {
                     let line = lines.next().unwrap_or("");
                     let toks: Vec<&str> = line.split_whitespace().collect();
-                    // Expand tokens for list properties (just skip them in ASCII)
-                    // For scalar-only vertex elements this works directly
                     let mut flat: Vec<f64> = vec![];
                     let mut ti = 0usize;
                     for prop in &elem.props {
@@ -567,7 +633,7 @@ fn parse_ascii(hdr: &Header, data: &[u8], out: &mut ParsedPly) -> anyhow::Result
                                     .and_then(|s| s.parse::<usize>().ok())
                                     .unwrap_or(0);
                                 ti += 1 + cnt;
-                                flat.push(0.0); // placeholder
+                                flat.push(0.0);
                             }
                         }
                     }
@@ -590,7 +656,6 @@ fn parse_ascii(hdr: &Header, data: &[u8], out: &mut ParsedPly) -> anyhow::Result
                     let line = lines.next().unwrap_or("");
                     let toks: Vec<&str> = line.split_whitespace().collect();
                     if let Some(vi) = vi_pi {
-                        // Before vi_pi there may be other scalar props
                         let scalar_before = elem.props[..vi]
                             .iter()
                             .filter(|p| matches!(p.def, PropDef::Scalar(_)))
@@ -626,9 +691,7 @@ fn parse_ascii(hdr: &Header, data: &[u8], out: &mut ParsedPly) -> anyhow::Result
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Normal computation
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Normal computation ────────────────────────────────────────────────────────
 
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [
@@ -651,8 +714,6 @@ fn normalize(n: [f32; 3]) -> [f32; 3] {
     }
 }
 
-/// Per-face normals for an expanded (textured) mesh.
-/// Output length == face_indices.len()
 fn face_normals_expanded(positions: &[[f32; 3]], face_indices: &[u32]) -> Vec<[f32; 3]> {
     let mut out = vec![[0f32; 3]; face_indices.len()];
     for fi in 0..face_indices.len() / 3 {
@@ -667,8 +728,6 @@ fn face_normals_expanded(positions: &[[f32; 3]], face_indices: &[u32]) -> Vec<[f
     out
 }
 
-/// Smooth vertex normals for an indexed mesh.
-/// Output length == positions.len()
 fn vertex_normals(positions: &[[f32; 3]], face_indices: &[u32]) -> Vec<[f32; 3]> {
     let mut out = vec![[0f32; 3]; positions.len()];
     for fi in 0..face_indices.len() / 3 {
@@ -691,9 +750,7 @@ fn vertex_normals(positions: &[[f32; 3]], face_indices: &[u32]) -> Vec<[f32; 3]>
     out
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GLB builder
-// ─────────────────────────────────────────────────────────────────────────────
+// ── GLB builder ───────────────────────────────────────────────────────────────
 
 fn align4(n: usize) -> usize {
     (n + 3) & !3
@@ -746,7 +803,6 @@ fn build_glb(parsed: ParsedPly, companion_png: Option<Vec<u8>>) -> anyhow::Resul
     let mut indices_acc: Option<usize> = None;
     let mut tex_bv_idx: Option<usize> = None;
 
-    // Helper: add bufferView + accessor, return accessor index
     let add_accessor = |buf_views: &mut Vec<serde_json::Value>,
                         accessors: &mut Vec<serde_json::Value>,
                         sec: BufSection,
@@ -786,14 +842,13 @@ fn build_glb(parsed: ParsedPly, companion_png: Option<Vec<u8>>) -> anyhow::Resul
         acc_idx
     };
 
-    // ── 1. Positions ─────────────────────────────────────────────────────────
+    // ── 1. Positions ──────────────────────────────────────────────────────────
 
     let mut pos_bytes: Vec<u8> = vec![];
     let mut mn = [f32::MAX; 3];
     let mut mx = [f32::MIN; 3];
 
     if has_uvs {
-        // Expanded positions (one per face-vertex)
         for &fi in &parsed.face_indices {
             let p = parsed.positions[fi as usize];
             for k in 0..3 {
@@ -803,7 +858,6 @@ fn build_glb(parsed: ParsedPly, companion_png: Option<Vec<u8>>) -> anyhow::Resul
             }
         }
     } else {
-        // Original vertex positions
         for &p in &parsed.positions {
             for k in 0..3 {
                 mn[k] = mn[k].min(p[k]);
@@ -843,7 +897,6 @@ fn build_glb(parsed: ParsedPly, companion_png: Option<Vec<u8>>) -> anyhow::Resul
     if !is_point_cloud {
         let normals: Vec<[f32; 3]> = if !parsed.normals_from_file.is_empty() {
             if has_uvs {
-                // expand file normals
                 parsed
                     .face_indices
                     .iter()
@@ -903,7 +956,7 @@ fn build_glb(parsed: ParsedPly, companion_png: Option<Vec<u8>>) -> anyhow::Resul
         attr.insert("TEXCOORD_0".into(), serde_json::json!(acc));
     }
 
-    // ── 4. Colors ─────────────────────────────────────────────────────────────
+    // ── 4. Colors ──────────────────────────────────────────────────────────────
 
     if has_colors && !has_uvs {
         let mut col_bytes: Vec<u8> = Vec::with_capacity(parsed.colors.len() * 4);
@@ -970,7 +1023,7 @@ fn build_glb(parsed: ParsedPly, companion_png: Option<Vec<u8>>) -> anyhow::Resul
 
     pad4(&mut bin, 0);
 
-    // ── glTF JSON ─────────────────────────────────────────────────────────────
+    // ── glTF JSON ──────────────────────────────────────────────────────────────
 
     let primitive_mode = if is_point_cloud { 0u32 } else { 4u32 };
 
@@ -983,7 +1036,6 @@ fn build_glb(parsed: ParsedPly, companion_png: Option<Vec<u8>>) -> anyhow::Resul
         primitive["indices"] = serde_json::json!(ia);
     }
 
-    // Material / texture
     let (materials, textures, images, samplers) = if let Some(bv_idx) = tex_bv_idx {
         (
             serde_json::json!([{
@@ -1056,18 +1108,15 @@ fn build_glb(parsed: ParsedPly, companion_png: Option<Vec<u8>>) -> anyhow::Resul
     let total = 12 + 8 + json_padded + 8 + bin_padded;
 
     let mut glb: Vec<u8> = Vec::with_capacity(total);
-    // Header
     glb.extend_from_slice(b"glTF");
     push_u32(&mut glb, 2);
     push_u32(&mut glb, total as u32);
-    // JSON chunk
     push_u32(&mut glb, json_padded as u32);
     push_u32(&mut glb, 0x4E4F534A);
     glb.extend_from_slice(json_bytes);
     while glb.len() < 12 + 8 + json_padded {
         glb.push(0x20);
     }
-    // BIN chunk
     push_u32(&mut glb, bin_padded as u32);
     push_u32(&mut glb, 0x004E4942);
     glb.extend_from_slice(&bin);

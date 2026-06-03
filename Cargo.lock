@@ -641,6 +641,7 @@ dependencies = [
 name = "colmap-openmvs-app"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "base64 0.22.1",
  "chrono",
  "colmap-openmvs-api",
@@ -689,6 +690,7 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "tar",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-log",

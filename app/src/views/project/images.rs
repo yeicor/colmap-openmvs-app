@@ -237,18 +237,15 @@ pub fn ImagesTab(project_name: String) -> Element {
             // -- Reconnect demo task ------------------------------------------
             let reconnect_demo = {
                 debug!(project_name = %project_name, "Looking for running demo task on server");
-                crate::server::list_tasks(
-                    Some("DownloadDemo".to_string()),
-                    Some(project_name.clone()),
-                )
-                .await
-                .ok()
-                .and_then(|tasks| {
-                    tasks
-                        .into_iter()
-                        .find(|t| t.state == TaskState::Running)
-                        .map(|t| t.id)
-                })
+                crate::server::list_tasks(Some(TaskKind::DownloadDemo), Some(project_name.clone()))
+                    .await
+                    .ok()
+                    .and_then(|tasks| {
+                        tasks
+                            .into_iter()
+                            .find(|t| t.state == TaskState::Running)
+                            .map(|t| t.id)
+                    })
             };
             if let Some(task_id) = reconnect_demo {
                 if let Ok(Some(info)) = crate::server::get_task_info(task_id.clone()).await {
@@ -265,18 +262,16 @@ pub fn ImagesTab(project_name: String) -> Element {
             }
 
             // -- Reconnect resize task ----------------------------------------
-            let reconnect_resize = crate::server::list_tasks(
-                Some("BatchResize".to_string()),
-                Some(project_name.clone()),
-            )
-            .await
-            .ok()
-            .and_then(|tasks| {
-                tasks
-                    .into_iter()
-                    .find(|t| t.state == TaskState::Running)
-                    .map(|t| t.id)
-            });
+            let reconnect_resize =
+                crate::server::list_tasks(Some(TaskKind::BatchResize), Some(project_name.clone()))
+                    .await
+                    .ok()
+                    .and_then(|tasks| {
+                        tasks
+                            .into_iter()
+                            .find(|t| t.state == TaskState::Running)
+                            .map(|t| t.id)
+                    });
             if let Some(task_id) = reconnect_resize {
                 if let Ok(Some(info)) = crate::server::get_task_info(task_id.clone()).await {
                     if info.state == TaskState::Running {
@@ -329,15 +324,23 @@ pub fn ImagesTab(project_name: String) -> Element {
 
         let project = project_name_cache.clone();
         spawn(async move {
-            for name in needs_fetch {
+            let fetches: Vec<_> = needs_fetch
+                .iter()
+                .map(|name| {
+                    let p = project.clone();
+                    let n = name.clone();
+                    async move {
+                        let result = crate::server::get_project_image_bytes(p, n.clone()).await;
+                        (n, result)
+                    }
+                })
+                .collect();
+            for (name, result) in futures::future::join_all(fetches).await {
                 if list_version() != version {
                     break;
                 }
-                match crate::server::get_project_image_bytes(project.clone(), name.clone()).await {
+                match result {
                     Ok(bytes) => {
-                        if list_version() != version {
-                            break;
-                        }
                         let size = bytes.len();
                         let url = bytes_to_display_url(&bytes);
                         img_cache.write().insert(name, (url, size));
@@ -778,14 +781,11 @@ pub fn ImagesTab(project_name: String) -> Element {
                                                         Ok(Some(data_b64)) => {
                                                             match base64::engine::general_purpose::STANDARD.decode(&data_b64) {
                                                                 Ok(bytes) => {
-                                                                    #[cfg(feature = "fullstack")]
                                                                     let byte_stream = dioxus::fullstack::ByteStream::new(
                                                                         futures::stream::once(async {
                                                                             dioxus::fullstack::body::Bytes::from(bytes)
                                                                         }),
                                                                     );
-                                                                    #[cfg(not(feature = "fullstack"))]
-                                                                    let byte_stream = bytes;
                                                                     match crate::server::add_project_image(
                                                                         pn.clone(),
                                                                         name.clone(),

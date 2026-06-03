@@ -1016,7 +1016,7 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
             tags_loading.set(false);
 
             // Reconnect to any in-progress prepare task
-            let reconnect_id = list_tasks(Some("PrepareImage".to_string()), None)
+            let reconnect_id = list_tasks(Some(TaskKind::PrepareImage), None)
                 .await
                 .ok()
                 .and_then(|tasks| {
