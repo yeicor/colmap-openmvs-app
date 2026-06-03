@@ -15,7 +15,7 @@ on:
         default: false
 
   schedule:
-    - cron: "0 3 * * *" # nightly UTC
+    - cron: "0 0 * * *" # nightly UTC
 
 permissions:
   actions: read
@@ -48,6 +48,7 @@ jobs:
           workflow: android.yml
           branch: main
           name: source-image-digest
+          search_artifacts: true
           path: previous
           if_no_artifact_found: warn
 

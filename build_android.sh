@@ -284,6 +284,22 @@ patch_proot() {
     patchelf --replace-needed libtalloc.so.2 libtalloc.so "$p" || true
 }
 
+patch_version() {
+    local file="$APP_BUILD_GRADLE"
+    [[ -f "$file" ]] || return 0
+
+    local version_code version_name tag commit
+    version_code=$(( ($(date -u +%s) - $(date -d "2026-01-01 00:00:00 UTC" +%s)) / 60 ))
+    tag="$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.1")"
+    commit="$(git rev-parse --short HEAD)"
+    version_name="${tag}+${commit}"
+
+    sed -Ei \
+        -e "s/versionCode[[:space:]]*=[[:space:]]*[0-9]+/versionCode = $version_code/" \
+        -e "s/versionName[[:space:]]*=[[:space:]]*\"[^\"]*\"/versionName = \"$version_name\"/" \
+        "$file"
+}
+
 patch_gradle() {
     local file="$APP_BUILD_GRADLE"
     [[ -f "$file" ]] || return 0
@@ -398,6 +414,7 @@ main() {
         patch_proot
     fi
 
+    patch_version
     patch_gradle
     patch_manifest
     build_android
