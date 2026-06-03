@@ -9,8 +9,6 @@ use colmap_openmvs_api::TaskEvent;
 use colmap_openmvs_api::TaskKind;
 use colmap_openmvs_api::TaskState;
 use dioxus::document::eval;
-#[cfg(target_arch = "wasm32")]
-use dioxus::fullstack::ByteStream;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
     BsArrowsFullscreen, BsBoxArrowUpRight, BsCheckAll, BsCloudDownload, BsGrid, BsImage, BsStar,
@@ -780,11 +778,14 @@ pub fn ImagesTab(project_name: String) -> Element {
                                                         Ok(Some(data_b64)) => {
                                                             match base64::engine::general_purpose::STANDARD.decode(&data_b64) {
                                                                 Ok(bytes) => {
+                                                                    #[cfg(feature = "fullstack")]
                                                                     let byte_stream = dioxus::fullstack::ByteStream::new(
                                                                         futures::stream::once(async {
                                                                             dioxus::fullstack::body::Bytes::from(bytes)
                                                                         }),
                                                                     );
+                                                                    #[cfg(not(feature = "fullstack"))]
+                                                                    let byte_stream = bytes;
                                                                     match crate::server::add_project_image(
                                                                         pn.clone(),
                                                                         name.clone(),

@@ -4,7 +4,6 @@ default-members = ["app"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
 authors = ["Yeicor <yeicor+no-reply@github.com>"]
 edition = "2021"
 

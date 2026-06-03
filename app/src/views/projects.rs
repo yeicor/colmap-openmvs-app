@@ -14,7 +14,9 @@ use crate::{
     mycomponents::PageHeader,
 };
 use dioxus::{document::eval, prelude::*};
-use dioxus_free_icons::icons::bs_icons::{BsCardList, BsGear, BsPencil, BsPlusCircle, BsTrash};
+use dioxus_free_icons::icons::bs_icons::{
+    BsBug, BsCardList, BsCupFill, BsGear, BsGithub, BsHeart, BsPencil, BsPlusCircle, BsTrash,
+};
 use dioxus_free_icons::Icon;
 use dioxus_primitives::ContentSide;
 use tracing::{debug, error, info, warn};
@@ -29,10 +31,27 @@ enum DialogType {
 #[component]
 pub fn ProjectsSidebar() -> Element {
     let cur_route = use_route::<crate::Route>();
+    let mut route_state = use_signal(|| cur_route.clone());
+    let mut sidebar_open: Signal<Option<bool>> = use_signal(|| None);
+
+    if *route_state.peek() != cur_route {
+        route_state.set(cur_route.clone());
+    }
+
+    use_effect(move || {
+        sidebar_open.set(if matches!(route_state(), Route::Projects {}) {
+            Some(false)
+        } else {
+            None
+        });
+    });
+
+    let is_projects_route = matches!(cur_route, Route::Projects {});
+
     rsx! {
         SidebarProvider {
-            // Only show the SidebarTrigger if not on root
-            if !matches!(cur_route, Route::Projects {}) {
+            open: sidebar_open,
+            if !is_projects_route {
                 SidebarTrigger {}
             }
             BaseSidebar {
@@ -220,6 +239,13 @@ pub fn Projects(
                 }
             }
 
+            if !is_sidebar && cfg!(feature = "demo") {
+                Banner {
+                    message: "This is a demo build running with mock data and without a real backend connection. Download the full version for your preferred platform to manage your actual projects and tasks.",
+                    banner_type: BannerType::Info,
+                }
+            }
+
             if loading() {
                 p { class: "loading", "Loading projects..." }
             } else if projects().is_empty() {
@@ -294,6 +320,64 @@ pub fn Projects(
                     }
                 }
             }
+
+            if !is_sidebar {
+                div {
+                    class: "footer-links",
+                    div {
+                        class: "footer-section",
+                        span { class: "footer-label", "Project" }
+                        div {
+                            class: "footer-links-row",
+                            a {
+                                href: "https://github.com/yeicor/colmap-openmvs-app",
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                Icon { icon: BsGithub }
+                                "Source Code"
+                            }
+                            span { class: "footer-separator", "·" }
+                            a {
+                                href: "https://github.com/yeicor/colmap-openmvs-app/issues",
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                Icon { icon: BsBug }
+                                "Open Issues"
+                            }
+                        }
+                    }
+                    div {
+                        class: "footer-section",
+                        span { class: "footer-label", "Donate" }
+                        div {
+                            class: "footer-links-row",
+                            a {
+                                href: "https://github.com/sponsors/yeicor",
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                Icon { icon: BsHeart }
+                                "GitHub Sponsors"
+                            }
+                            span { class: "footer-separator", "·" }
+                            a {
+                                href: "https://patreon.com/Yeicor",
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                Icon { icon: BsSupportBlobP }
+                                "Patreon"
+                            }
+                            span { class: "footer-separator", "·" }
+                            a {
+                                href: "https://buymeacoffee.com/yeicor",
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                Icon { icon: BsCupFill }
+                                "Buy Me a Coffee"
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         AlertDialogRoot {
@@ -334,6 +418,40 @@ pub fn Projects(
                         "Cancel"
                     }
                 }
+            }
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct BsSupportBlobP;
+
+impl dioxus_free_icons::IconShape for BsSupportBlobP {
+    fn view_box(&self) -> &str {
+        "0 0 436 476"
+    }
+
+    fn xmlns(&self) -> &str {
+        "http://www.w3.org/2000/svg"
+    }
+
+    fn fill_and_stroke<'a>(&self, user_color: &'a str) -> (&'a str, &'a str, &'a str) {
+        (user_color, "none", "0")
+    }
+
+    fn stroke_linecap(&self) -> &str {
+        "round"
+    }
+
+    fn stroke_linejoin(&self) -> &str {
+        "round"
+    }
+
+    fn child_elements(&self) -> Element {
+        rsx! {
+            // stylized “P”
+            path {
+                d: "M436 143c-.084-60.778-47.57-110.591-103.285-128.565C263.528-7.884 172.279-4.649 106.214 26.424 26.142 64.089.988 146.596.051 228.883c-.77 67.653 6.004 245.841 106.83 247.11 74.917.948 86.072-95.279 120.737-141.623 24.662-32.972 56.417-42.285 95.507-51.929C390.309 265.865 436.097 213.011 436 143Z",
             }
         }
     }

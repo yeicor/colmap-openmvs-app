@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use dioxus::fullstack::{ByteStream, FileStream};
+use dioxus::fullstack::ByteStream;
 use futures::StreamExt;
 use image::{DynamicImage, ImageDecoder, ImageReader};
 use once_cell::sync::Lazy;
@@ -90,25 +90,6 @@ pub async fn get_project_images(project_name: String) -> dioxus::Result<Vec<Stri
     images.sort();
     info!(project_name = %project_name, image_count = images.len(), "Successfully retrieved images list");
     Ok(images)
-}
-
-pub async fn get_project_image(
-    project_name: String,
-    image_name: String,
-) -> dioxus::Result<FileStream> {
-    debug!(project_name = %project_name, image_name = %image_name, "Retrieving project image");
-    let settings = crate::get_settings().await?;
-    let images_path =
-        crate::project::project_images_path(&project_name, &settings.projects_folder)?;
-    debug!(images_path = %images_path.display(), "Resolved images directory");
-
-    let canonical_image = validate_and_canonicalize_image_path(&images_path, &image_name)?;
-    let lock = lock_for_image_path(&canonical_image).await;
-    let _guard = lock.lock().await;
-    debug!(image_path = %canonical_image.display(), "Reading image file");
-    Ok(FileStream::from_path(canonical_image)
-        .await
-        .context("Failed to read file")?)
 }
 
 /// Return the raw bytes of a project image.

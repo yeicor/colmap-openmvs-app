@@ -21,7 +21,7 @@ pub use android_settings_validation::AndroidSettingsValidation;
 mod project;
 pub use project::{
     add_project_image, batch_resize_images, clear_project_images, delete_project_image,
-    download_demo_images, get_project_image, get_project_image_bytes, get_project_images,
+    download_demo_images, get_project_image_bytes, get_project_images,
 };
 
 mod files;
@@ -167,19 +167,6 @@ pub async fn get_project_output_bytes(
     let full_path = project::resolve_project_relative_path(&project_path, &relative_path)?;
     debug!("Reading output file bytes: {}", full_path.display());
     tokio::fs::read(&full_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e).into())
-}
-
-/// Read a project output file as bytes (for download or viewing).
-pub async fn get_project_output(
-    project_name: String,
-    relative_path: String,
-) -> DioxusResult<dioxus::fullstack::FileStream> {
-    let project_path = project::resolve_project_path(&project_name).await?;
-    let full_path = project::resolve_project_relative_path(&project_path, &relative_path)?;
-    debug!("Reading output file from: {}", full_path.display());
-    dioxus::fullstack::FileStream::from_path(full_path)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e).into())
 }

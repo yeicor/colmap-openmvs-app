@@ -403,7 +403,8 @@ fn GeneralTab() -> Element {
                             input {
                                 r#type: "url",
                                 value: "{pending_backend_url}",
-                                placeholder: "https://your-backend.example.com",
+                                disabled: cfg!(target_arch = "wasm32"),
+                                placeholder: if cfg!(target_arch = "wasm32") { "Not supported on wasm32 (fixable Dioxus limitation)" } else { "https://your-backend.example.com" },
                                 class: "folder-input",
                                 oninput: move |e| {
                                     pending_backend_url.set(e.value());

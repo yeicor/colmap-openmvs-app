@@ -1,6 +1,6 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::{fs, panic};
 
 #[cfg(target_family = "windows")]
 const SHELL: &str = "cmd.exe";
@@ -48,6 +48,9 @@ fn main() {
     if profile != "release" {
         copy_eruda(&workspace_root, &manifest_dir);
     }
+
+    // ── 4. Extract build metadata from Git, date, and Rust version ───────────
+    extract_build_metadata();
 }
 
 // ── npm ci ────────────────────────────────────────────────────────────────────
@@ -149,6 +152,52 @@ fn copy_eruda(workspace_root: &Path, manifest_dir: &Path) {
     }
 }
 
+// ── Extract build metadata ────────────────────────────────────────────────────────────────
+
+fn extract_build_metadata() {
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/index");
+
+    // Git information
+    let git_hash =
+        run("git", &["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".into());
+
+    let git_hash_full = run("git", &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
+
+    let git_branch =
+        run("git", &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "unknown".into());
+
+    let git_tag =
+        run("git", &["describe", "--tags", "--abrev=0"]).unwrap_or_else(|| "unknown".into());
+
+    let git_dirty = Command::new("git")
+        .args(["diff", "--quiet"])
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(false);
+
+    // UTC timestamp
+    let build_date =
+        run("date", &["-u", "+%Y-%m-%dT%H:%M:%SZ"]).unwrap_or_else(|| "unknown".into());
+
+    // Profile and target from environment
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "unknown".into());
+    let target = std::env::var("TARGET").unwrap_or_else(|_| "unknown".into());
+
+    // Rust version
+    let rustc_version = run("rustc", &["--version"]).unwrap_or_else(|| "unknown".into());
+
+    println!("cargo:rustc-env=BUILD_DATE={build_date}");
+    println!("cargo:rustc-env=PROFILE={profile}");
+    println!("cargo:rustc-env=TARGET={target}");
+    println!("cargo:rustc-env=GIT_TAG={git_tag}");
+    println!("cargo:rustc-env=GIT_HASH={git_hash}");
+    println!("cargo:rustc-env=GIT_HASH_FULL={git_hash_full}");
+    println!("cargo:rustc-env=GIT_BRANCH={git_branch}");
+    println!("cargo:rustc-env=GIT_DIRTY={git_dirty}");
+    println!("cargo:rustc-env=RUSTC_VERSION={rustc_version}");
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn run_shell(cmd: &str, dir: &Path) -> std::io::Result<std::process::Output> {
@@ -197,4 +246,17 @@ fn normalized_path(path: &Path) -> String {
     } else {
         s.into_owned()
     }
+}
+
+/// Run a command and return its trimmed stdout if it exits successfully.
+fn run(cmd: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(cmd).args(args).output().ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|s| s.trim().to_string())
 }

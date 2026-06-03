@@ -1,6 +1,5 @@
 [package]
 name = "colmap-openmvs-app"
-version.workspace = true
 authors.workspace = true
 edition.workspace = true
 
@@ -9,7 +8,7 @@ colmap-openmvs-api = { path = "../api" }
 colmap-openmvs-backend = { path = "../backend", optional = true }
 
 # UI Framework
-dioxus = { version = "0.7.9", features = ["fullstack", "router"] }
+dioxus = { version = "0.7.9", features = ["router"] }
 dioxus-free-icons = { version = "0.10.0", features = ["bootstrap"] }
 dioxus-primitives = { git = "https://github.com/DioxusLabs/components", rev = "203824b", default-features = false }
 
@@ -29,7 +28,9 @@ tracing-subscriber = { workspace = true }
 tracing-log = { workspace = true }
 
 [features]
-default = ["web"]
+default = ["fullstack"]
+fullstack = ["dioxus/fullstack"]
+demo = [] # The demo showcases what this app can do without any server, by bundling pre-reconstructed demo data. The pre-reconstructed demo data and more is extracted from a e2e test suite that optionally saves this to assets if an env var is provided. This feature conditionally bundles those assets into the app so that the user can see the whole app for themselves without any server feature. Used for github pages. Incompatible with fullstack (default feature as it must be deployed as a static site).
 
 # Client target features
 web = ["dioxus/web"]

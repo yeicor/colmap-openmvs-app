@@ -13,7 +13,7 @@
 
 /// Returns the system dark-mode preference, if it can be determined
 /// server-side.  See module docs for the `None` / `Some` semantics.
-pub async fn get_dark_mode() -> anyhow::Result<Option<bool>> {
+pub async fn get_dark_mode() -> dioxus::Result<Option<bool>> {
     #[cfg(target_os = "android")]
     {
         return Ok(Some(detect_android_dark_mode()?));

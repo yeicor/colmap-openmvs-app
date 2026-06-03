@@ -36,7 +36,7 @@ struct CommandHelp {
 
 /// Parse configuration from a prepared container image by running help commands.
 /// Uses the runtime specified in the default_image_tag from settings.
-pub async fn get_image_config(image_tag: String) -> anyhow::Result<ConfigSchema> {
+pub async fn get_image_config(image_tag: String) -> dioxus::Result<ConfigSchema> {
     let settings = crate::settings::get_settings()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to retrieve settings: {:?}", e))?
@@ -69,13 +69,13 @@ pub async fn get_image_config(image_tag: String) -> anyhow::Result<ConfigSchema>
 }
 
 /// Parse configuration using PRoot runtime.
-async fn get_image_config_with_proot(image_tag: String) -> anyhow::Result<ConfigSchema> {
+async fn get_image_config_with_proot(image_tag: String) -> dioxus::Result<ConfigSchema> {
     let rt = RuntimeFactory::proot().await;
     get_image_config_impl(&rt, image_tag).await
 }
 
 /// Parse configuration using Docker runtime.
-async fn get_image_config_with_docker(image_tag: String) -> anyhow::Result<ConfigSchema> {
+async fn get_image_config_with_docker(image_tag: String) -> dioxus::Result<ConfigSchema> {
     let rt = RuntimeFactory::docker();
     get_image_config_impl(&rt, image_tag).await
 }
@@ -84,7 +84,7 @@ async fn get_image_config_with_docker(image_tag: String) -> anyhow::Result<Confi
 async fn get_image_config_impl(
     rt: &dyn Runtime,
     image_tag: String,
-) -> anyhow::Result<ConfigSchema> {
+) -> dioxus::Result<ConfigSchema> {
     // First, try to get the image build date from the list of prepared images
     let build_date = match rt.list_images().await {
         Ok(images) => images
@@ -356,23 +356,21 @@ fn parse_bracketed_parameter(line: &str) -> Option<ConfigParameter> {
 }
 
 /// Load and parse project configuration from config.sh in a project directory.
-pub async fn load_project_config(project_path: String) -> anyhow::Result<LoadedProjectConfig> {
+pub async fn load_project_config(project_path: String) -> dioxus::Result<LoadedProjectConfig> {
     let project_path = Path::new(&project_path);
 
     if !project_path.exists() {
-        return Err(anyhow::anyhow!(
-            "Project path does not exist: {}",
-            project_path.display()
-        ));
+        return Err(
+            anyhow::anyhow!("Project path does not exist: {}", project_path.display()).into(),
+        );
     }
 
     let config_path = project_path.join("config.sh");
 
     if !config_path.exists() {
-        return Err(anyhow::anyhow!(
-            "config.sh not found in project: {}",
-            config_path.display()
-        ));
+        return Err(
+            anyhow::anyhow!("config.sh not found in project: {}", config_path.display()).into(),
+        );
     }
 
     let content = tokio::fs::read_to_string(&config_path).await?;
@@ -435,7 +433,7 @@ pub async fn load_project_config(project_path: String) -> anyhow::Result<LoadedP
 
 pub async fn load_named_project_config(
     project_name: String,
-) -> anyhow::Result<LoadedProjectConfig> {
+) -> dioxus::Result<LoadedProjectConfig> {
     let project_path = crate::project::resolve_project_path(&project_name)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -492,14 +490,13 @@ fn parse_env_var_line(line: &str) -> Option<EnvVarConfig> {
 pub async fn save_project_config(
     project_path: String,
     config: SavedProjectConfig,
-) -> anyhow::Result<()> {
+) -> dioxus::Result<()> {
     let project_path = Path::new(&project_path);
 
     if !project_path.exists() {
-        return Err(anyhow::anyhow!(
-            "Project path does not exist: {}",
-            project_path.display()
-        ));
+        return Err(
+            anyhow::anyhow!("Project path does not exist: {}", project_path.display()).into(),
+        );
     }
 
     let mut script_content = String::new();
@@ -567,7 +564,7 @@ pub async fn save_project_config(
 pub async fn save_named_project_config(
     project_name: String,
     config: SavedProjectConfig,
-) -> anyhow::Result<()> {
+) -> dioxus::Result<()> {
     let project_path = crate::project::resolve_project_path(&project_name)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;

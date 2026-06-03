@@ -32,7 +32,7 @@ static FRACTION_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d+)\s*/\s*(\d+)").
 // ---------------------------------------------------------------------------
 
 /// Start the reconstruction pipeline for a project. Returns the task ID.
-pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String> {
+pub async fn run_pipeline(project_name: String, dry_run: bool) -> dioxus::Result<String> {
     let span = span!(Level::DEBUG, "run_pipeline", project = %project_name, dry_run = %dry_run);
     let _enter = span.enter();
 

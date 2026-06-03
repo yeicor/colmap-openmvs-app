@@ -32,6 +32,8 @@ pub enum Route {
 
 #[component]
 pub fn App() -> Element {
+    log_build_info();
+
     // Eruda debug console — only injected in debug builds.
     // The eruda.js file is copied from node_modules by build.rs and referenced
     // here so that dx includes it in the asset bundle.
@@ -91,37 +93,65 @@ pub fn App() -> Element {
     }
 }
 
+fn init_backend() {
+    #[cfg(not(any(feature = "demo", feature = "server")))]
+    {
+        // Resolve the backend URL from URL params / localStorage before launching.
+        // On web (WASM) this also calls `dioxus::fullstack::set_server_url` so that
+        // all generated server-function HTTP requests go to the configured origin.
+        let mut backend_url_str = backend_url::read_initial_backend_url();
+
+        // Validate the backend URL using `http::Uri` parsing (same as Dioxus
+        // uses internally). If invalid, warn and reset to empty (same-origin
+        // fallback) so the app doesn't silently fail on all requests.
+        if !backend_url_str.is_empty() && !backend_url::is_valid_backend_url(&backend_url_str) {
+            tracing::warn!(
+                url = %backend_url_str,
+                "Invalid backend URL configured — resetting to empty (same-origin)"
+            );
+            backend_url::save_backend_url("");
+            backend_url_str = String::new();
+        }
+        backend_url::BACKEND_URL.set(backend_url_str.clone()).ok();
+        if !backend_url_str.is_empty() {
+            // Strip trailing slash to avoid double-slash when Dioxus prepends the
+            // server URL to paths that start with `/` (e.g. `/api/startup`).
+            // Without this, "http://127.0.0.1:8080/" + "/api/startup" produces
+            // "http://127.0.0.1:8080//api/startup", whose path `//api/startup`
+            // is treated as a protocol-relative URL by the browser.
+            let normalized = backend_url_str.trim_end_matches('/').to_string();
+            let leaked: &'static str = Box::leak(normalized.into_boxed_str());
+            dioxus::fullstack::set_server_url(leaked);
+        }
+        info!(
+            "Backend URL resolved to '{}'",
+            backend_url::BACKEND_URL
+                .get()
+                .unwrap_or(&"<empty>".to_string())
+        );
+    }
+}
+
+pub fn log_build_info() {
+    info!(
+        event = "build_info",
+        package.name = env!("CARGO_PKG_NAME"),
+        package.version = env!("CARGO_PKG_VERSION"),
+        build.date = env!("BUILD_DATE"),
+        build.profile = env!("PROFILE"),
+        build.target = env!("TARGET"),
+        git.branch = env!("GIT_BRANCH"),
+        git.tag = env!("GIT_TAG"),
+        git.hash = env!("GIT_HASH"),
+        git.hash_full = env!("GIT_HASH_FULL"),
+        git.dirty = env!("GIT_DIRTY"),
+        rust.version = env!("RUSTC_VERSION"),
+        "Build information"
+    );
+}
+
 fn main() {
     init_logging();
-
-    // Resolve the backend URL from URL params / localStorage before launching.
-    // On web (WASM) this also calls `dioxus::fullstack::set_server_url` so that
-    // all generated server-function HTTP requests go to the configured origin.
-    let mut backend_url_str = backend_url::read_initial_backend_url();
-
-    // Validate the backend URL using `http::Uri` parsing (same as Dioxus
-    // uses internally). If invalid, warn and reset to empty (same-origin
-    // fallback) so the app doesn't silently fail on all requests.
-    if !backend_url_str.is_empty() && !backend_url::is_valid_backend_url(&backend_url_str) {
-        tracing::warn!(
-            url = %backend_url_str,
-            "Invalid backend URL configured — resetting to empty (same-origin)"
-        );
-        backend_url::save_backend_url("");
-        backend_url_str = String::new();
-    }
-    backend_url::BACKEND_URL.set(backend_url_str.clone()).ok();
-    if !backend_url_str.is_empty() {
-        let leaked: &'static str = Box::leak(backend_url_str.clone().into_boxed_str());
-        dioxus::fullstack::set_server_url(leaked);
-    }
-    info!(
-        "Backend URL resolved to '{}'",
-        backend_url::BACKEND_URL
-            .get()
-            .unwrap_or(&"<empty>".to_string())
-    );
-
-    info!("Starting colmap-openmvs-app client");
+    init_backend();
     dioxus::launch(App);
 }
