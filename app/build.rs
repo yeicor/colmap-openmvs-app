@@ -73,6 +73,8 @@ fn generate_demo_assets(manifest_dir: &Path) {
         fs::write(
             &dest_path,
             "pub const DEMO_MANIFEST: &str = \"{}\";\n\
+             pub const DOWNLOAD_EVENTS_JSON: &str = \"[]\";\n\
+             pub const PIPELINE_EVENTS_JSON: &str = \"[]\";\n\
              pub fn demo_image_bytes(_name: &str) -> Option<&'static [u8]> { None }\n\
              pub fn demo_output_bytes(_path: &str) -> Option<&'static [u8]> { None }\n"
         ).unwrap();
@@ -81,13 +83,37 @@ fn generate_demo_assets(manifest_dir: &Path) {
 
     let manifest_str = fs::read_to_string(&manifest_path).unwrap();
     
+    let download_events_path = demo_dir.join("download_events.json");
+    let download_events_str = if download_events_path.exists() {
+        fs::read_to_string(&download_events_path).unwrap()
+    } else {
+        "[]".to_string()
+    };
+    println!("cargo:rerun-if-changed={}", download_events_path.display());
+
+    let pipeline_events_path = demo_dir.join("pipeline_events.json");
+    let pipeline_events_str = if pipeline_events_path.exists() {
+        fs::read_to_string(&pipeline_events_path).unwrap()
+    } else {
+        "[]".to_string()
+    };
+    println!("cargo:rerun-if-changed={}", pipeline_events_path.display());
+    
     let mut out = String::new();
     out.push_str(&format!(
         "pub const DEMO_MANIFEST: &str = r###\"{}\"###;\n\n",
         manifest_str
     ));
+    out.push_str(&format!(
+        "pub const DOWNLOAD_EVENTS_JSON: &str = r###\"{}\"###;\n\n",
+        download_events_str
+    ));
+    out.push_str(&format!(
+        "pub const PIPELINE_EVENTS_JSON: &str = r###\"{}\"###;\n\n",
+        pipeline_events_str
+    ));
     
-    // Images
+    // Images (flat directory, no subdirectories)
     out.push_str("pub fn demo_image_bytes(name: &str) -> Option<&'static [u8]> {\n");
     out.push_str("    match name {\n");
     let images_dir = demo_dir.join("images");
@@ -109,30 +135,37 @@ fn generate_demo_assets(manifest_dir: &Path) {
     out.push_str("        _ => None,\n");
     out.push_str("    }\n}\n\n");
     
-    // Outputs
+    // Outputs (recursive, preserves relative directory structure)
     out.push_str("pub fn demo_output_bytes(path: &str) -> Option<&'static [u8]> {\n");
     out.push_str("    match path {\n");
     let outputs_dir = demo_dir.join("outputs");
     if outputs_dir.exists() {
-        for entry in fs::read_dir(&outputs_dir).unwrap() {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.is_file() {
-                let name = path.file_name().unwrap().to_str().unwrap();
-                let abs_path = path.canonicalize().unwrap().to_string_lossy().into_owned();
-                let abs_path_escaped = abs_path.replace("\\", "\\\\");
-                out.push_str(&format!(
-                    "        \"{}\" => Some(include_bytes!(\"{}\")),\n",
-                    name, abs_path_escaped
-                ));
-            }
-        }
+        collect_files(&outputs_dir, &outputs_dir, &mut out);
     }
     out.push_str("        _ => None,\n");
     out.push_str("    }\n}\n");
 
     fs::write(&dest_path, out).unwrap();
 }
+
+fn collect_files(base: &Path, dir: &Path, out: &mut String) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(base, &path, out);
+        } else if path.is_file() {
+            let rel_path = path.strip_prefix(base).unwrap();
+            let rel_str = rel_path.to_string_lossy().into_owned();
+            let abs_path = path.canonicalize().unwrap().to_string_lossy().into_owned();
+            let abs_path_escaped = abs_path.replace("\\", "\\\\");
+            out.push_str(&format!(
+                "        \"{}\" => Some(include_bytes!(\"{}\")),\n",
+                rel_str, abs_path_escaped
+            ));
+        }
+    }
+    }
 
 // ── npm ci ────────────────────────────────────────────────────────────────────
 

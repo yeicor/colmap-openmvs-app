@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context};
+use dioxus::fullstack::body::Bytes;
 use dioxus::fullstack::ByteStream;
-use futures::StreamExt;
+use futures::stream::StreamExt;
 use image::{DynamicImage, ImageDecoder, ImageReader};
 use once_cell::sync::Lazy;
 use tracing::{debug, error, info, warn};
@@ -92,16 +93,16 @@ pub async fn get_project_images(project_name: String) -> dioxus::Result<Vec<Stri
     Ok(images)
 }
 
-/// Return the raw bytes of a project image.
+/// Return the raw bytes of a project image as a streaming `ByteStream`.
 ///
 /// Unlike `get_project_image` (which streams via `FileStream` for direct HTTP
-/// access), this function returns a plain `Vec<u8>` so it can be called as a
+/// access), this function returns a `ByteStream` so it can be called as a
 /// Dioxus server function from the client.  The bytes are then used to build a
 /// Blob URL in the browser without any hardcoded server URL.
 pub async fn get_project_image_bytes(
     project_name: String,
     image_name: String,
-) -> dioxus::Result<Vec<u8>> {
+) -> dioxus::Result<ByteStream> {
     debug!(project_name = %project_name, image_name = %image_name, "Retrieving project image bytes");
     let settings = crate::get_settings().await?;
     let images_path =
@@ -109,9 +110,12 @@ pub async fn get_project_image_bytes(
     let canonical_image = validate_and_canonicalize_image_path(&images_path, &image_name)?;
     let lock = lock_for_image_path(&canonical_image).await;
     let _guard = lock.lock().await;
-    tokio::fs::read(&canonical_image)
+    let bytes = tokio::fs::read(&canonical_image)
         .await
-        .map_err(|e| anyhow!("Failed to read image file: {}", e).into())
+        .map_err(|e| anyhow!("Failed to read image file: {}", e))?;
+    Ok(ByteStream::new(
+        futures::stream::once(async move { Bytes::from(bytes) }),
+    ))
 }
 
 pub async fn add_project_image(

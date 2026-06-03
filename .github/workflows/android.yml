@@ -137,6 +137,7 @@ jobs:
           fi
           echo "release-files=$(find target -type f -path '*/release/android/*/app-release.aab' | tr '\n' ',')" >> "$GITHUB_OUTPUT"
           echo "debug-symbols-folder=$(find target -type d -path '*/release/android/*/merged_native_libs/release/*/lib')" >> "$GITHUB_OUTPUT"
+          echo "mapping-file=$(find target -type f -path '*/release/android/*/mapping.txt')" >> "$GITHUB_OUTPUT"
 
       - uses: r0adkll/upload-google-play@v1
         with:
@@ -145,6 +146,7 @@ jobs:
           releaseFiles: ${{ steps.upload-info.outputs.release-files }}
           tracks: ${{ steps.upload-info.outputs.tracks }}
           debugSymbols: ${{ steps.upload-info.outputs.debug-symbols-folder }}
+          mappingFile: ${{ steps.upload-info.outputs.mapping-file }}
           status: draft # Only releases with status draft may be created on draft app.  # TODO: Remove when draft app is promoted to production.
 
       - name: Save source digest

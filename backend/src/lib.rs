@@ -135,7 +135,7 @@ fn walk_for_outputs(
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
+                .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
 
             out.push(OutputFile {

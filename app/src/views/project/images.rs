@@ -108,10 +108,7 @@ fn build_demo_cb(
                         let n = paths.len();
                         image_paths.set(paths);
                         list_version += 1;
-                        info_message.set(Some(format!(
-                            "Demo ready ({} images). You may want to optimize them using the 'Resize Images' button.",
-                            n
-                        )));
+                        info_message.set(Some(format!("Demo ready ({} images).", n)));
                     }
                     Err(e) => error_message.set(Some(format!("Failed to reload images: {}", e))),
                 }
@@ -340,7 +337,18 @@ pub fn ImagesTab(project_name: String) -> Element {
                     break;
                 }
                 match result {
-                    Ok(bytes) => {
+                    Ok(stream) => {
+                        let mut bytes = Vec::new();
+                        let mut s = stream;
+                        while let Some(chunk) = s.next().await {
+                            match chunk {
+                                Ok(data) => bytes.extend_from_slice(&data),
+                                Err(e) => {
+                                    error!(image_name = %name, error = %e, "Failed to read image stream");
+                                    break;
+                                }
+                            }
+                        }
                         let size = bytes.len();
                         let url = bytes_to_display_url(&bytes);
                         img_cache.write().insert(name, (url, size));
@@ -828,7 +836,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                                                 if fail_count > 0 {
                                                     format!("Imported {} image(s), {} failed", count, fail_count)
                                                 } else {
-                                                    format!("Imported {} image(s)", count)
+                                                    format!("Imported {} image(s). You may want to optimize them using the 'Resize Images' button.", count)
                                                 },
                                             ));
                                             if let Ok(paths) = crate::server::get_project_images(pn).await {

@@ -1,14 +1,29 @@
 use colmap_openmvs_api::{
     ConfigSchema, ImageTagInfo, LoadedProjectConfig, OutputFile, PreparedImageInfo, Project,
-    ProjectRunStatus, RuntimeInfo, Settings, TaskEventBatch, TaskInfo,
+    ProjectRunStatus, RuntimeInfo, Settings, TaskEvent, TaskEventBatch, TaskInfo,
 };
 use dioxus::Result;
 
 use dioxus::fullstack::ByteStream;
 
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 include!(concat!(env!("OUT_DIR"), "/demo_assets.rs"));
+
+fn get_download_events() -> &'static Vec<TaskEvent> {
+    static DOWNLOAD_EVENTS: OnceLock<Vec<TaskEvent>> = OnceLock::new();
+    DOWNLOAD_EVENTS.get_or_init(|| {
+        serde_json::from_str(DOWNLOAD_EVENTS_JSON).expect("Failed to parse DOWNLOAD_EVENTS_JSON")
+    })
+}
+
+fn get_pipeline_events() -> &'static Vec<TaskEvent> {
+    static PIPELINE_EVENTS: OnceLock<Vec<TaskEvent>> = OnceLock::new();
+    PIPELINE_EVENTS.get_or_init(|| {
+        serde_json::from_str(PIPELINE_EVENTS_JSON).expect("Failed to parse PIPELINE_EVENTS_JSON")
+    })
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DemoManifest {
@@ -54,10 +69,18 @@ pub async fn get_project_images(_project_name: String) -> Result<Vec<String>> {
     Ok(get_manifest().project.images)
 }
 
-pub async fn get_project_image_bytes(_project_name: String, image_name: String) -> Result<Vec<u8>> {
-    demo_image_bytes(image_name.as_str())
-        .map(|b| b.to_vec())
-        .ok_or_else(|| dioxus::CapturedError::msg("Image not found in demo data"))
+pub async fn get_project_image_bytes(
+    _project_name: String,
+    image_name: String,
+) -> Result<ByteStream> {
+    match demo_image_bytes(image_name.as_str()) {
+        Some(bytes) => Ok(ByteStream::new(
+            futures::stream::once(async move {
+                dioxus::fullstack::body::Bytes::from(bytes.to_vec())
+            }),
+        )),
+        None => Err(dioxus::CapturedError::msg("Image not found in demo data")),
+    }
 }
 
 pub async fn get_runtime_info() -> Result<RuntimeInfo> {
@@ -107,12 +130,39 @@ pub async fn get_task_info(_task_id: String) -> Result<Option<TaskInfo>> {
     Ok(None)
 }
 
-pub async fn poll_task_events(_task_id: String, cursor: usize) -> Result<TaskEventBatch> {
+pub async fn poll_task_events(task_id: String, cursor: usize) -> Result<TaskEventBatch> {
+    let events = match task_id.as_str() {
+        "demo-download-task" => get_download_events(),
+        "demo-pipeline-task" => get_pipeline_events(),
+        "demo-pipeline-dry-run" => get_pipeline_events(),
+        _ => {
+            return Ok(TaskEventBatch {
+                events: vec![],
+                cursor,
+                is_terminal: true,
+                task_found: false,
+            });
+        }
+    };
+
+    let chunk_size = if task_id == "demo-pipeline-dry-run" {
+        events.len()
+    } else {
+        10usize
+    };
+    let new_events: Vec<TaskEvent> =
+        events.iter().skip(cursor).take(chunk_size).cloned().collect();
+    let new_cursor = cursor + new_events.len();
+    let is_terminal = new_cursor >= events.len()
+        || new_events
+            .iter()
+            .any(|e| matches!(e, TaskEvent::Completed | TaskEvent::Failed(_)));
+
     Ok(TaskEventBatch {
-        events: vec![],
-        cursor,
-        is_terminal: true,
-        task_found: false,
+        events: new_events,
+        cursor: new_cursor,
+        is_terminal,
+        task_found: true,
     })
 }
 
@@ -169,7 +219,7 @@ pub async fn batch_resize_images(_project_name: String, _max_dimension: u32) -> 
     read_only_error()
 }
 pub async fn download_demo_images(_project_name: String, _source_id: String) -> Result<String> {
-    read_only_error()
+    Ok("demo-download-task".to_string())
 }
 pub async fn download_runtime_version(_version: String) -> Result<()> {
     read_only_error()
@@ -195,8 +245,12 @@ pub async fn save_project_config(
 pub async fn cancel_task(_task_id: String) -> Result<()> {
     read_only_error()
 }
-pub async fn run_pipeline(_project_name: String, _dry_run: bool) -> Result<String> {
-    read_only_error()
+pub async fn run_pipeline(_project_name: String, dry_run: bool) -> Result<String> {
+    if dry_run {
+        Ok("demo-pipeline-dry-run".to_string())
+    } else {
+        Ok("demo-pipeline-task".to_string())
+    }
 }
 pub async fn prepare_docker_image(_image: String) -> Result<String> {
     read_only_error()

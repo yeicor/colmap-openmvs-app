@@ -15,7 +15,7 @@ use crate::{
 };
 use dioxus::{document::eval, prelude::*};
 use dioxus_free_icons::icons::bs_icons::{
-    BsBug, BsCardList, BsCupFill, BsGear, BsGithub, BsHeart, BsPencil, BsPlusCircle, BsTrash,
+    BsBug, BsCardList, BsCupFill, BsGear, BsGithub, BsHeartFill, BsPencil, BsPlusCircle, BsTrash,
 };
 use dioxus_free_icons::Icon;
 use dioxus_primitives::ContentSide;
@@ -355,7 +355,7 @@ pub fn Projects(
                                 href: "https://github.com/sponsors/yeicor",
                                 target: "_blank",
                                 rel: "noopener noreferrer",
-                                Icon { icon: BsHeart }
+                                Icon { icon: BsHeartFill }
                                 "GitHub Sponsors"
                             }
                             span { class: "footer-separator", "·" }

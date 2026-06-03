@@ -64,8 +64,11 @@ pub async fn get_project_images(project_name: String) -> Result<Vec<String>> {
 #[cfg_attr(
     not(feature = "demo"),
     get("/api/projects/{project_name}/images/{image_name}/bytes")
-)] // TODO: Streaming response rather than json
-pub async fn get_project_image_bytes(project_name: String, image_name: String) -> Result<Vec<u8>> {
+)]
+pub async fn get_project_image_bytes(
+    project_name: String,
+    image_name: String,
+) -> Result<ByteStream> {
     backend::get_project_image_bytes(project_name, image_name).await
 }
 

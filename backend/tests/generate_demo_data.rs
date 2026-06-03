@@ -1,6 +1,9 @@
 use backend::task_registry::TASK_REGISTRY;
 use colmap_openmvs_api::{Settings, TaskEvent, TaskState};
 use colmap_openmvs_backend as backend;
+use colmap_openmvs_backend::download_runtime_version;
+use colmap_openmvs_backend::get_available_runtime_versions;
+use futures::StreamExt;
 use serde_json::json;
 use std::env;
 use std::fs;
@@ -9,7 +12,10 @@ use tokio::time::{sleep, Duration};
 
 #[tokio::test]
 async fn test_generate_demo_data() {
-    let out_dir = env::var("DEMO_ASSETS_DIR").unwrap_or_else(|_| "../app/assets/demo".to_string());
+    let out_dir = env::var("DEMO_ASSETS_DIR").unwrap_or_else(|_| {
+        let manifest = env::var("CARGO_MANIFEST_DIR").unwrap();
+        format!("{}/../app/assets/demo", manifest)
+    });
     let out_path = PathBuf::from(&out_dir);
 
     // Create directories
@@ -53,19 +59,26 @@ async fn test_generate_demo_data() {
     // Try PRoot or Docker
     let runtime_info = match backend::get_runtime_info().await {
         Ok(info) if info.installed || info.supported => {
-            if !info.installed && info.supported {
-                println!("Installing PRoot...");
-                backend::download_runtime_version("latest".to_string())
-                    .await
-                    .expect("Failed to download PRoot");
+            if !info.installed {
+                println!("PRoot not installed but supported, will attempt to download and use PRoot runtime");
+                download_runtime_version(
+                    get_available_runtime_versions()
+                        .await
+                        .expect("Failed to get available runtime versions")
+                        .first()
+                        .unwrap()
+                        .to_string(),
+                )
+                .await
+                .expect("Failed to download PRoot runtime");
             }
-            backend::get_runtime_info().await.unwrap()
+            info
         }
         _ => {
-            println!("Falling back to Docker...");
+            println!("PRoot not installed, falling back to Docker...");
             let docker_info = backend::get_docker_runtime_info()
                 .await
-                .expect("Docker not supported either!");
+                .expect("Docker check failed");
             if !docker_info.supported {
                 panic!("Neither PRoot nor Docker are supported on this platform!");
             }
@@ -81,19 +94,22 @@ async fn test_generate_demo_data() {
 
     // 2. Prepare runtime image
     println!("Preparing runtime image...");
-    let image_tag = backend::get_settings()
+    let settings_tag = backend::get_settings()
         .await
         .unwrap()
         .default_image_tag
         .unwrap();
-    let prep_task_id = if image_tag.starts_with("docker:") {
-        backend::prepare_docker_image(image_tag.clone())
+    let (runtime, image_tag) = settings_tag
+        .split_once(':')
+        .expect("Image tag must have runtime prefix");
+    let prep_task_id = match runtime {
+        "docker" => backend::prepare_docker_image(image_tag.to_string())
             .await
-            .expect("Failed to prepare docker image")
-    } else {
-        backend::prepare_runtime_image(image_tag.clone())
+            .expect("Failed to prepare docker image"),
+        "proot" => backend::prepare_runtime_image(image_tag.to_string())
             .await
-            .expect("Failed to prepare proot image")
+            .expect("Failed to prepare proot image"),
+        other => panic!("Unknown runtime prefix: {other}"),
     };
     poll_task_until_done(&prep_task_id).await;
 
@@ -140,7 +156,26 @@ async fn test_generate_demo_data() {
         .await
         .unwrap();
 
-    let config_schema = backend::get_image_config(image_tag.clone()).await.unwrap();
+    let config_schema = backend::get_image_config(image_tag.to_string())
+        .await
+        .unwrap();
+    // Save a default project config so load_project_config succeeds
+    let settings_tag = backend::get_settings()
+        .await
+        .unwrap()
+        .default_image_tag
+        .unwrap();
+    let (_runtime, raw_image_tag) = settings_tag.split_once(':').unwrap();
+    backend::save_project_config(
+        "demo".to_string(),
+        colmap_openmvs_api::SavedProjectConfig {
+            image_tag: raw_image_tag.to_string(),
+            environment_variables: vec![],
+            custom_script: None,
+        },
+    )
+    .await
+    .unwrap();
     let project_config = backend::load_project_config("demo".to_string())
         .await
         .unwrap();
@@ -167,15 +202,23 @@ async fn test_generate_demo_data() {
 
     // 7. Copy generated files to assets/demo
     for img in &images {
-        let bytes = backend::get_project_image_bytes("demo".to_string(), img.clone())
+        let stream = backend::get_project_image_bytes("demo".to_string(), img.clone())
             .await
             .unwrap();
+        let bytes: Vec<u8> = stream
+            .into_inner()
+            .filter_map(|r| async move { r.ok() })
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .flat_map(|b| b.to_vec())
+            .collect();
         fs::write(images_dir.join(img), bytes).unwrap();
     }
 
     for output in &outputs {
-        if output.is_viewable {
-            if let Ok(bytes) =
+        if output.is_viewable || output.relative_path.ends_with(".png") {
+            if let Ok(stream) =
                 backend::get_project_output_bytes("demo".to_string(), output.relative_path.clone())
                     .await
             {
@@ -184,6 +227,14 @@ async fn test_generate_demo_data() {
                 if let Some(parent) = rel_path.parent() {
                     fs::create_dir_all(outputs_dir.join(parent)).unwrap();
                 }
+                let bytes: Vec<u8> = stream
+                    .into_inner()
+                    .filter_map(|r| async move { r.ok() })
+                    .collect::<Vec<_>>()
+                    .await
+                    .into_iter()
+                    .flat_map(|b| b.to_vec())
+                    .collect();
                 fs::write(outputs_dir.join(rel_path), bytes).unwrap();
             }
         }

@@ -771,24 +771,6 @@ fn ProotPanel(on_default_changed: EventHandler<()>) -> Element {
                     }
                 }
 
-                // ── Storage card ─────────────────────────────────────────────
-                div { class: "runtime-card",
-                    div { class: "runtime-card-title", "Storage" }
-                    div { class: "form-group",
-                        label { title: "Directory where PRoot container image rootfs archives are extracted and stored.", "Images Directory" }
-                        div { class: "folder-row",
-                            input {
-                                r#type: "text",
-                                class: "folder-input",
-                                value: "{proot_images_dir}",
-                                placeholder: "./proot-images",
-                                disabled: true,
-                            }
-                            span { class: "config-note", "Configured in the General settings tab" }
-                        }
-                    }
-                }
-
                 // ── Images card ──────────────────────────────────────────────
                 div { class: "runtime-card",
                     div { class: "runtime-card-title", "Images" }

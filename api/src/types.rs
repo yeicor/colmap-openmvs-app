@@ -232,7 +232,7 @@ pub struct OutputFile {
     pub size: u64,
     /// Whether this file can be displayed in the 3D viewer
     pub is_viewable: bool,
-    /// Last-modified Unix timestamp in seconds (0 if unavailable)
+    /// Last-modified Unix timestamp in milliseconds (0 if unavailable)
     #[serde(default)]
     pub modified_at: u64,
 }

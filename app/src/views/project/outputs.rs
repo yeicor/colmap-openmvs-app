@@ -34,12 +34,12 @@ fn format_size(bytes: u64) -> String {
 }
 
 /// Returns a short human-readable relative age string, or empty string if unknown.
-fn format_date(unix_secs: u64) -> String {
-    if unix_secs == 0 {
+fn format_date(unix_millis: u64) -> String {
+    if unix_millis == 0 {
         return String::new();
     }
     let now = chrono::Utc::now().timestamp() as u64;
-    let diff = now.saturating_sub(unix_secs);
+    let diff = now.saturating_sub(unix_millis / 1000);
     if diff < 60 {
         "just now".to_string()
     } else if diff < 3_600 {
