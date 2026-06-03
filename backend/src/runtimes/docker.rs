@@ -81,12 +81,28 @@ impl Runtime for Docker {
     // ── Support check ────────────────────────────────────────────────────────
 
     fn is_supported(&self) -> RuntimeResult<()> {
-        which::which("docker").map(|_| ()).map_err(|_| {
-            anyhow::anyhow!(
-                "The `docker` binary was not found in $PATH. \
-                 Please install Docker and make sure it is accessible."
-            )
-        })
+        // Fast path: check PATH via `which`
+        if which::which("docker").is_ok() {
+            return Ok(());
+        }
+
+        // Fallback: try to run `docker --version` directly.  On some
+        // configurations (e.g. macOS Docker Desktop, Windows with non-standard
+        // PATH), the `which` crate may miss the binary even though the shell
+        // can resolve it.
+        if let Ok(output) = std::process::Command::new("docker")
+            .arg("--version")
+            .output()
+        {
+            if output.status.success() {
+                return Ok(());
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "The `docker` binary was not found in $PATH. \
+             Please install Docker and make sure it is accessible."
+        ))
     }
 
     // ── Version ──────────────────────────────────────────────────────────────
