@@ -310,12 +310,6 @@ patch_gradle() {
         -e 's/(compileSdk[[:space:]]*=[[:space:]]*)[0-9]+/\136/' \
         -e 's/(targetSdk[[:space:]]*=[[:space:]]*)[0-9]+/\136/' \
         "$file"
-
-    grep -q "debugSymbolLevel" "$file" || \
-    sed -Ei '/getByName\("release"\)[[:space:]]*\{/a\
-                ndk {\
-                    debugSymbolLevel = "FULL"\
-                }' "$file"
 }
 
 patch_manifest() {

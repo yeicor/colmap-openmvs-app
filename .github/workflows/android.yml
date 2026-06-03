@@ -136,6 +136,7 @@ jobs:
             echo "tracks=internal" >> "$GITHUB_OUTPUT"
           fi
           echo "release-files=$(find target -type f -path '*/release/android/*/app-release.aab' | tr '\n' ',')" >> "$GITHUB_OUTPUT"
+          echo "debug-symbols-folder=$(find target -type d -path '*/release/android/*/merged_native_libs/release/*/lib')" >> "$GITHUB_OUTPUT"
 
       - uses: r0adkll/upload-google-play@v1
         with:
@@ -143,6 +144,7 @@ jobs:
           packageName: com.github.yeicor.colmap_openmvs_app
           releaseFiles: ${{ steps.upload-info.outputs.release-files }}
           tracks: ${{ steps.upload-info.outputs.tracks }}
+          debugSymbols: ${{ steps.upload-info.outputs.debug-symbols-folder }}
           status: draft # Only releases with status draft may be created on draft app.  # TODO: Remove when draft app is promoted to production.
 
       - name: Save source digest
