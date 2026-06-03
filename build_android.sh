@@ -290,7 +290,7 @@ patch_version() {
 
     local version_code version_name tag commit
     version_code=$(( ($(date -u +%s) - $(date -d "2026-01-01 00:00:00 UTC" +%s)) / 60 ))
-    tag="$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.1")"
+    tag="$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")"
     commit="$(git rev-parse --short HEAD)"
     version_name="${tag}+${commit}"
 
