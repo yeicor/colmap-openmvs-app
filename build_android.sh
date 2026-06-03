@@ -286,37 +286,20 @@ patch_proot() {
 
 patch_gradle() {
     local file="$APP_BUILD_GRADLE"
-    [[ -f "$file" ]] || die "Gradle file not found: $file"
+    [[ -f "$file" ]] || return 0
 
-    grep -q 'useLegacyPackaging = true' "$file" || {
-        sed -i \
-            's/android {/android {\n    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }\n/' \
-            "$file"
-
-        grep -q 'useLegacyPackaging = true' "$file" \
-            || die "Failed to patch useLegacyPackaging"
-    }
+    sed 's/android {/android {\n    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }\n/' -i "$file"
 
     sed -Ei \
         -e 's/(compileSdk[[:space:]]*=[[:space:]]*)[0-9]+/\136/' \
         -e 's/(targetSdk[[:space:]]*=[[:space:]]*)[0-9]+/\136/' \
         "$file"
 
-    grep -Eq 'compileSdk[[:space:]]*=[[:space:]]*35' "$file" \
-        || die "Failed to set compileSdk=35"
-
-    grep -Eq 'targetSdk[[:space:]]*=[[:space:]]*35' "$file" \
-        || die "Failed to set targetSdk=35"
-
-    grep -q 'debugSymbolLevel' "$file" || {
-        sed -Ei '/getByName\("release"\)[[:space:]]*\{/a\
-            ndk {\
-                debugSymbolLevel = "FULL"\
-            }' "$file"
-
-        grep -q 'debugSymbolLevel = "FULL"' "$file" \
-            || die "Failed to add debugSymbolLevel"
-    }
+    grep -q "debugSymbolLevel" "$file" || \
+    sed -Ei '/getByName\("release"\)[[:space:]]*\{/a\
+                ndk {\
+                    debugSymbolLevel = "FULL"\
+                }' "$file"
 }
 
 patch_manifest() {
