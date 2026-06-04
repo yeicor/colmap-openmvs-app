@@ -129,8 +129,8 @@ pub fn ToastContainer() -> Element {
 
 #[component]
 fn ToastInstance(entry: ToastEntry, on_close: EventHandler<()>) -> Element {
-    // Auto-dismiss info/error toasts after 6 s (but not progress toasts).
-    if entry.progress.is_none() {
+    // Auto-dismiss info toasts after 6 s (but NOT errors or progress toasts).
+    if entry.toast_type == ToastType::Info && entry.progress.is_none() {
         let handler = on_close.clone();
         let msg = entry.message.clone();
         use_effect(move || {

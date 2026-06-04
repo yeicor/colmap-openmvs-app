@@ -546,38 +546,30 @@
     font-size: 0.8rem;
 }
 
-/* Custom image tag input */
-#settings .custom-image-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-#settings .custom-image-input {
-    flex: 1;
-    padding: 0.5rem 0.7rem;
-    font-size: 0.88rem;
-    background: var(--primary-color-3);
-    color: var(--secondary-color);
-    border: 1px solid var(--primary-color-6);
-    border-radius: 0.375rem;
-    outline: none;
-    transition: border-color 0.15s;
-    min-width: 0;
+/* Custom image tag input — rendered inside .tags-item as an inline input */
+#settings .tags-item .tag-name input[type="text"] {
+    width: 100%;
+    padding: 0.2rem 0.4rem;
     font-family: "Courier New", Courier, monospace;
+    font-size: 0.85rem;
+    background: var(--primary-color-6);
+    color: var(--secondary-color);
+    border: 1px solid var(--primary-color-7);
+    border-radius: 0.25rem;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
 }
 
-#settings .custom-image-input:focus {
+#settings .tags-item .tag-name input[type="text"]:focus {
     border-color: var(--focused-border-color);
 }
 
-#settings .custom-image-input::placeholder {
+#settings .tags-item .tag-name input[type="text"]::placeholder {
     color: var(--secondary-color-6);
-    font-family: "Courier New", Courier, monospace;
-    font-size: 0.8rem;
 }
 
-#settings .custom-image-input:disabled {
+#settings .tags-item .tag-name input[type="text"]:disabled {
     opacity: 0.5;
 }
 

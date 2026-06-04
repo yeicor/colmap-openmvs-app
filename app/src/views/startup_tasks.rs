@@ -91,18 +91,18 @@ pub fn StartupTasks() -> Element {
                 class: "startup-buttons",
                 if completed {
                     button {
-                        class: "btn btn-primary",
+                        class: "action-btn action-btn-primary",
                         onclick: on_continue,
                         "Continue"
                     }
                 } else if is_failed {
                     button {
-                        class: "btn btn-secondary",
+                        class: "action-btn",
                         onclick: on_retry,
                         "Retry"
                     }
                     button {
-                        class: "btn btn-primary",
+                        class: "action-btn action-btn-primary",
                         onclick: on_continue,
                         "Skip"
                     }

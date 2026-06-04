@@ -18,4 +18,16 @@
     /* Info */
     --primary-info-color: var(--dark, #0c2e4e) var(--light, #eff6ff);
     --secondary-info-color: var(--dark, #60a5fa) var(--light, #3b82f6);
+
+    /* View 3D accent: purple/violet */
+    --view-3d-accent: var(--dark, #a78bfa) var(--light, #7c3aed);
+    --view-3d-bg: var(--dark, color-mix(in srgb, #a78bfa 12%, transparent)) var(--light, color-mix(in srgb, #7c3aed 10%, transparent));
+
+    /* Download accent: amber/orange */
+    --download-accent: var(--dark, #fbbf24) var(--light, #d97706);
+    --download-bg: var(--dark, color-mix(in srgb, #fbbf24 12%, transparent)) var(--light, color-mix(in srgb, #d97706 10%, transparent));
+
+    /* Refresh accent: teal/cyan */
+    --refresh-accent: var(--dark, #2dd4bf) var(--light, #0d9488);
+    --refresh-bg: var(--dark, color-mix(in srgb, #2dd4bf 12%, transparent)) var(--light, color-mix(in srgb, #0d9488 10%, transparent));
 }

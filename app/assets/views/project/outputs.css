@@ -222,26 +222,31 @@
 }
 
 /* ============================================================================
-   Action buttons — shared base
+   Action buttons — extends shared `.action-btn` base from mycomponents.css
+
+   Toolbar buttons use `.action-btn` + accent classes directly.
+   Tree-entry buttons use `.outputs-btn` (slim variant of `.action-btn`).
    ============================================================================ */
 
 .outputs-btn {
+    /* Slim variant of .action-btn for use in file tree rows */
     padding: 0.15rem 0.4rem;
-    border-radius: 0.3rem;
-    background: var(--primary-color-4);
-    color: var(--secondary-color);
     font-size: 0.78rem;
-    cursor: pointer;
-    white-space: nowrap;
-    flex-shrink: 0;
-    transition: all 0.12s ease;
-    border: 1px solid var(--primary-color-6);
+    line-height: 1.4;
+    min-height: 1.4rem;
     display: inline-flex;
     align-items: center;
     gap: 0.2rem;
+    border: 1px solid var(--primary-color-6);
+    border-radius: 0.3rem;
+    background: var(--primary-color-4);
+    color: var(--secondary-color);
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
     text-decoration: none;
     text-align: center;
-    line-height: 1.4;
+    transition: all 0.12s ease;
 }
 
 .outputs-btn:hover:not(:disabled) {
@@ -254,10 +259,18 @@
     cursor: not-allowed;
 }
 
-.outputs-download-link {
-    border-color: var(--primary-color-6);
+.outputs-btn:focus-visible {
+    outline: 2px solid var(--focused-border-color);
+    outline-offset: 2px;
 }
 
+/* ── Toolbar action buttons ────────────────────────────────── */
+/* The toolbar uses `.action-btn` from mycomponents.css directly.
+   Specific toolbar accent classes are applied to individual buttons. */
+
+/* ── Tree-entry button color modifiers ─────────────────────── */
+
+/* Backup: blue (archive action) */
 .outputs-backup-btn {
     color: var(--focused-border-color);
     border-color: var(--focused-border-color);
@@ -267,6 +280,7 @@
     background: color-mix(in srgb, var(--focused-border-color) 15%, var(--primary-color-4));
 }
 
+/* Restore: green (upload action) */
 .outputs-restore-btn {
     color: var(--secondary-success-color);
     border-color: var(--secondary-success-color);
@@ -276,29 +290,48 @@
     background: color-mix(in srgb, var(--secondary-success-color) 15%, var(--primary-color-4));
 }
 
-.outputs-dir-download-btn {
-    border-color: var(--primary-color-6);
-}
-
+/* View 3D: purple (distinct from backup blue) */
 .outputs-view-3d-btn {
-    border-color: var(--focused-border-color);
-    color: var(--focused-border-color);
+    color: var(--view-3d-accent);
+    border-color: var(--view-3d-accent);
 }
 
 .outputs-view-3d-btn:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--focused-border-color) 15%, var(--primary-color-4));
+    background: var(--view-3d-bg);
 }
 
+/* Download file: amber (distinct from backup blue) */
+.outputs-download-link {
+    color: var(--download-accent);
+    border-color: var(--download-accent);
+}
+
+.outputs-download-link:hover:not(:disabled) {
+    background: var(--download-bg);
+}
+
+/* Dir download button (folder ZIP) */
+.outputs-dir-download-btn {
+    color: var(--download-accent);
+    border-color: var(--download-accent);
+}
+
+.outputs-dir-download-btn:hover:not(:disabled) {
+    background: var(--download-bg);
+}
+
+/* Delete: red (destructive action) */
 .outputs-del-btn {
-    color: var(--secondary-color-5);
+    color: var(--secondary-error-color);
+    border-color: transparent;
 }
 
 .outputs-del-btn:hover:not(:disabled) {
-    color: var(--secondary-error-color);
     border-color: var(--secondary-error-color);
     background: color-mix(in srgb, var(--secondary-error-color) 12%, var(--primary-color-4));
 }
 
+/* Confirm deletion (green check) */
 .outputs-confirm-del-btn {
     color: var(--secondary-success-color);
     border-color: var(--secondary-success-color);
@@ -309,6 +342,7 @@
     background: color-mix(in srgb, var(--secondary-success-color) 25%, var(--primary-color-4));
 }
 
+/* Cancel deletion */
 .outputs-cancel-del-btn {
     color: var(--secondary-color-5);
     padding: 0.15rem 0.3rem;

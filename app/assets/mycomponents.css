@@ -188,6 +188,8 @@
     flex-direction: column;
     gap: 0.35rem;
     min-width: 220px;
+    max-height: min(40vh, 300px);
+    overflow-y: auto;
     overflow-wrap: break-word;
     word-break: break-word;
     animation: toast-slide-in 0.25s ease-out;
@@ -253,3 +255,119 @@
 
 /* Toasts within the container are naturally stacked by flexbox — no
    hardcoded offsets needed, and any number of toasts remains readable. */
+
+/* =======================================================================
+   Shared toolbar/action button system
+   Used by: Outputs tab, Images tab, Config tab, Logs tab, Settings
+   ======================================================================= */
+
+/* Base action button — compact toolbar-style button */
+.action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.55rem;
+    border: 1px solid var(--primary-color-6);
+    border-radius: 0.32rem;
+    background: var(--primary-color-4);
+    color: var(--secondary-color);
+    font-size: 0.82rem;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    text-decoration: none;
+    text-align: center;
+    line-height: 1.5;
+    transition: all 0.12s ease;
+    min-height: 1.8rem;
+}
+
+.action-btn:hover:not(:disabled) {
+    background: var(--primary-color-3);
+    border-color: var(--focused-border-color);
+}
+
+.action-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.action-btn:focus-visible {
+    outline: 2px solid var(--focused-border-color);
+    outline-offset: 2px;
+}
+
+.action-btn .btn-label {
+    margin-left: 0.1rem;
+}
+
+/* Accent: primary (blue) */
+.action-btn-primary {
+    color: var(--focused-border-color);
+    border-color: var(--focused-border-color);
+}
+
+.action-btn-primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--focused-border-color) 15%, var(--primary-color-4));
+}
+
+/* Accent: danger (red) */
+.action-btn-danger {
+    color: var(--secondary-error-color);
+    border-color: var(--secondary-error-color);
+}
+
+.action-btn-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--secondary-error-color) 12%, var(--primary-color-4));
+}
+
+/* Accent: success (green) */
+.action-btn-success {
+    color: var(--secondary-success-color);
+    border-color: var(--secondary-success-color);
+}
+
+.action-btn-success:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--secondary-success-color) 15%, var(--primary-color-4));
+}
+
+/* Accent: warning / download (amber) */
+.action-btn-warning {
+    color: var(--download-accent);
+    border-color: var(--download-accent);
+}
+
+.action-btn-warning:hover:not(:disabled) {
+    background: var(--download-bg);
+}
+
+/* Accent: info / view-3d (purple) */
+.action-btn-info {
+    color: var(--view-3d-accent);
+    border-color: var(--view-3d-accent);
+}
+
+.action-btn-info:hover:not(:disabled) {
+    background: var(--view-3d-bg);
+}
+
+/* Accent: refresh (teal) */
+.action-btn-teal {
+    color: var(--refresh-accent);
+    border-color: var(--refresh-accent);
+}
+
+.action-btn-teal:hover:not(:disabled) {
+    background: var(--refresh-bg);
+}
+
+/* Responsive: container-query-aware button label hiding */
+.action-btn .btn-label {
+    display: inline;
+}
+
+@container (max-width: 100px) {
+    .action-btn .btn-label {
+        display: none;
+    }
+}

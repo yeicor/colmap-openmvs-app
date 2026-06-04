@@ -1185,10 +1185,34 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
 
             if tags_loading() {
                 p { class: "loading", "Loading…" }
-            } else if available_tags().is_empty() {
+            } else if available_tags().is_empty() && custom_tag().is_empty() {
                 p { class: "empty", "There are no available images to pull." }
             } else {
                 ul { class: "tags-list",
+                    // ── Custom image entry — always shown at the top ──────
+                    li { key: "__custom__", class: "tags-item",
+                        div { class: "tags-item-top",
+                            input {
+                                r#type: "text",
+                                placeholder: "mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest",
+                                class: "tag-name",
+                                value: "{custom_tag}",
+                                oninput: move |e| custom_tag.set(e.value()),
+                                disabled: preparing(),
+                            }
+                            div { class: "tag-actions",
+                                Button {
+                                    variant: ButtonVariant::Secondary,
+                                    disabled: preparing() || custom_tag().is_empty(),
+                                    title: "Pull this custom image",
+                                    onclick: move |_| handle_prepare(custom_tag()),
+                                    Icon { icon: BsDownload }
+                                    span { " Pull" }
+                                }
+                            }
+                        }
+                    }
+
                     {available_tags().into_iter().map(|tag_info| {
                         let name = tag_info.name.clone();
                         let name2 = tag_info.name.clone();
@@ -1204,6 +1228,7 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                                             disabled: preparing(),
                                             onclick: move |_| handle_prepare(name2.clone()),
                                             Icon { icon: BsDownload }
+                                            span { " Pull" }
                                         }
                                     }
                                 }
@@ -1213,29 +1238,6 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                             }
                         }
                     })}
-                }
-            }
-        }
-
-        // ── Custom Image ───────────────────────────────────────────────────
-        div { class: "tags-container",
-            h2 { class: "section-title", "Custom Image" }
-            div { class: "custom-image-row",
-                input {
-                    r#type: "text",
-                    placeholder: "mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest",
-                    class: "custom-image-input",
-                    value: "{custom_tag}",
-                    oninput: move |e| custom_tag.set(e.value()),
-                    disabled: preparing(),
-                }
-                Button {
-                    variant: ButtonVariant::Secondary,
-                    disabled: preparing() || custom_tag().is_empty(),
-                    title: "Pull this custom image",
-                    onclick: move |_| handle_prepare(custom_tag()),
-                    Icon { icon: BsDownload }
-                    span { "Pull" }
                 }
             }
         }

@@ -574,12 +574,12 @@ pub fn ImagesTab(project_name: String) -> Element {
                                         href: "https://github.com/snavely/bundler_sfm/tree/master/examples/ET",
                                         target: "_blank",
                                         rel: "noopener noreferrer",
-                                        class: "btn demo-source-link",
+                                        class: "action-btn",
                                         Icon { icon: BsBoxArrowUpRight }
                                         "Source"
                                     }
                                     button {
-                                        class: "btn btn-secondary",
+                                        class: "action-btn action-btn-primary",
                                         disabled: demo_loading() || uploading(),
                                         onclick: on_load_demo_et,
                                         Icon { icon: BsCloudDownload }
@@ -610,12 +610,12 @@ pub fn ImagesTab(project_name: String) -> Element {
                                         href: "https://github.com/snavely/bundler_sfm/tree/master/examples/kermit",
                                         target: "_blank",
                                         rel: "noopener noreferrer",
-                                        class: "btn demo-source-link",
+                                        class: "action-btn",
                                         Icon { icon: BsBoxArrowUpRight }
                                         "Source"
                                     }
                                     button {
-                                        class: "btn btn-secondary",
+                                        class: "action-btn action-btn-primary",
                                         disabled: demo_loading() || uploading(),
                                         onclick: on_load_demo_kermit,
                                         Icon { icon: BsCloudDownload }
@@ -700,7 +700,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                     class: "toolbar-group",
 
                     button {
-                        class: "btn btn-secondary",
+                        class: "action-btn action-btn-primary",
                         title: if uploading() { "Uploading..." } else { "Upload images from disk" },
                         disabled: uploading() || demo_loading(),
                         onclick: {
@@ -771,17 +771,19 @@ pub fn ImagesTab(project_name: String) -> Element {
                         },
                         Icon { icon: BsUpload }
                         span {
+                            class: "btn-label",
                             if uploading() { "Uploading..." } else { "Upload" }
                         }
                     }
 
                     button {
-                        class: "btn btn-secondary",
+                        class: "action-btn action-btn-primary",
                         onclick: move |_| demo_dialog_open.set(true),
                         disabled: demo_loading() || uploading(),
                         title: "Choose and download demo images from bundler_sfm examples",
                         Icon { icon: BsStar }
                         span {
+                            class: "btn-label",
                             if demo_loading() {
                                 "Downloading…"
                             } else {
@@ -792,12 +794,13 @@ pub fn ImagesTab(project_name: String) -> Element {
 
                     if has_images {
                         button {
-                            class: "btn btn-secondary",
+                            class: "action-btn",
                             onclick: on_open_resize_dialog,
                             disabled: resize_loading() || uploading() || demo_loading(),
                             title: "Resize ALL images by resizing to a maximum dimension",
                             Icon { icon: BsTextareaResize }
                             span {
+                                class: "btn-label",
                                 if resize_loading() {
                                     "Resizing..."
                                 } else {
@@ -812,25 +815,25 @@ pub fn ImagesTab(project_name: String) -> Element {
                     class: "toolbar-group",
 
                     button {
-                        class: "btn btn-tertiary view-mode-toggle",
+                        class: "action-btn",
                         onclick: move |_| show_images.set(!show_images()),
                         title: if show_images() { "Switch to compact list view" } else { "Switch to image gallery" },
                         if show_images() {
                             Icon { icon: BsViewList }
-                            span { "List" }
+                            span { class: "btn-label", "List" }
                         } else {
                             Icon { icon: BsGrid }
-                            span { "Gallery" }
+                            span { class: "btn-label", "Gallery" }
                         }
                     }
 
                     if has_images {
                         button {
-                            class: "btn btn-tertiary",
+                            class: "action-btn",
                             onclick: select_all,
                             title: if all_selected { "Deselect all" } else { "Select all" },
                             Icon { icon: BsCheckAll }
-                            span {
+                            span { class: "btn-label",
                                 if all_selected {
                                     "Deselect All"
                                 } else {
@@ -842,28 +845,28 @@ pub fn ImagesTab(project_name: String) -> Element {
 
                     if has_images {
                         div {
-                            class: "btn images-info",
+                            class: "action-btn images-info",
                             "{num_images} " Icon { icon: BsImage }
                         }
                     }
 
                     if has_selection {
                         button {
-                            class: "btn btn-danger",
+                            class: "action-btn action-btn-danger",
                             onclick: on_delete_selected,
                             title: "Delete selected images",
                             Icon { icon: BsTrash3 }
-                            span { "Delete ({num_selected})" }
+                            span { class: "btn-label", "Delete ({num_selected})" }
                         }
                     }
 
                     if has_images {
                         button {
-                            class: "btn btn-danger",
+                            class: "action-btn action-btn-danger",
                             onclick: on_clear_all,
                             title: "Delete all images",
                             Icon { icon: BsXCircle }
-                            span { "Clear All" }
+                            span { class: "btn-label", "Clear All" }
                         }
                     }
                 }

@@ -85,7 +85,7 @@ pub fn ConfigTab(project_name: String) -> Element {
                         span { "{err}" }
                     }
                     button {
-                        class: "btn btn-retry",
+                        class: "action-btn",
                         onclick: move |_| {
                             error.set(None);
                             config_schema.set(None);
@@ -169,7 +169,7 @@ pub fn ConfigTab(project_name: String) -> Element {
                     div {
                         class: "config-save-container",
                         button {
-                            class: "btn btn-primary",
+                            class: "action-btn action-btn-primary",
                             disabled: saving(),
                             onclick: on_save,
                             if saving() {
