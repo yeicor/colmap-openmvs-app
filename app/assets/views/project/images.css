@@ -86,9 +86,11 @@
     }
 }
 
-/* Info badge — non-clickable count display */
+/* Info badge — non-clickable count display, same height as action buttons */
 .images-info {
     cursor: default;
+    min-height: 1.8rem;
+    box-sizing: border-box;
 }
 
 .images-info:hover:not(:disabled) {

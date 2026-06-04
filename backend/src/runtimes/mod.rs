@@ -2,6 +2,7 @@ use colmap_openmvs_api::PrepareProgress;
 use tracing::{debug, error, info};
 
 mod docker;
+pub(crate) mod docker_dind;
 mod image_manager;
 mod proot;
 mod registry;

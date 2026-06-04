@@ -1,3 +1,10 @@
+/* Override for auto-generated dx-button: add flex layout for icon+label spacing */
+.dx-button {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 0.35rem;
+}
+
 /* PageHeader component styles */
 .page-header {
     display: flex;
@@ -15,16 +22,24 @@
     flex: 1;
 }
 
+.page-header-title-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    flex: 1;
+    min-width: 0;
+}
+
 .page-header h1 {
     margin: 0;
-    margin-left: 32px;
-    font-size: 1.5rem;
+    margin-left: 42px;
+    font-size: 1.25rem;
     font-weight: 600;
     display: flex;
     align-items: center;
     gap: 0.25rem;
     white-space: nowrap;
-    line-height: 1;
+    line-height: 1.2;
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -35,9 +50,27 @@
     margin-left: 0;
 }
 
-.page-header h1 svg {
-    width: 2rem;
-    height: 2rem;
+.page-header .dx-button {
+    flex: 1;
+}
+
+.page-header-subtitle {
+    font-size: 0.72rem;
+    color: var(--secondary-color-5);
+    font-weight: 400;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.2;
+}
+
+@media (max-width: 480px) {
+    .page-header h1 {
+        font-size: 1.05rem;
+    }
+    .page-header-subtitle {
+        font-size: 0.65rem;
+    }
 }
 
 .page-header {
@@ -58,6 +91,7 @@
     width: 100%;
 }
 .page-header .dx-button {
+    flex: 1;
     padding: 0px;
     height: 32px;
     overflow: hidden;
@@ -267,7 +301,9 @@
     align-items: center;
     gap: 0.25rem;
     padding: 0.25rem 0.55rem;
-    border: 1px solid var(--primary-color-6);
+    border-style: solid;
+    border-width: 1px;
+    border-color: var(--primary-color-6);
     border-radius: 0.32rem;
     background: var(--primary-color-4);
     color: var(--secondary-color);
@@ -331,14 +367,14 @@
     background: color-mix(in srgb, var(--secondary-success-color) 15%, var(--primary-color-4));
 }
 
-/* Accent: warning / download (amber) */
+/* Accent: warning (yellow — refresh, reload actions) */
 .action-btn-warning {
-    color: var(--download-accent);
-    border-color: var(--download-accent);
+    color: var(--secondary-warning-color);
+    border-color: var(--secondary-warning-color);
 }
 
 .action-btn-warning:hover:not(:disabled) {
-    background: var(--download-bg);
+    background: color-mix(in srgb, var(--secondary-warning-color) 15%, var(--primary-color-4));
 }
 
 /* Accent: info / view-3d (purple) */
@@ -351,23 +387,167 @@
     background: var(--view-3d-bg);
 }
 
-/* Accent: refresh (teal) */
-.action-btn-teal {
-    color: var(--refresh-accent);
-    border-color: var(--refresh-accent);
+/* =======================================================================
+   Subtle entrance animations
+   ======================================================================= */
+
+.page-header {
+    animation: fade-slide-in 0.4s ease-out;
 }
 
-.action-btn-teal:hover:not(:disabled) {
-    background: var(--refresh-bg);
+@keyframes fade-slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
-/* Responsive: container-query-aware button label hiding */
-.action-btn .btn-label {
-    display: inline;
+/* Entries in list views get a staggered fade-in effect */
+.config-var-row,
+.outputs-entry,
+.image-item,
+.image-list-item,
+.project-item,
+.tags-item,
+.logs-stage {
+    animation: fade-in 0.4s ease-out both;
 }
 
-@container (max-width: 100px) {
-    .action-btn .btn-label {
-        display: none;
+.config-var-row:nth-child(1),
+.image-item:nth-child(1),
+.image-list-item:nth-child(1),
+.project-item:nth-child(1),
+.tags-item:nth-child(1),
+.outputs-entry:nth-child(1),
+.logs-stage:nth-child(1) {
+    animation-delay: 0.02s;
+}
+
+.config-var-row:nth-child(2),
+.image-item:nth-child(2),
+.image-list-item:nth-child(2),
+.project-item:nth-child(2),
+.tags-item:nth-child(2),
+.outputs-entry:nth-child(2),
+.logs-stage:nth-child(2) {
+    animation-delay: 0.07s;
+}
+
+.config-var-row:nth-child(3),
+.image-item:nth-child(3),
+.image-list-item:nth-child(3),
+.project-item:nth-child(3),
+.tags-item:nth-child(3),
+.outputs-entry:nth-child(3),
+.logs-stage:nth-child(3) {
+    animation-delay: 0.12s;
+}
+
+.config-var-row:nth-child(4),
+.image-item:nth-child(4),
+.image-list-item:nth-child(4),
+.project-item:nth-child(4),
+.tags-item:nth-child(4),
+.outputs-entry:nth-child(4),
+.logs-stage:nth-child(4) {
+    animation-delay: 0.17s;
+}
+
+.config-var-row:nth-child(5),
+.image-item:nth-child(5),
+.image-list-item:nth-child(5),
+.project-item:nth-child(5),
+.tags-item:nth-child(5),
+.outputs-entry:nth-child(5),
+.logs-stage:nth-child(5) {
+    animation-delay: 0.22s;
+}
+
+.config-var-row:nth-child(6),
+.image-item:nth-child(6),
+.image-list-item:nth-child(6),
+.project-item:nth-child(6),
+.tags-item:nth-child(6),
+.outputs-entry:nth-child(6),
+.logs-stage:nth-child(6) {
+    animation-delay: 0.27s;
+}
+
+.config-var-row:nth-child(7),
+.image-item:nth-child(7),
+.image-list-item:nth-child(7),
+.project-item:nth-child(7),
+.tags-item:nth-child(7),
+.outputs-entry:nth-child(7),
+.logs-stage:nth-child(7) {
+    animation-delay: 0.32s;
+}
+
+.config-var-row:nth-child(8),
+.image-item:nth-child(8),
+.image-list-item:nth-child(8),
+.project-item:nth-child(8),
+.tags-item:nth-child(8),
+.outputs-entry:nth-child(8),
+.logs-stage:nth-child(8) {
+    animation-delay: 0.37s;
+}
+
+.config-var-row:nth-child(9),
+.image-item:nth-child(9),
+.image-list-item:nth-child(9),
+.project-item:nth-child(9),
+.tags-item:nth-child(9),
+.outputs-entry:nth-child(9),
+.logs-stage:nth-child(9) {
+    animation-delay: 0.42s;
+}
+
+.config-var-row:nth-child(10),
+.image-item:nth-child(10),
+.image-list-item:nth-child(10),
+.project-item:nth-child(10),
+.tags-item:nth-child(10),
+.outputs-entry:nth-child(10),
+.logs-stage:nth-child(10) {
+    animation-delay: 0.47s;
+}
+
+.config-var-row:nth-child(n + 11),
+.image-item:nth-child(n + 11),
+.image-list-item:nth-child(n + 11),
+.project-item:nth-child(n + 11),
+.tags-item:nth-child(n + 11),
+.outputs-entry:nth-child(n + 11),
+.logs-stage:nth-child(n + 11) {
+    animation-delay: 0.5s;
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(3px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+    .page-header,
+    .config-var-row,
+    .outputs-entry,
+    .image-item,
+    .image-list-item,
+    .project-item,
+    .tags-item,
+    .logs-stage {
+        animation: none;
     }
 }

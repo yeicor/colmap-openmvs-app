@@ -15,7 +15,7 @@ use crate::{
 };
 use dioxus::{document::eval, prelude::*};
 use dioxus_free_icons::icons::bs_icons::{
-    BsBug, BsCardList, BsCupFill, BsGear, BsGithub, BsHeartFill, BsPencil, BsPlusCircle, BsTrash,
+    BsBug, BsCupFill, BsGear, BsGithub, BsHeartFill, BsPencil, BsPlusCircle, BsTrash,
 };
 use dioxus_free_icons::Icon;
 use dioxus_primitives::ContentSide;
@@ -210,13 +210,11 @@ pub fn Projects(
         div {
             id: "projects",
             PageHeader {
-                title: "Projects".to_string(),
-                icon: Some(rsx! { Icon { icon: BsCardList } }),
+                title: "Project list".to_string(),
                 no_left_margin: !is_sidebar,
                 PageHeaderButton {
                     icon: rsx! { Icon { icon: BsPlusCircle } },
                     extra: rsx! { "New" },
-                    extra_tooltip: rsx! { "Create a new project" },
                     onclick: move |_| {
                         debug!("Opening create new project dialog");
                         input_value.set(String::new());
@@ -228,7 +226,6 @@ pub fn Projects(
                 PageHeaderButton {
                     icon: rsx! { Icon { icon: BsGear } },
                     extra: rsx! { "Settings" },
-                    extra_tooltip: rsx! { "Configure application settings" },
                     onclick: move |_| {
                         debug!("Navigating to settings view");
                         dioxus::prelude::navigator().push(Route::SettingsView {});

@@ -173,12 +173,28 @@ fn TaskCard(entry: TaskEntry, tasks_ctx: TasksCtx) -> Element {
         .collect();
 
     // Auto-scroll effect: when logs change and container is open, scroll to bottom
+    // and ensure the task card is visible in the drawer.
     let log_lines_for_effect = log_lines.clone();
     use_effect(move || {
         if logs_open() && !log_lines_for_effect.is_empty() {
-            // Use setTimeout to ensure DOM is updated first
             let _ = dioxus::document::eval(
-                "setTimeout(() => { const logs = document.querySelector('.task-card-logs'); if (logs) logs.scrollTop = logs.scrollHeight; }, 0)"
+                r#"
+                setTimeout(() => {
+                    const logs = document.querySelector('.task-card-logs');
+                    if (logs) {
+                        logs.scrollTop = logs.scrollHeight;
+                        const card = logs.closest('.task-card');
+                        const drawer = document.querySelector('.tasks-drawer-body');
+                        if (card && drawer) {
+                            const cardBottom = card.offsetTop + card.offsetHeight;
+                            const drawerScrollBottom = drawer.scrollTop + drawer.clientHeight;
+                            if (cardBottom > drawerScrollBottom || card.offsetTop < drawer.scrollTop) {
+                                card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                            }
+                        }
+                    }
+                }, 0);
+                "#,
             );
         }
     });

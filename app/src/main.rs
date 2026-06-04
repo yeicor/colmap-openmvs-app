@@ -90,7 +90,7 @@ pub fn App() -> Element {
         document::Link { rel: "stylesheet", href: asset!("/assets/dx-components-theme-override.css") }
         document::Link { rel: "stylesheet", href: asset!("/assets/mycomponents.css") }
         document::Link { rel: "stylesheet", href: asset!("/assets/tasks-panel.css") }
-        document::Title { "COLMAP + OpenMVS" }
+        document::Title { "Photos to 3D Model Offline" }
         Router::<Route> {}
         ToastContainer {}
     }

@@ -3,8 +3,11 @@
     padding: 0.5rem;
     max-width: 1200px;
     margin: 0 auto;
+    flex: 1;
     container-name: projects;
     container-type: size;
+    display: flex;
+    flex-direction: column;
 }
 
 #projects .header {
@@ -64,7 +67,7 @@
     list-style: none;
     padding: 0;
     margin: 0;
-    max-height: calc(100% - 5rem); /* Set a maximum height for the list */
+    flex: 1;
     overflow-y: auto; /* Enable vertical scrolling */
 }
 

@@ -7,7 +7,7 @@ use crate::Route;
 use dioxus::prelude::*;
 use tracing::{debug, info};
 
-use dioxus_free_icons::icons::bs_icons::{BsBoxSeam, BsCamera2, BsFileText, BsGear, BsImages};
+use dioxus_free_icons::icons::bs_icons::{BsBoxSeam, BsFileText, BsGear, BsImages};
 use dioxus_free_icons::Icon;
 
 mod images;
@@ -83,7 +83,6 @@ pub fn Project(name: String) -> Element {
             id: "project",
             PageHeader {
                 title: name.clone(),
-                icon: Some(rsx! { Icon { icon: BsCamera2 } }),
                 PageHeaderButton {
                     icon: rsx! {
                         if pipeline_is_running() { "⏹" } else { "▶️" }
@@ -91,13 +90,6 @@ pub fn Project(name: String) -> Element {
                     extra: rsx! {
                         if pipeline_is_running() { "Cancel" } else { "Run" }
                     },
-                    extra_tooltip: Some(rsx! {
-                        if pipeline_is_running() {
-                            "Cancel the currently running pipeline"
-                        } else {
-                            "Start the reconstruction pipeline (navigates to Logs tab)"
-                        }
-                    }),
                     onclick: on_run_clicked,
                 }
                 BackButton {

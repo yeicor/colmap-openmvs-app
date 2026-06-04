@@ -8,8 +8,8 @@ use colmap_openmvs_api::OutputFile;
 use dioxus::document::eval;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
-    BsArrowRepeat, BsArrowsExpand, BsCheck2, BsChevronDown, BsChevronRight, BsDownload, BsEye,
-    BsHourglass, BsTrash3, BsUpload, BsX,
+    BsArrowRepeat, BsCheck2, BsChevronDown, BsChevronRight, BsDownload, BsEye, BsHourglass,
+    BsTrash3, BsUpload, BsX,
 };
 use dioxus_free_icons::Icon;
 use std::collections::{HashMap, HashSet};
@@ -653,19 +653,9 @@ pub fn OutputsTab(project_name: String) -> Element {
             // ── Toolbar ──────────────────────────────────────────────
             div {
                 class: "outputs-toolbar",
-                div { class: "outputs-toolbar-spacer" }
-
-                button {
-                    class: "action-btn",
-                    title: "Expand all folders",
-                    onclick: move |_| collapsed.write().clear(),
-                    Icon { icon: BsArrowsExpand }
-                    span { class: "btn-label", " Expand All" }
-                }
-
                 // ── Backup (root download as ZIP) ────────────────
                 button {
-                    class: "action-btn action-btn-primary",
+                    class: "outputs-btn action-btn action-btn-primary",
                     disabled: downloading_folder().as_deref() == Some(""),
                     title: "Download all outputs as ZIP",
                     onclick: {
@@ -702,7 +692,7 @@ pub fn OutputsTab(project_name: String) -> Element {
 
                 // ── Restore (upload ZIP to root) ─────────────────
                 button {
-                    class: "action-btn action-btn-success",
+                    class: "outputs-btn action-btn action-btn-success",
                     disabled: restoring(),
                     title: "Restore outputs from a ZIP archive",
                     onclick: {
@@ -729,7 +719,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                     span { class: "outputs-toolbar-status", Icon { icon: BsHourglass } }
                 } else if confirming_clear_all() {
                     button {
-                        class: "action-btn action-btn-success",
+                        class: "outputs-btn action-btn action-btn-success",
                         title: "Confirm delete all",
                         onclick: {
                             let pn = project_name.clone();
@@ -760,13 +750,13 @@ pub fn OutputsTab(project_name: String) -> Element {
                         span { class: "btn-label", " Sure?" }
                     }
                     button {
-                        class: "action-btn",
+                        class: "outputs-btn action-btn",
                         onclick: move |_| confirming_clear_all.set(false),
                         Icon { icon: BsX }
                     }
                 } else {
                     button {
-                        class: "action-btn action-btn-danger",
+                        class: "outputs-btn action-btn action-btn-danger",
                         title: "Delete all outputs",
                         onclick: move |_| confirming_clear_all.set(true),
                         Icon { icon: BsTrash3 }
@@ -775,7 +765,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                 }
 
                 button {
-                    class: "action-btn action-btn-teal",
+                    class: "outputs-btn action-btn action-btn-warning",
                     onclick: move |_| {
                         debug!("Refresh outputs");
                         refresh_counter += 1;

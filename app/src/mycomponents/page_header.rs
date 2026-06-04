@@ -1,27 +1,25 @@
 use dioxus::prelude::*;
-use dioxus_primitives::ContentSide;
 
-use crate::components::{
-    button::{Button, ButtonVariant},
-    tooltip::{Tooltip, TooltipContent, TooltipTrigger},
-};
+use crate::components::button::{Button, ButtonVariant};
 
 #[component]
 pub fn PageHeader(
     title: String,
     #[props(default)] no_left_margin: bool,
-    #[props(default)] icon: Option<Element>,
+    #[props(default)] subtitle: Option<String>,
     children: Element,
 ) -> Element {
     rsx! {
         div {
             class: "page-header",
-            h1 {
-                class: if no_left_margin { "no-left-margin" } else { "" },
-                if let Some(icon_value) = icon {
-                    {icon_value}
+            div { class: "page-header-title-group",
+                h1 {
+                    class: if no_left_margin { "no-left-margin" } else { "" },
+                    "{title}"
                 }
-                "{title}"
+                if let Some(ref sub) = subtitle {
+                    span { class: "page-header-subtitle", "{sub}" }
+                }
             }
             {children}
         }
@@ -32,23 +30,17 @@ pub fn PageHeader(
 pub fn PageHeaderButton(
     #[props] icon: Element,
     #[props] extra: Element,
-    #[props] extra_tooltip: Option<Element>,
     onclick: EventHandler<()>,
 ) -> Element {
     rsx! {
-        Tooltip {
-            TooltipTrigger {
-                Button {
-                    variant: ButtonVariant::Ghost,
-                    onclick: move |_| onclick.call(()),
-                    {icon}
-                    span {
-                        class: "btn-label",
-                        {extra.clone()}
-                    }
-                }
+        Button {
+            variant: ButtonVariant::Ghost,
+            onclick: move |_| onclick.call(()),
+            {icon}
+            span {
+                class: "btn-label",
+                {extra.clone()}
             }
-            TooltipContent { side: ContentSide::Bottom, { extra_tooltip.unwrap_or(extra) } }
         }
     }
 }
@@ -59,7 +51,6 @@ pub fn BackButton(onclick: EventHandler<()>) -> Element {
         PageHeaderButton {
             icon: rsx! { "←" },
             extra: rsx! { "Back" },
-            extra_tooltip: rsx! { "Go back to the project list" },
             onclick,
         }
     }

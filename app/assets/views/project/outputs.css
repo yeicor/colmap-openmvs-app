@@ -23,6 +23,7 @@
 .outputs-toolbar {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 0.35rem;
     flex-wrap: wrap;
     padding: 0.3rem 0.5rem;
@@ -32,14 +33,17 @@
     flex-shrink: 0;
 }
 
+@media (max-width: 500px) {
+    .outputs-toolbar {
+        gap: 0.25rem;
+        padding: 0.2rem 0.35rem;
+    }
+}
+
 .outputs-toolbar-title {
     font-size: 0.82rem;
     font-weight: 600;
     color: var(--secondary-color);
-}
-
-.outputs-toolbar-spacer {
-    flex: 1;
 }
 
 .outputs-toolbar-status {
@@ -237,7 +241,9 @@
     display: inline-flex;
     align-items: center;
     gap: 0.2rem;
-    border: 1px solid var(--primary-color-6);
+    border-style: solid;
+    border-width: 1px;
+    border-color: var(--primary-color-6);
     border-radius: 0.3rem;
     background: var(--primary-color-4);
     color: var(--secondary-color);
@@ -300,24 +306,24 @@
     background: var(--view-3d-bg);
 }
 
-/* Download file: amber (distinct from backup blue) */
+/* Download file: blue (same accent as backup) */
 .outputs-download-link {
-    color: var(--download-accent);
-    border-color: var(--download-accent);
+    color: var(--focused-border-color);
+    border-color: var(--focused-border-color);
 }
 
 .outputs-download-link:hover:not(:disabled) {
-    background: var(--download-bg);
+    background: color-mix(in srgb, var(--focused-border-color) 15%, var(--primary-color-4));
 }
 
 /* Dir download button (folder ZIP) */
 .outputs-dir-download-btn {
-    color: var(--download-accent);
-    border-color: var(--download-accent);
+    color: var(--focused-border-color);
+    border-color: var(--focused-border-color);
 }
 
 .outputs-dir-download-btn:hover:not(:disabled) {
-    background: var(--download-bg);
+    background: color-mix(in srgb, var(--focused-border-color) 15%, var(--primary-color-4));
 }
 
 /* Delete: red (destructive action) */

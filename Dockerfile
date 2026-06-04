@@ -86,6 +86,7 @@ EXPOSE 8080
 #   --projects-folder  /data/projects    (COLMAP_PROJECTS_FOLDER)
 #   --proot-images-dir /data/proot-images (COLMAP_PROOT_IMAGES_DIR)
 # -----------------------------------------------------------------------
+VOLUME /data
 ENV COLMAP_PROJECTS_FOLDER=/data/projects
 ENV COLMAP_PROOT_IMAGES_DIR=/data/proot-images
 

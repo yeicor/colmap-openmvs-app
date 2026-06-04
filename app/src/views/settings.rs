@@ -90,7 +90,6 @@ pub fn SettingsView() -> Element {
 
             PageHeader {
                 title: "Settings".to_string(),
-                icon: Some(rsx! { Icon { icon: BsGear } }),
                 BackButton {
                     onclick: move |_| { dioxus::prelude::navigator().push(Route::Projects {}); }
                 }
@@ -1195,7 +1194,7 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                             input {
                                 r#type: "text",
                                 placeholder: "mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest",
-                                class: "tag-name",
+                                class: "custom-tag-input",
                                 value: "{custom_tag}",
                                 oninput: move |e| custom_tag.set(e.value()),
                                 disabled: preparing(),

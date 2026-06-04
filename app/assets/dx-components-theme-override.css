@@ -23,11 +23,7 @@
     --view-3d-accent: var(--dark, #a78bfa) var(--light, #7c3aed);
     --view-3d-bg: var(--dark, color-mix(in srgb, #a78bfa 12%, transparent)) var(--light, color-mix(in srgb, #7c3aed 10%, transparent));
 
-    /* Download accent: amber/orange */
-    --download-accent: var(--dark, #fbbf24) var(--light, #d97706);
-    --download-bg: var(--dark, color-mix(in srgb, #fbbf24 12%, transparent)) var(--light, color-mix(in srgb, #d97706 10%, transparent));
-
-    /* Refresh accent: teal/cyan */
-    --refresh-accent: var(--dark, #2dd4bf) var(--light, #0d9488);
-    --refresh-bg: var(--dark, color-mix(in srgb, #2dd4bf 12%, transparent)) var(--light, color-mix(in srgb, #0d9488 10%, transparent));
+    /* Download accent: blue (same as primary/focused, kept for reference) */
+    --download-accent: var(--dark, #3b82f6) var(--light, #2563eb);
+    --download-bg: var(--dark, color-mix(in srgb, #3b82f6 15%, transparent)) var(--light, color-mix(in srgb, #2563eb 10%, transparent));
 }

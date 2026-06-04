@@ -5,8 +5,8 @@
 //! the host machine it will work out of the box.
 
 use super::{
-    ImageHash, ImageTag, Mount, PrepareProgressTx, PreparedImage, ProcessHandle, Runtime,
-    RuntimeResult,
+    docker_dind, ImageHash, ImageTag, Mount, PrepareProgressTx, PreparedImage, ProcessHandle,
+    Runtime, RuntimeResult,
 };
 use async_trait::async_trait;
 use colmap_openmvs_api::PrepareProgress;
@@ -361,30 +361,71 @@ impl Runtime for Docker {
             cmd.arg("--user").arg(format!("{}:{}", uid, gid));
         }
 
+        // ── Volume mounts with Docker-in-Docker path translation ────────
+        // When running inside a container with a mounted Docker socket, paths
+        // in the `-v` flag are interpreted from the **host** filesystem, not
+        // the container's.  We transparently translate container paths to
+        // their corresponding host paths here.
+        let dind_active = docker_dind::is_active();
         for mount in mounts {
-            cmd.arg("-v").arg(format!(
-                "{}:{}",
-                mount.host_path.display(),
-                mount.container_path
-            ));
+            let host_path = if dind_active {
+                docker_dind::resolve_host_path(&mount.host_path)
+            } else {
+                mount.host_path.clone()
+            };
+            debug!(
+                "docker run: mounting {} → {} (dind_translation={})",
+                host_path.display(),
+                mount.container_path,
+                dind_active,
+            );
+            cmd.arg("-v")
+                .arg(format!("{}:{}", host_path.display(), mount.container_path));
         }
 
-        // Add custom mounts from settings
+        // Add custom mounts from settings (with DinD path translation)
         if let Ok(settings) = crate::settings::get_settings().await {
             for mount_spec in &settings.custom_mounts {
-                let (host_path, container_path) = if mount_spec.contains(':') {
+                let (cfg_host_path, container_path) = if mount_spec.contains(':') {
                     let parts: Vec<&str> = mount_spec.splitn(2, ':').collect();
                     (parts[0].to_string(), parts[1].to_string())
                 } else {
                     (mount_spec.clone(), mount_spec.clone())
                 };
 
-                if std::path::Path::new(&host_path).exists() {
-                    debug!(host_path = %host_path, container_path = %container_path, "run: adding custom mount");
-                    cmd.arg("-v")
-                        .arg(format!("{}:{}", host_path, container_path));
+                // Translate container path to host path when in DinD mode
+                let resolved_host_path = if dind_active {
+                    docker_dind::resolve_host_path_str(&cfg_host_path)
                 } else {
-                    warn!(host_path = %host_path, "run: skipping custom mount, host path does not exist");
+                    cfg_host_path.clone()
+                };
+
+                if std::path::Path::new(&resolved_host_path).exists() {
+                    debug!(
+                        host_path = %resolved_host_path,
+                        container_path = %container_path,
+                        original_host_path = %cfg_host_path,
+                        dind_translation = dind_active,
+                        "run: adding custom mount"
+                    );
+                    cmd.arg("-v")
+                        .arg(format!("{}:{}", resolved_host_path, container_path));
+                } else if cfg_host_path != resolved_host_path
+                    && std::path::Path::new(&cfg_host_path).exists()
+                {
+                    // DinD translation produced a non-existent path, but the
+                    // container-visible path exists — use it as a fallback with a
+                    // warning (it will likely fail on the host, but it's worth a try).
+                    warn!(
+                        host_path = %resolved_host_path,
+                        container_path = %container_path,
+                        fallback_path = %cfg_host_path,
+                        "run: DinD-translated path not found, falling back to original"
+                    );
+                    cmd.arg("-v")
+                        .arg(format!("{}:{}", cfg_host_path, container_path));
+                } else {
+                    warn!(host_path = %cfg_host_path, "run: skipping custom mount, host path does not exist");
                 }
             }
         }

@@ -232,7 +232,7 @@ fn spawn_pipeline_stream(
     task_id: String,
     mut stages: Signal<Vec<StageData>>,
     mut pipeline_status: Signal<PipelineStatus>,
-    auto_scroll: Signal<bool>,
+    _auto_scroll: Signal<bool>,
     mut active_task_id: Signal<String>,
     mut expanded_stage: Signal<Option<u32>>,
     mut pipeline_progress_ctx: Signal<Option<f32>>,
@@ -345,24 +345,7 @@ fn spawn_pipeline_stream(
                                 }
                                 s[stage_index as usize].add_log_line(line);
                                 drop(s);
-                                if auto_scroll() {
-                                    let _ = eval(
-                                        r#"
-                                        (function () {
-                                            const el = document.getElementById('logs-output');
-                                            if (!el) return;
-                                            let elapsed = 0;
-                                            const id = setInterval(() => {
-                                                el.scrollTop = el.scrollHeight;
-                                                elapsed += 33;
-                                                if (elapsed >= 500) {
-                                                    clearInterval(id);
-                                                }
-                                            }, 33);
-                                        })();
-                                        "#,
-                                    );
-                                }
+                                // Auto-scroll is handled by a persistent watcher effect below.
                             }
                             TaskEvent::PipelineStageProgress {
                                 stage_index,
@@ -476,6 +459,72 @@ pub fn LogsTab(project_name: String) -> Element {
     use_effect(move || {
         let running = matches!(pipeline_status(), PipelineStatus::Running);
         pipeline_is_running.set(running);
+    });
+
+    // ── Persistent auto-scroll watcher ───────────────────────────────────
+    // A single interval continuously scrolls the log view while auto-scroll
+    // is enabled AND the pipeline is running.  Uses use_drop to clean up
+    // on unmount, and toggles the interval on/off via a sentinel value.
+    let mut auto_scroll_running = use_signal(|| false);
+    use_effect(move || {
+        let should_run = auto_scroll() && matches!(pipeline_status(), PipelineStatus::Running);
+        if should_run == auto_scroll_running() {
+            return; // no change
+        }
+        auto_scroll_running.set(should_run);
+        tracing::debug!(should_run = should_run, "Auto-scroll watcher state change");
+        if should_run {
+            let _ = eval(
+                r#"
+                if (!window.__logsAutoScrollId) {
+                    console.log('[auto-scroll] Starting interval');
+                    window.__logsAutoScrollId = setInterval(function () {
+                        var el = document.getElementById('logs-output');
+                        if (!el) return;
+                        var stage = el.closest('.logs-stage');
+                        if (!stage) return;
+                        // Smooth-scroll inner log output to bottom
+                        el.scroll({ top: el.scrollHeight, behavior: 'smooth' });
+                        // Smooth-scroll to bring the stage into view in ancestor containers
+                        stage.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                        // Show/hide floating button based on deepest scroll depth
+                        var maxScroll = 0;
+                        for (var p = stage.parentElement; p; p = p.parentElement) {
+                            if (p.scrollHeight > p.clientHeight) {
+                                maxScroll = Math.max(maxScroll, p.scrollTop);
+                            }
+                        }
+                        var floatBtn = document.querySelector('.logs-autoscroll-float');
+                        if (floatBtn) {
+                            floatBtn.classList.toggle('logs-autoscroll-float--hidden', maxScroll < 100);
+                        }
+                    }, 100);
+                }
+                "#,
+            );
+        } else {
+            // One last scroll to the bottom before stopping.
+            let _ = eval(concat!(
+                "console.log('[auto-scroll] One last scroll then stop'); ",
+                "var el = document.getElementById('logs-output'); ",
+                "if (el) { el.scroll({ top: el.scrollHeight, behavior: 'smooth' }); } ",
+                "var stage = document.querySelector('.logs-stage'); ",
+                "if (stage) { stage.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } ",
+                "clearInterval(window.__logsAutoScrollId); ",
+                "window.__logsAutoScrollId = null;",
+            ));
+        }
+    });
+    // Always clean up on unmount (last scroll + clear).
+    use_drop(move || {
+        let _ = eval(concat!(
+            "var el = document.getElementById('logs-output'); ",
+            "if (el) { el.scrollTop = el.scrollHeight; } ",
+            "var container = document.querySelector('.logs-stages'); ",
+            "if (container) { container.scrollTop = container.scrollHeight; } ",
+            "clearInterval(window.__logsAutoScrollId); ",
+            "window.__logsAutoScrollId = null;",
+        ));
     });
 
     // ── On mount: reconnect or auto-start dry-run ─────────────────────────
@@ -685,7 +734,7 @@ pub fn LogsTab(project_name: String) -> Element {
                     },
                 }
 
-                // Auto-scroll toggle
+                // Auto-scroll toggle (always visible in toolbar)
                 label {
                     class: "logs-autoscroll-label",
                     title: "Automatically scroll to the latest log line",
@@ -766,6 +815,12 @@ pub fn LogsTab(project_name: String) -> Element {
                                             class: "stage-chevron",
                                             if is_expanded { "▾" } else { "▸" }
                                         }
+                                        if let Some(num) = stage.pipeline_stage_num {
+                                            span {
+                                                class: "stage-index",
+                                                "{num}/{stage.total_stages}"
+                                            }
+                                        }
                                         span {
                                             class: "stage-name",
                                             "{stage.name}{name_suffix}"
@@ -814,6 +869,21 @@ pub fn LogsTab(project_name: String) -> Element {
                             }
                         }
                     }
+                }
+            }
+
+            // ── Floating indicator: only while auto-scroll is ON AND pipeline is running ──
+            if auto_scroll() && matches!(pipeline_status(), PipelineStatus::Running) {
+                label {
+                    class: "logs-autoscroll-float",
+                    title: "Auto-scroll is ON — click to disable",
+                    input {
+                        r#type: "checkbox",
+                        checked: true,
+                        onchange: move |e| auto_scroll.set(e.checked()),
+                    }
+                    span { class: "logs-autoscroll-float-icon", "▼" }
+                    span { class: "logs-autoscroll-float-text", "Scrolling… (click to disable auto-scroll)" }
                 }
             }
         }

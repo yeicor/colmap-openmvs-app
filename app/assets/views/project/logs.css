@@ -151,6 +151,73 @@
     cursor: pointer;
 }
 
+/* ── Floating auto-scroll indicator ───────────────────────────────────────── */
+
+.logs-autoscroll-float {
+    position: fixed;
+    top: 3.25rem;
+    left: 1.5rem;
+    z-index: 10;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid var(--focused-border-color);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--focused-border-color) 12%, var(--primary-color-3));
+    color: var(--focused-border-color);
+    font-size: 0.82rem;
+    cursor: pointer;
+    user-select: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    transition: all 0.15s ease;
+    margin-top: auto;
+    margin-bottom: 0;
+    width: fit-content;
+}
+
+.logs-autoscroll-float:hover {
+    background: color-mix(in srgb, var(--focused-border-color) 22%, var(--primary-color-3));
+}
+
+.logs-autoscroll-float input {
+    display: none;
+}
+
+.logs-autoscroll-float-icon {
+    font-size: 0.7rem;
+    animation: autoscroll-bounce 1s ease-in-out infinite;
+}
+
+@keyframes autoscroll-bounce {
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(2px);
+    }
+}
+
+.logs-autoscroll-float-text {
+    font-weight: 500;
+}
+
+/* Hide floating button when scrolled near the top (top bar/tabs visible) */
+.logs-autoscroll-float--hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(1rem);
+}
+
+.logs-autoscroll-float {
+    transition:
+        opacity 0.2s ease,
+        transform 0.2s ease,
+        background 0.15s ease;
+}
+
 /* ── Error banner ─────────────────────────────────────────────────────────── */
 
 .logs-error-banner {
@@ -203,6 +270,7 @@
     overflow-y: auto;
     flex: 1;
     min-height: 0;
+    position: relative; /* offsetTop reference for auto-scroll */
 }
 
 .logs-stage {
