@@ -130,19 +130,19 @@ async fn write_low_resource_project_config(
         environment_variables: vec![
             EnvVarConfig {
                 name: "COLMAP_FEATURE_EXTRACTOR_ARGS".into(),
-                value: "--FeatureExtraction.num_threads=1 --SiftExtraction.max_num_features=2048 --SiftExtraction.first_octave=0 --SiftExtraction.peak_threshold=0.01".into(),
+                value: "--FeatureExtraction.num_threads=1".into(),
             },
             EnvVarConfig {
                 name: "COLMAP_MATCHER_ARGS".into(),
-                value: "--FeatureMatching.num_threads=1 --SiftMatching.max_ratio=0.85 --FeatureMatching.max_num_matches=8192".into(),
+                value: "--FeatureMatching.num_threads=1".into(),
             },
             EnvVarConfig {
                 name: "COLMAP_MAPPER_ARGS".into(),
-                value: "--GlobalMapper.num_threads=1 --GlobalMapper.ba_ceres_max_num_iterations=50".into(),
+                value: "--GlobalMapper.num_threads=1".into(),
             },
             EnvVarConfig {
                 name: "COLMAP_UNDISTORTER_ARGS".into(),
-                value: "--num_threads=1 --max_image_size=1600".into(),
+                value: "--num_threads=1".into(),
             },
             EnvVarConfig {
                 name: "OPENMVS_INTERFACE_COLMAP_ARGS".into(),
@@ -150,7 +150,7 @@ async fn write_low_resource_project_config(
             },
             EnvVarConfig {
                 name: "OPENMVS_DENSIFY_POINT_CLOUD_ARGS".into(),
-                value: "--max-threads=1 --resolution-level=2 --max-resolution=1600".into(),
+                value: "--max-threads=1".into(),
             },
             EnvVarConfig {
                 name: "OPENMVS_RECONSTRUCT_MESH_SPARSE_ARGS".into(),
@@ -158,11 +158,11 @@ async fn write_low_resource_project_config(
             },
             EnvVarConfig {
                 name: "OPENMVS_REFINE_MESH_SPARSE_ARGS".into(),
-                value: "--max-threads=1 --resolution-level=1".into(),
+                value: "--max-threads=1".into(),
             },
             EnvVarConfig {
                 name: "OPENMVS_TEXTURE_MESH_SPARSE_ARGS".into(),
-                value: "--max-threads=1 --resolution-level=1".into(),
+                value: "--max-threads=1".into(),
             },
             EnvVarConfig {
                 name: "OPENMVS_RECONSTRUCT_MESH_DENSE_ARGS".into(),
@@ -170,11 +170,11 @@ async fn write_low_resource_project_config(
             },
             EnvVarConfig {
                 name: "OPENMVS_REFINE_MESH_DENSE_ARGS".into(),
-                value: "--max-threads=1 --resolution-level=1".into(),
+                value: "--max-threads=1".into(),
             },
             EnvVarConfig {
                 name: "OPENMVS_TEXTURE_MESH_DENSE_ARGS".into(),
-                value: "--max-threads=1 --resolution-level=1".into(),
+                value: "--max-threads=1".into(),
             },
         ],
         custom_script: None,

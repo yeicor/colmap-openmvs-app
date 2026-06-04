@@ -343,7 +343,7 @@
 /* ── Log lines ──────────────────────────────────────────── */
 
 .task-card-logs {
-    height: 50vh;
+    max-height: 50vh;
     overflow-y: auto;
     padding: 0.5rem 0.75rem;
     border-top: 1px solid var(--primary-color-6);

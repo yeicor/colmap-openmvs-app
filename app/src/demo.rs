@@ -266,18 +266,6 @@ pub async fn delete_project_output(_project_name: String, _relative_path: String
 pub async fn clear_project_outputs(_project_name: String) -> Result<()> {
     read_only_error()
 }
-pub async fn pick_and_import_images(_project_name: String) -> Result<Vec<String>> {
-    read_only_error()
-}
-pub async fn pick_projects_folder() -> Result<String> {
-    read_only_error()
-}
-pub async fn pick_settings_file() -> Result<String> {
-    read_only_error()
-}
-pub async fn save_output_as(_project_name: String, _relative_path: String) -> Result<String> {
-    read_only_error()
-}
 
 pub async fn write_project_output(
     _project_name: String,

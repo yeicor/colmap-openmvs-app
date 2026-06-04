@@ -73,9 +73,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-log = { workspace = true }
 
-# Better support for file dialogs accross all platforms
-rfd = { git = "https://github.com/yeicor/rfd.git", branch = "feature/web-dialogs" }
-
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
 

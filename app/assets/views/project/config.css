@@ -617,6 +617,10 @@
 
 .config-save-container .btn {
     flex: 1;
+    font-weight: 600;
+    background-color: var(--secondary-color-1);
+    color: var(--primary-color);
+    border-color: var(--secondary-color-1);
 }
 
 @media (max-width: 768px) {

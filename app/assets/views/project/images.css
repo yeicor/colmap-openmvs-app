@@ -134,9 +134,15 @@
     border-color: #1f69dd;
 }
 
-.btn-tertiary:hover:not(:disabled) {
+.btn-tertiary {
     background-color: var(--secondary-color-2);
+    color: var(--primary-color);
     border-color: var(--secondary-color-2);
+}
+
+.btn-tertiary:hover:not(:disabled) {
+    background-color: var(--secondary-color-1);
+    border-color: var(--secondary-color-1);
 }
 
 .btn-danger {

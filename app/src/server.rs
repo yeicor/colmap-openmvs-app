@@ -318,47 +318,6 @@ pub async fn clear_project_outputs(project_name: String) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Native file-picker dialogs (backend-driven, works on all platforms)
-// ---------------------------------------------------------------------------
-
-/// Open a native file-picker on the default and import the chosen image files
-/// into the project.  Returns the file names of successfully imported images,
-/// or an empty list if the user cancelled.
-#[cfg_attr(
-    not(feature = "demo"),
-    post("/api/projects/{project_name}/images/pick")
-)]
-pub async fn pick_and_import_images(project_name: String) -> Result<Vec<String>> {
-    backend::pick_and_import_images(project_name).await
-}
-
-/// Open a native folder-picker on the default and return the chosen path.
-/// Used by the General settings tab to set the projects folder.
-/// Returns an error on Android (path management is automatic there).
-#[cfg_attr(not(feature = "demo"), post("/api/settings/pick-folder"))]
-pub async fn pick_projects_folder() -> Result<String> {
-    backend::pick_projects_folder().await
-}
-
-/// Open a native file-picker on the default for a JSON settings file and return
-/// the chosen path.  Returns an error on Android.
-#[cfg_attr(not(feature = "demo"), post("/api/settings/pick-file"))]
-pub async fn pick_settings_file() -> Result<String> {
-    backend::pick_settings_file().await
-}
-
-/// Save an output file to disk.  On desktop opens a save-dialog; on Android
-/// writes directly to `/sdcard/Download/`.  Returns a human-readable
-/// confirmation/success message.
-#[cfg_attr(
-    not(feature = "demo"),
-    post("/api/projects/{project_name}/outputs/save-as")
-)]
-pub async fn save_output_as(project_name: String, relative_path: String) -> Result<String> {
-    backend::save_output_as(project_name, relative_path).await
-}
-
-// ---------------------------------------------------------------------------
 // Theme / color-scheme detection
 // ---------------------------------------------------------------------------
 

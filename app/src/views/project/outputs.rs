@@ -64,50 +64,6 @@ fn js_escape(s: &str) -> String {
         .replace('\r', "\\r")
 }
 
-/// Trigger a browser "Save As" download for `bytes` with the given filename.
-///
-/// Creates a native `Blob` URL, clicks a hidden `<a download>`, then revokes
-/// the URL. If Blob URL creation fails, falls back to a `data:` URL.
-#[cfg(target_arch = "wasm32")]
-async fn trigger_download(filename: &str, bytes: Vec<u8>) {
-    use js_sys::{Array, Uint8Array};
-    use web_sys::{Blob, BlobPropertyBag, Url};
-
-    let typed = Uint8Array::new_with_length(bytes.len() as u32);
-    typed.copy_from(&bytes);
-    let array = Array::of1(&typed);
-    let mut opts = BlobPropertyBag::new();
-    opts.type_("application/octet-stream");
-    if let Ok(blob) = Blob::new_with_u8_array_sequence_and_options(&array, &opts) {
-        if let Ok(blob_url) = Url::create_object_url_with_blob(&blob) {
-            let js = format!(
-                r#"const a=document.createElement('a');
-                   a.href='{}';a.download='{}';a.style.display='none';
-                   document.body.appendChild(a);a.click();
-                   setTimeout(()=>{{URL.revokeObjectURL('{}');document.body.removeChild(a);}},100);"#,
-                js_escape(&blob_url),
-                js_escape(filename),
-                js_escape(&blob_url),
-            );
-            let _ = eval(&js).await;
-            return;
-        }
-    }
-
-    // Fallback: data URL (works in every embedded WebView).
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    let js = format!(
-        r#"const a=document.createElement('a');
-           a.href='data:application/octet-stream;base64,{}';
-           a.download='{}';a.style.display='none';
-           document.body.appendChild(a);a.click();
-           setTimeout(()=>document.body.removeChild(a),100);"#,
-        b64,
-        js_escape(filename),
-    );
-    let _ = eval(&js).await;
-}
-
 /// Pick an emoji icon based on file extension.
 fn file_icon(name: &str, is_dir: bool, is_virtual_dir: bool) -> &'static str {
     if is_dir {
@@ -342,18 +298,27 @@ async fn download_folder_zip(
     project_name: &str,
     folder_path: &str,
     zip_name: &str,
-    entries: Vec<(String, String)>, // (relative_path, name)
-    _error_msg: Signal<String>,
-) -> Result<(), String> {
+    entries: Vec<(String, String)>,
+    mut error_msg: Signal<String>,
+    mut info_msg: Signal<String>,
+    mut info_progress: Signal<Option<(usize, usize)>>,
+) {
     if entries.is_empty() {
-        return Err("Folder has no files".to_string());
+        error_msg.set("Folder has no files".to_string());
+        return;
     }
 
+    let total = entries.len();
+    info_msg.set(format!("Downloading {} files…", total));
+    info_progress.set(Some((0, total)));
+
     // Download every file's bytes.
-    let mut file_data: Vec<(String, Vec<u8>)> = Vec::with_capacity(entries.len());
-    for (rel_path, _name) in &entries {
+    let mut file_data: Vec<(String, Vec<u8>)> = Vec::with_capacity(total);
+    for (done, (rel_path, _name)) in entries.iter().enumerate() {
         let pn = project_name.to_string();
         let rp = rel_path.clone();
+        info_msg.set(format!("Downloading {}", rel_path));
+        info_progress.set(Some((done, total)));
         match get_project_output_bytes(pn, rp).await {
             Ok(mut stream) => {
                 let mut bytes = Vec::new();
@@ -361,7 +326,9 @@ async fn download_folder_zip(
                     match chunk {
                         Ok(data) => bytes.extend_from_slice(&data),
                         Err(e) => {
-                            return Err(format!("Failed to read {}: {e}", rel_path));
+                            error_msg.set(format!("Failed to read {}: {e}", rel_path));
+                            info_progress.set(None);
+                            return;
                         }
                     }
                 }
@@ -369,21 +336,31 @@ async fn download_folder_zip(
                 file_data.push((zpath, bytes));
             }
             Err(e) => {
-                return Err(format!("Failed to download {}: {e}", rel_path));
+                error_msg.set(format!("Failed to download {}: {e}", rel_path));
+                info_progress.set(None);
+                return;
             }
         }
     }
 
-    // Feed the files into JSZip running in the browser.
+    // Build a JSON array of all file entries for the JS side.
+    let mut items = Vec::with_capacity(file_data.len());
+    for (zpath, bytes) in &file_data {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let path_json = serde_json::to_string(zpath).unwrap_or_default();
+        let b64_json = serde_json::to_string(&b64).unwrap_or_default();
+        items.push(format!(r#"{{"path":{},"b64":{}}}"#, path_json, b64_json));
+    }
+    let json_array = format!("[{}]", items.join(","));
+
+    // Feed all data as a single JSON literal into a one-shot eval.
     let js = format!(
         r#"(async function() {{
     const JSZip = (await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm')).default;
     const zip = new JSZip();
-    while (true) {{
-        const path = await dioxus.recv();
-        if (path === null) break;
-        const b64 = await dioxus.recv();
-        zip.file(path, b64, {{base64: true}});
+    const files = {json_array};
+    for (const f of files) {{
+        zip.file(f.path, f.b64, {{base64: true}});
     }}
     const blob = await zip.generateAsync({{type: 'blob'}});
     const a = document.createElement('a');
@@ -398,21 +375,13 @@ async fn download_folder_zip(
 }})();"#
     );
 
-    let eval_handle = document::eval(&js);
-
-    for (zpath, bytes) in &file_data {
-        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-        if eval_handle.send(zpath.clone()).is_err() {
-            return Err("JSZip communication error".to_string());
-        }
-        if eval_handle.send(b64).is_err() {
-            return Err("JSZip communication error".to_string());
-        }
-    }
-    // Signal end
-    let _ = eval_handle.send(None::<String>);
-
-    Ok(())
+    let _ = eval(&js).await;
+    info_progress.set(None);
+    info_msg.set(format!(
+        "Downloaded {} files as {}",
+        file_data.len(),
+        zip_name
+    ));
 }
 
 /// Present a file-picker for a ZIP archive, extract every entry and upload
@@ -424,6 +393,8 @@ async fn restore_from_zip(
     mut restore_progress: Signal<(usize, usize)>,
     mut error_msg: Signal<String>,
     mut refresh_counter: Signal<u32>,
+    mut info_msg: Signal<String>,
+    mut info_progress: Signal<Option<(usize, usize)>>,
 ) {
     let js = r#"
 (async function() {
@@ -487,6 +458,8 @@ async fn restore_from_zip(
     };
 
     restore_progress.set((0, total));
+    info_msg.set(format!("Restoring {} files into '{}'…", total, folder_path));
+    info_progress.set(Some((0, total)));
 
     let mut done = 0usize;
     loop {
@@ -521,6 +494,8 @@ async fn restore_from_zip(
                     Ok(()) => {
                         done += 1;
                         restore_progress.set((done, total));
+                        info_msg.set(format!("Restoring {}", path));
+                        info_progress.set(Some((done, total)));
                     }
                     Err(e) => {
                         error_msg.set(format!("Failed to write {}: {e}", path));
@@ -536,6 +511,8 @@ async fn restore_from_zip(
     }
 
     restoring.set(false);
+    info_progress.set(None);
+    info_msg.set(format!("Restored {} files", done));
     refresh_counter += 1;
 }
 
@@ -561,9 +538,10 @@ pub fn OutputsTab(project_name: String) -> Element {
     let mut confirming_clear_all = use_signal(|| false);
     let mut clearing_all = use_signal(|| false);
     let restoring = use_signal(|| false);
-    let restore_progress = use_signal(|| (0usize, 0usize)); // (done, total)
+    let restore_progress = use_signal(|| (0usize, 0usize));
+    let mut info_progress = use_signal(|| Option::<(usize, usize)>::None);
     let mut downloading_folder = use_signal(|| Option::<String>::None);
-    let restore_folder = use_signal(|| Option::<String>::None); // which folder we are restoring into ("" = root)
+    let restore_folder = use_signal(|| Option::<String>::None);
 
     let project_name_res = project_name.clone();
     let files = use_resource(move || {
@@ -620,6 +598,8 @@ pub fn OutputsTab(project_name: String) -> Element {
                                 // We peek the files resource directly to get the latest.
                                 let pn2 = pn.clone();
                                 let mut err2 = err.clone();
+                                let info2 = info_msg;
+                                let prog2 = info_progress;
                                 let mut dl = downloading_folder;
                                 spawn(async move {
                                     let fl = match crate::server::list_project_outputs(pn2.clone()).await {
@@ -632,13 +612,10 @@ pub fn OutputsTab(project_name: String) -> Element {
                                     };
                                     let entries = build_dir_files_map(&fl);
                                     let root_entries = entries.get("").cloned().unwrap_or_default();
-                                    let result = download_folder_zip(
+                                    download_folder_zip(
                                         &pn2, "", &format!("{}-backup.zip", pn2),
-                                        root_entries, err2.clone(),
+                                        root_entries, err2.clone(), info2.clone(), prog2.clone(),
                                     ).await;
-                                    if let Err(e) = result {
-                                        err2.set(e);
-                                    }
                                     dl.set(None);
                                 });
                             }
@@ -670,6 +647,8 @@ pub fn OutputsTab(project_name: String) -> Element {
                             let mut rst = restoring;
                             let prog = restore_progress;
                             let rc = refresh_counter;
+                            let info = info_msg;
+                            let prog2 = info_progress;
                             move |_| {
                                 rst.set(true);
                                 let pn = pn.clone();
@@ -677,8 +656,10 @@ pub fn OutputsTab(project_name: String) -> Element {
                                 let rst = rst.clone();
                                 let prog = prog.clone();
                                 let rc = rc.clone();
+                                let info = info.clone();
+                                let prog2 = prog2.clone();
                                 spawn(async move {
-                                    restore_from_zip(&pn, "", rst, prog, err, rc).await;
+                                    restore_from_zip(&pn, "", rst, prog, err, rc, info, prog2).await;
                                 });
                             }
                         },
@@ -753,7 +734,11 @@ pub fn OutputsTab(project_name: String) -> Element {
             Banner {
                 message: info_msg(),
                 banner_type: BannerType::Info,
-                on_close: move |_| info_msg.set(String::new()),
+                progress: info_progress(),
+                on_close: move |_| {
+                    info_msg.set(String::new());
+                    info_progress.set(None);
+                },
             }
 
             // ── File tree ─────────────────────────────────────────────────
@@ -891,6 +876,8 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                     let fp = rel_path.clone();
                                                                     let fn_ = entry_name.clone();
                                                                     let err = error_msg;
+                                                                    let info = info_msg;
+                                                                    let prog = info_progress;
                                                                     let mut dl = downloading_folder;
                                                                     let fl_clone = fl.clone();
                                                                     move |_| {
@@ -898,19 +885,18 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                         let pn = pn.clone();
                                                                         let fp = fp.clone();
                                                                         let fn_ = fn_.clone();
-                                                                        let mut err = err.clone();
+                                                                        let err = err.clone();
+                                                                        let info = info.clone();
+                                                                        let prog = prog.clone();
                                                                         let mut dl = dl.clone();
                                                                         let fl = fl_clone.clone();
                                                                         spawn(async move {
                                                                             let entries = build_dir_files_map(&fl);
                                                                             let file_entries = entries.get(&fp).cloned().unwrap_or_default();
                                                                             let zip_name = format!("{}-{}.zip", pn, fn_);
-                                                                            let result = download_folder_zip(
-                                                                                &pn, &fp, &zip_name, file_entries, err.clone(),
+                                                                            download_folder_zip(
+                                                                                &pn, &fp, &zip_name, file_entries, err.clone(), info.clone(), prog.clone(),
                                                                             ).await;
-                                                                            if let Err(e) = result {
-                                                                                err.set(e);
-                                                                            }
                                                                             dl.set(None);
                                                                         });
                                                                     }
@@ -946,6 +932,8 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                         let prog = restore_progress;
                                                                         let rc = refresh_counter;
                                                                         let mut rst_f = restore_folder;
+                                                                        let inf = info_msg;
+                                                                        let prog_inf = info_progress;
                                                                         move |_| {
                                                                             rst_f.set(Some(fp.clone()));
                                                                             rst.set(true);
@@ -955,9 +943,11 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                             let rst = rst.clone();
                                                                             let prog = prog.clone();
                                                                             let rc = rc.clone();
+                                                                            let inf = inf.clone();
+                                                                            let prog_inf = prog_inf.clone();
                                                                             let mut rst_f = rst_f.clone();
                                                                             spawn(async move {
-                                                                                restore_from_zip(&pn, &fp, rst, prog, err, rc).await;
+                                                                                restore_from_zip(&pn, &fp, rst, prog, err, rc, inf, prog_inf).await;
                                                                                 rst_f.set(None);
                                                                             });
                                                                         }
@@ -983,43 +973,39 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                  let mut err = error_msg;
                                                                  let mut info = info_msg;
                                                                  spawn(async move {
-                                                                      #[cfg(target_arch = "wasm32")]
-                                                                      {
-                                                                          // Web: fetch bytes then trigger browser Save As via Blob URL
-                                                                          match get_project_output_bytes(pn, rp).await {
-                                                                               Ok(stream) => {
-                                                                                   let mut bytes = Vec::new();
-                                                                                  let mut s = stream;
-                                                                                  while let Some(chunk) = s.next().await {
-                                                                                      match chunk {
-                                                                                          Ok(data) => bytes.extend_from_slice(&data),
-                                                                                          Err(e) => {
-                                                                                              error!(error = %e, "Download stream error");
-                                                                                              err.set(format!("Download failed: {e}"));
-                                                                                              return;
-                                                                                          }
-                                                                                      }
-                                                                                  }
-                                                                                  trigger_download(&fname, bytes).await;
-                                                                              }
-                                                                              Err(e) => {
-                                                                                  error!(error = %e, "Download failed");
-                                                                                  err.set(format!("Download failed: {e}"));
-                                                                              }
-                                                                          }
-                                                                      }
-                                                                     #[cfg(not(target_arch = "wasm32"))]
-                                                                     {
-                                                                         // Native: save via server (desktop dialog or Android direct write)
-                                                                         match crate::server::save_output_as(pn, rp).await {
-                                                                             Ok(msg) => {
-                                                                                 info!(file = %fname, "Saved");
-                                                                                 info.set(msg);
+                                                                     // Download bytes, then trigger browser Save As via Blob URL.
+                                                                     match get_project_output_bytes(pn, rp).await {
+                                                                         Ok(stream) => {
+                                                                             let mut bytes = Vec::new();
+                                                                             let mut s = stream;
+                                                                             while let Some(chunk) = s.next().await {
+                                                                                 match chunk {
+                                                                                     Ok(data) => bytes.extend_from_slice(&data),
+                                                                                     Err(e) => {
+                                                                                         error!(error = %e, "Download stream error");
+                                                                                         err.set(format!("Download failed: {e}"));
+                                                                                         return;
+                                                                                     }
+                                                                                 }
                                                                              }
-                                                                             Err(e) => {
-                                                                                 error!(error = %e, "Save failed");
-                                                                                 err.set(format!("Save failed: {e}"));
-                                                                             }
+                                                                             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                                                             let fname_esc = js_escape(&fname);
+                                                                             let js = format!(
+                                                                                 r#"const b64 = '{b64}';
+const blob = new Blob([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], {{type: 'application/octet-stream'}});
+const a = document.createElement('a');
+a.href = URL.createObjectURL(blob);
+a.download = '{fname_esc}';
+document.body.appendChild(a);
+a.click();
+setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(a.href); }}, 10000);"#
+                                                                             );
+                                                                             let _ = eval(&js).await;
+                                                                             info.set(format!("Downloaded {}", fname));
+                                                                         }
+                                                                         Err(e) => {
+                                                                             error!(error = %e, "Download failed");
+                                                                             err.set(format!("Download failed: {e}"));
                                                                          }
                                                                      }
                                                                  });

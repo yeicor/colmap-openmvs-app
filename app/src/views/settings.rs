@@ -8,8 +8,8 @@ use crate::server::{
     delete_runtime_binary, download_runtime_version, get_available_runtime_versions,
     get_docker_runtime_info, get_runtime_info, get_settings, get_task_info,
     list_available_image_tags, list_docker_images, list_runtime_images, list_tasks,
-    pick_projects_folder, pick_settings_file, prepare_docker_image, prepare_runtime_image,
-    remove_docker_image, remove_runtime_image, update_settings,
+    prepare_docker_image, prepare_runtime_image, remove_docker_image, remove_runtime_image,
+    update_settings,
 };
 use crate::task_manager::{drive_task, start_task, TasksCtx};
 use crate::{backend_url, Route};
@@ -18,9 +18,7 @@ use colmap_openmvs_api::{
     ImageTagInfo, PreparedImageInfo, RuntimeInfo, TaskEvent, TaskKind, TaskState,
 };
 use dioxus::prelude::*;
-use dioxus_free_icons::icons::bs_icons::{
-    BsBox, BsDownload, BsFolder, BsGear, BsHdd, BsTerminal, BsTrash3,
-};
+use dioxus_free_icons::icons::bs_icons::{BsBox, BsDownload, BsGear, BsHdd, BsTerminal, BsTrash3};
 use dioxus_free_icons::Icon;
 
 // ---------------------------------------------------------------------------
@@ -246,24 +244,6 @@ fn GeneralTab() -> Element {
                             class: "folder-input",
                             oninput: move |e| { projects_folder.set(e.value()); has_changed.set(true); error.set(String::new()); success.set(String::new()); },
                         }
-                        Button {
-                            variant: ButtonVariant::Secondary,
-                            title: "Browse for folder (server-side dialog)",
-                            onclick: move |_| {
-                                spawn(async move {
-                                    match pick_projects_folder().await {
-                                        Ok(path) if !path.is_empty() => {
-                                            projects_folder.set(path);
-                                            has_changed.set(true);
-                                            error.set(String::new());
-                                        }
-                                        Ok(_) => {} // user cancelled
-                                        Err(e) => error.set(format!("Folder picker: {}", e)),
-                                    }
-                                });
-                            },
-                            Icon { icon: BsFolder }
-                        }
                     }
                 }
 
@@ -277,24 +257,6 @@ fn GeneralTab() -> Element {
                             class: "folder-input",
                             oninput: move |e| { settings_file_path.set(e.value()); has_changed.set(true); error.set(String::new()); success.set(String::new()); },
                         }
-                        Button {
-                            variant: ButtonVariant::Secondary,
-                            title: "Browse for settings file (server-side dialog)",
-                            onclick: move |_| {
-                                spawn(async move {
-                                    match pick_settings_file().await {
-                                        Ok(path) if !path.is_empty() => {
-                                            settings_file_path.set(path);
-                                            has_changed.set(true);
-                                            error.set(String::new());
-                                        }
-                                        Ok(_) => {} // user cancelled
-                                        Err(e) => error.set(format!("File picker: {}", e)),
-                                    }
-                                });
-                            },
-                            Icon { icon: BsFolder }
-                        }
                     }
                 }
 
@@ -307,24 +269,6 @@ fn GeneralTab() -> Element {
                             placeholder: "./proot-images",
                             class: "folder-input",
                             oninput: move |e| { proot_images_dir.set(e.value()); has_changed.set(true); error.set(String::new()); success.set(String::new()); },
-                        }
-                        Button {
-                            variant: ButtonVariant::Secondary,
-                            title: "Browse for folder (server-side dialog)",
-                            onclick: move |_| {
-                                spawn(async move {
-                                    match pick_projects_folder().await {
-                                        Ok(path) if !path.is_empty() => {
-                                            proot_images_dir.set(path);
-                                            has_changed.set(true);
-                                            error.set(String::new());
-                                        }
-                                        Ok(_) => {} // user cancelled
-                                        Err(e) => error.set(format!("Folder picker: {}", e)),
-                                    }
-                                });
-                            },
-                            Icon { icon: BsFolder }
                         }
                     }
                 }
@@ -944,6 +888,7 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
     let mut success = use_signal(String::new);
     let mut default_image_tag = use_signal(String::new);
     let mut preparing_tag = use_signal(String::new);
+    let mut custom_tag = use_signal(String::new);
 
     const COLMAP_IMAGE: &str = "mirror.gcr.io/yeicor/colmap-openmvs";
 
@@ -1268,6 +1213,29 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                             }
                         }
                     })}
+                }
+            }
+        }
+
+        // ── Custom Image ───────────────────────────────────────────────────
+        div { class: "tags-container",
+            h2 { class: "section-title", "Custom Image" }
+            div { class: "custom-image-row",
+                input {
+                    r#type: "text",
+                    placeholder: "mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest",
+                    class: "custom-image-input",
+                    value: "{custom_tag}",
+                    oninput: move |e| custom_tag.set(e.value()),
+                    disabled: preparing(),
+                }
+                Button {
+                    variant: ButtonVariant::Secondary,
+                    disabled: preparing() || custom_tag().is_empty(),
+                    title: "Pull this custom image",
+                    onclick: move |_| handle_prepare(custom_tag()),
+                    Icon { icon: BsDownload }
+                    span { "Pull" }
                 }
             }
         }
