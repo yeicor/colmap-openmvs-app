@@ -63,12 +63,6 @@ pub fn App() -> Element {
     // Global toast notification system (single container for all floating toasts).
     mycomponents::use_toast_provider();
 
-    use_future(move || async move {
-        if let Err(e) = server::startup().await {
-            tracing::error!(error = ?e, "Server startup failed");
-        }
-    });
-
     // Fetch the server-side color-scheme preference once on startup.
     // On Android the WebView may not propagate `prefers-color-scheme` CSS media
     // queries correctly, so the server returns an explicit override (`Some`).
@@ -102,7 +96,7 @@ pub fn App() -> Element {
     }
 }
 
-fn init_backend() {
+fn init_backend_url() {
     #[cfg(not(any(feature = "demo", feature = "server")))]
     {
         // Resolve the backend URL from URL params / localStorage before launching.
@@ -133,10 +127,8 @@ fn init_backend() {
             dioxus::fullstack::set_server_url(leaked);
         }
         info!(
-            "Backend URL resolved to '{}'",
-            backend_url::BACKEND_URL
-                .get()
-                .unwrap_or(&"<empty>".to_string())
+            url = %backend_url::BACKEND_URL.get().unwrap_or(&"<empty>".to_string()),
+            "Backend URL resolved",
         );
     }
 }
@@ -163,7 +155,26 @@ fn main() {
     init_logging();
     log_build_info();
 
-    init_backend();
+    // Parse CLI arguments and merge with config file / env vars.
+    // This also initializes the global settings singleton.
+    // Skipped on WASM (client side) where CLI args don't exist,
+    // and on builds without the server feature.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "server"))]
+    {
+        use colmap_openmvs_backend::initialize_from_env;
+        initialize_from_env();
+    }
+
+    init_backend_url();
+
+    #[cfg(feature = "server")]
+    tokio::runtime::Runtime::new()
+        .expect("Failed to create Tokio runtime")
+        .block_on(async {
+            if let Err(e) = server::on_backend_started().await {
+                tracing::error!(error = %e, "Failed to start backend server");
+            }
+        });
 
     dioxus::launch(App);
 }

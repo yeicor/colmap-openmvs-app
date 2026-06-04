@@ -54,7 +54,7 @@ pub fn read_only_error<T>() -> Result<T> {
     ))
 }
 
-pub async fn on_frontend_started() -> Result<()> {
+pub async fn on_backend_started() -> Result<()> {
     Ok(())
 }
 

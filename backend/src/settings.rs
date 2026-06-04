@@ -1,14 +1,184 @@
+use clap::Parser;
 use colmap_openmvs_api::Settings;
 use dioxus::Result;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::{collections::HashMap, convert::Infallible};
+use std::sync::OnceLock;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
-pub static SETTINGS: dioxus::fullstack::Lazy<RwLock<Settings>> =
-    dioxus::fullstack::Lazy::new(|| async move {
-        Ok::<_, Infallible>(RwLock::new(load_settings_from_disk()))
-    });
+// ─── CLI argument parsing ────────────────────────────────────────────────────
+
+/// COLMAP + OpenMVS backend server.
+///
+/// All settings can be configured via:
+///   • a JSON config file (see --config / COLMAP_CONFIG)
+///   • environment variables
+///   • command-line flags (highest precedence)
+#[derive(Parser, Debug, Clone)]
+#[command(name = "colmap-openmvs-server", version, about, long_about)]
+pub struct CliConfig {
+    /// Path to an alternative settings.json config file.
+    ///
+    /// When set, the server loads settings from this file instead of the
+    /// default location (projects_folder/settings.json). Values in this
+    /// file can still be overridden by individual CLI flags or env vars.
+    #[arg(short = 'c', long = "config", env = "COLMAP_CONFIG")]
+    pub config: Option<String>,
+
+    /// Root directory for all project data.
+    #[arg(long = "projects-folder", env = "COLMAP_PROJECTS_FOLDER")]
+    pub projects_folder: Option<String>,
+
+    /// Directory containing the PRoot binary and supporting libraries.
+    #[arg(long = "proot-binary-dir", env = "COLMAP_PROOT_BINARY_DIR")]
+    pub proot_binary_dir: Option<String>,
+
+    /// Directory for large PRoot runtime images.
+    #[arg(long = "proot-images-dir", env = "COLMAP_PROOT_IMAGES_DIR")]
+    pub proot_images_dir: Option<String>,
+
+    /// Default container image tag (format: "proot:tag" or "docker:tag").
+    #[arg(long = "default-image-tag", env = "COLMAP_DEFAULT_IMAGE_TAG")]
+    pub default_image_tag: Option<String>,
+
+    /// Additional filesystem mount for the PRoot/Docker runtime
+    /// (format: "/host/path:/container/path").
+    /// Can be specified multiple times.
+    #[arg(long = "custom-mount", env = "COLMAP_CUSTOM_MOUNT")]
+    pub custom_mounts: Vec<String>,
+
+    /// Override the settings.json path. Leave unset to use
+    /// projects_folder/settings.json.
+    #[arg(long = "settings-path", env = "COLMAP_SETTINGS_PATH")]
+    pub settings_file_path: Option<String>,
+
+    /// Server bind address (IP). Also read by Dioxus as `IP`.
+    #[arg(long = "ip", env = "IP", default_value = "0.0.0.0")]
+    pub ip: String,
+
+    /// Server port. Also read by Dioxus as `PORT`.
+    #[arg(short = 'p', long = "port", env = "PORT", default_value = "8080")]
+    pub port: u16,
+}
+
+// ─── Global settings singleton ───────────────────────────────────────────────
+
+static SETTINGS: OnceLock<RwLock<Settings>> = OnceLock::new();
+
+/// Initialize the global settings **before** any async code reads them.
+///
+/// This must be called once at program startup (server-side only). If it is
+/// never called the first call to [`get_settings`] will fall back to loading
+/// the default settings file from disk (legacy behaviour).
+pub fn initialize(settings: Settings) {
+    SETTINGS
+        .set(RwLock::new(settings))
+        .unwrap_or_else(|_| panic!("settings already initialized"));
+}
+
+/// Parse CLI args (with env-var fallback), merge with config-file, and
+/// initialize the global settings singleton.  Sets `IP` / `PORT` env vars
+/// so Dioxus picks them up when the server starts.
+pub fn initialize_from_env() -> CliConfig {
+    // Parse CLI arguments (clap also reads env vars marked with `env = ...`).
+    let cli = CliConfig::parse();
+
+    // Ensure Dioxus sees the correct IP / PORT.
+    std::env::set_var("IP", &cli.ip);
+    std::env::set_var("PORT", cli.port.to_string());
+
+    // 1. Start with platform-specific defaults.
+    let mut settings = default_settings();
+
+    // 2. Load from the config file if explicitly provided (--config / COLMAP_CONFIG).
+    if let Some(ref config_path) = cli.config {
+        debug!(path = %config_path, "Loading settings from --config file");
+        match std::fs::read_to_string(config_path) {
+            Ok(contents) => match serde_json::from_str::<Settings>(&contents) {
+                Ok(file_settings) => {
+                    info!(path = %config_path, "Config file loaded successfully");
+                    apply_file_override(&mut settings, file_settings);
+                }
+                Err(e) => {
+                    error!(path = %config_path, error = %e, "Failed to parse config file, ignoring");
+                }
+            },
+            Err(e) => {
+                error!(path = %config_path, error = %e, "Failed to read config file, ignoring");
+            }
+        }
+    } else {
+        // No explicit config → try the default settings.json path.
+        let default_path = settings_file_path(&settings.projects_folder);
+        debug!(path = %default_path.display(), "Loading settings from default path");
+        if let Ok(contents) = std::fs::read_to_string(&default_path) {
+            match serde_json::from_str::<Settings>(&contents) {
+                Ok(file_settings) => {
+                    info!(path = %default_path.display(), "Default settings file loaded");
+                    apply_file_override(&mut settings, file_settings);
+                }
+                Err(e) => {
+                    error!(
+                        path = %default_path.display(),
+                        error = %e,
+                        "Failed to parse default settings file, ignoring"
+                    );
+                }
+            }
+        } else {
+            debug!("No default settings file found, using platform defaults");
+        }
+    }
+
+    // 3. Apply CLI / env-var overrides (clap resolved env vars).
+    apply_cli_overrides(&mut settings, &cli);
+
+    // 4. Persist the merged result in the global singleton.
+    initialize(settings);
+
+    cli
+}
+
+/// Merge the fields from `file` into `base` (file is lower-priority than CLI).
+fn apply_file_override(base: &mut Settings, file: Settings) {
+    base.projects_folder = file.projects_folder;
+    base.proot_binary_dir = file.proot_binary_dir;
+    base.proot_images_dir = file.proot_images_dir;
+    if file.default_image_tag.is_some() {
+        base.default_image_tag = file.default_image_tag;
+    }
+    if !file.custom_mounts.is_empty() {
+        base.custom_mounts = file.custom_mounts;
+    }
+    if file.settings_file_path.is_some() {
+        base.settings_file_path = file.settings_file_path;
+    }
+}
+
+/// Overlay CLI/env values on top of the current settings (highest priority).
+fn apply_cli_overrides(settings: &mut Settings, cli: &CliConfig) {
+    if let Some(ref v) = cli.projects_folder {
+        settings.projects_folder = v.clone();
+    }
+    if let Some(ref v) = cli.proot_binary_dir {
+        settings.proot_binary_dir = v.clone();
+    }
+    if let Some(ref v) = cli.proot_images_dir {
+        settings.proot_images_dir = v.clone();
+    }
+    if let Some(ref v) = cli.default_image_tag {
+        settings.default_image_tag = Some(v.clone());
+    }
+    if !cli.custom_mounts.is_empty() {
+        settings.custom_mounts.clone_from(&cli.custom_mounts);
+    }
+    if let Some(ref v) = cli.settings_file_path {
+        settings.settings_file_path = Some(v.clone());
+    }
+}
+
+// ─── Platform-specific defaults ──────────────────────────────────────────────
 
 pub(crate) fn default_projects_folder() -> String {
     if cfg!(target_os = "android") {
@@ -344,7 +514,8 @@ fn load_settings_from_disk() -> Settings {
 
 pub async fn get_settings() -> Result<Settings> {
     debug!("Retrieving current settings");
-    Ok(SETTINGS.read().await.clone())
+    let lock = SETTINGS.get_or_init(|| RwLock::new(load_settings_from_disk()));
+    Ok(lock.read().await.clone())
 }
 
 pub async fn update_settings(new_settings: Settings) -> Result<()> {
@@ -358,7 +529,8 @@ pub async fn update_settings(new_settings: Settings) -> Result<()> {
 
     // Hold the write lock ONLY to swap the in-memory value — released immediately.
     {
-        let mut settings = SETTINGS.write().await;
+        let lock = SETTINGS.get_or_init(|| RwLock::new(load_settings_from_disk()));
+        let mut settings = lock.write().await;
         *settings = new_settings;
     }
 

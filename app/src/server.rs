@@ -17,8 +17,8 @@ use colmap_openmvs_backend as backend;
 use crate::demo as backend;
 
 #[cfg_attr(not(feature = "demo"), get("/api/startup"))]
-pub async fn startup() -> Result<()> {
-    backend::on_frontend_started().await
+pub async fn on_backend_started() -> Result<()> {
+    backend::on_backend_started().await
 }
 
 #[cfg_attr(not(feature = "demo"), get("/api/projects"))]

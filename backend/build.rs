@@ -931,6 +931,21 @@ fn remove_stale_build_artifacts(profile: &str) {
             .expect("remove stale Gradle incremental build cache");
         eprintln!("  Removed stale Gradle build cache");
     }
+    let maybe_stale_build_cache = project_root()
+        .join("target")
+        .join("dx")
+        .join("colmap-openmvs-app")
+        .join(profile)
+        .join("android")
+        .join("app")
+        .join("build")
+        .join("outputs")
+        .join("apk");
+    if maybe_stale_build_cache.exists() {
+        std::fs::remove_dir_all(&maybe_stale_build_cache)
+            .expect("remove stale Gradle incremental build cache");
+        eprintln!("  Removed stale Gradle build cache");
+    }
 }
 
 /// Replace `key = <integer>` in a Gradle Kotlin DSL line.

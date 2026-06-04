@@ -28,13 +28,13 @@ mod outputs;
 pub use outputs::write_project_output;
 
 mod init;
-pub use init::on_frontend_started;
+pub use init::{on_backend_started, on_frontend_started};
 
 mod projects;
 pub use projects::{create_project, delete_project, get_projects, rename_project};
 
 mod settings;
-pub use settings::{get_settings, update_settings};
+pub use settings::{get_settings, initialize, initialize_from_env, update_settings, CliConfig};
 
 mod runtimes_api;
 pub use runtimes_api::{

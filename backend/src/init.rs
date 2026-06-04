@@ -3,10 +3,10 @@
 static ANDROID_STARTUP: std::sync::OnceLock<std::sync::Arc<tokio::sync::Mutex<bool>>> =
     std::sync::OnceLock::new();
 
-pub async fn on_frontend_started() -> dioxus::Result<()> {
+pub async fn on_backend_started() -> dioxus::Result<()> {
+    tracing::info!(url = %dioxus::cli_config::fullstack_address_or_localhost().to_string(), "Server listening for connections");
     #[cfg(target_os = "android")]
     {
-        // TODO: Would be best to run this only on backend startup, not on frontend startup.
         use tracing::{debug, info, warn};
 
         debug!("- Initializing android runtime");
@@ -28,5 +28,9 @@ pub async fn on_frontend_started() -> dioxus::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+pub async fn on_frontend_started() -> dioxus::Result<()> {
     Ok(())
 }

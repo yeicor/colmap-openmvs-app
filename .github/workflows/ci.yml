@@ -30,12 +30,12 @@ jobs:
           - os: ubuntu-24.04
             build-type: web
             artifact-find: "-path '*/release/web/*' -not -name '.manifest.json'"
-          - os: ubuntu-24.04
-            build-type: web-demo
-            artifact-find: "-path '*/release/web/*' -not -name '.manifest.json'"
           - os: ubuntu-24.04-arm # Architecture matters for the server binary
             build-type: web
             artifact-find: "-path '*/release/web/*' -not -name '.manifest.json'"
+          - os: ubuntu-24.04
+            build-type: web-demo
+            artifact-find: "-path '*/release/web/public/*'"
           # build-type: android is handled in a separate workflow (see android.yml)
     steps:
       - uses: actions/checkout@v6
@@ -205,7 +205,7 @@ jobs:
           path: web-artifact
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: web-artifact/public
+          path: web-artifact
       - if: github.event_name != 'pull_request'
         uses: actions/deploy-pages@v4
 

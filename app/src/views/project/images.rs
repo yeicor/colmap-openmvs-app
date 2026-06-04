@@ -40,8 +40,8 @@ fn bytes_to_display_url(bytes: &[u8]) -> String {
         let typed = Uint8Array::new_with_length(bytes.len() as u32);
         typed.copy_from(bytes);
         let array = Array::of1(&typed);
-        let mut opts = BlobPropertyBag::new();
-        opts.type_("image/*");
+        let opts = BlobPropertyBag::new();
+        opts.set_type("image/*");
         if let Ok(blob) = Blob::new_with_u8_array_sequence_and_options(&array, &opts) {
             if let Ok(url) = Url::create_object_url_with_blob(&blob) {
                 return url;
