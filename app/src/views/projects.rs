@@ -75,6 +75,7 @@ pub fn Projects(
     let mut info_message = use_signal(String::new);
     let mut projects = use_signal(Vec::new);
     let mut loading = use_signal(|| true);
+    let mut is_demo_banner_open = use_signal(|| !is_sidebar && cfg!(feature = "demo"));
 
     let refresh_projects = move || {
         debug!("Refreshing projects list");
@@ -239,10 +240,11 @@ pub fn Projects(
                 }
             }
 
-            if !is_sidebar && cfg!(feature = "demo") {
+            if is_demo_banner_open() {
                 Banner {
                     message: "This is a demo build running with mock data and without a real backend connection. Download the full version for your preferred platform to manage your actual projects and tasks.",
                     banner_type: BannerType::Info,
+                    on_close: move |_| { is_demo_banner_open.set(false); },
                 }
             }
 
