@@ -27,6 +27,9 @@ pub use files::{
     save_output_as,
 };
 
+mod outputs;
+pub use outputs::write_project_output;
+
 mod init;
 pub use init::on_frontend_started;
 

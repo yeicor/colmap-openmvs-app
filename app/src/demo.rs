@@ -74,11 +74,9 @@ pub async fn get_project_image_bytes(
     image_name: String,
 ) -> Result<ByteStream> {
     match demo_image_bytes(image_name.as_str()) {
-        Some(bytes) => Ok(ByteStream::new(
-            futures::stream::once(async move {
-                dioxus::fullstack::body::Bytes::from(bytes.to_vec())
-            }),
-        )),
+        Some(bytes) => Ok(ByteStream::new(futures::stream::once(async move {
+            dioxus::fullstack::body::Bytes::from(bytes.to_vec())
+        }))),
         None => Err(dioxus::CapturedError::msg("Image not found in demo data")),
     }
 }
@@ -150,8 +148,12 @@ pub async fn poll_task_events(task_id: String, cursor: usize) -> Result<TaskEven
     } else {
         10usize
     };
-    let new_events: Vec<TaskEvent> =
-        events.iter().skip(cursor).take(chunk_size).cloned().collect();
+    let new_events: Vec<TaskEvent> = events
+        .iter()
+        .skip(cursor)
+        .take(chunk_size)
+        .cloned()
+        .collect();
     let new_cursor = cursor + new_events.len();
     let is_terminal = new_cursor >= events.len()
         || new_events
@@ -179,9 +181,9 @@ pub async fn get_project_output_bytes(
     relative_path: String,
 ) -> Result<ByteStream> {
     match demo_output_bytes(&relative_path) {
-        Some(bytes) => Ok(ByteStream::new(
-            futures::stream::once(async move { dioxus::fullstack::body::Bytes::from(bytes.to_vec()) }),
-        )),
+        Some(bytes) => Ok(ByteStream::new(futures::stream::once(async move {
+            dioxus::fullstack::body::Bytes::from(bytes.to_vec())
+        }))),
         None => Err(dioxus::CapturedError::msg("Output not found in demo data")),
     }
 }
@@ -274,5 +276,13 @@ pub async fn pick_settings_file() -> Result<String> {
     read_only_error()
 }
 pub async fn save_output_as(_project_name: String, _relative_path: String) -> Result<String> {
+    read_only_error()
+}
+
+pub async fn write_project_output(
+    _project_name: String,
+    _relative_path: String,
+    _body: ByteStream,
+) -> Result<()> {
     read_only_error()
 }

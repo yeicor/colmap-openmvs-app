@@ -85,9 +85,15 @@ async fn test_generate_demo_data() {
         }
         _ => {
             println!("PRoot not installed, falling back to Docker...");
-            let docker_info = backend::get_docker_runtime_info()
+            let mut docker_info = backend::get_docker_runtime_info()
                 .await
                 .expect("Docker check failed");
+            // Avoid using on Windows GitHub CI (can only run windows images in this case)
+            if cfg!(windows) && docker_info.supported && std::env::var("GITHUB_ACTIONS").is_ok() {
+                docker_info.supported = false;
+                docker_info.unsupported_reason =
+                    Some("Docker is not supported on Windows GitHub Actions runners".to_string());
+            }
             if !docker_info.supported {
                 let reason = docker_info
                     .unsupported_reason

@@ -295,6 +295,19 @@ pub async fn delete_project_output(project_name: String, relative_path: String) 
     backend::delete_project_output(project_name, relative_path).await
 }
 
+/// Write an output file (bytes uploaded from the client).
+#[cfg_attr(
+    not(feature = "demo"),
+    post("/api/projects/{project_name}/outputs/write?relative_path")
+)]
+pub async fn write_project_output(
+    project_name: String,
+    relative_path: String,
+    body: ByteStream,
+) -> Result<()> {
+    backend::write_project_output(project_name, relative_path, body).await
+}
+
 /// Delete all output files/directories, preserving only `images/` and `config.sh`.
 #[cfg_attr(
     not(feature = "demo"),

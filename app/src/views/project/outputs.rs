@@ -1,17 +1,18 @@
 use crate::mycomponents::{Banner, BannerType};
 use crate::server::{
     clear_project_outputs, delete_project_output, get_project_output_bytes, list_project_outputs,
+    write_project_output,
 };
 use base64::Engine as _;
 use colmap_openmvs_api::OutputFile;
 use dioxus::document::eval;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
-    BsArrowRepeat, BsArrowsExpand, BsCheck2, BsChevronDown, BsChevronRight, BsDownload, BsEye,
-    BsHourglass, BsTrash3, BsX,
+    BsArrowRepeat, BsArrowsExpand, BsBoxArrowUp, BsCheck2, BsChevronDown, BsChevronRight,
+    BsDownload, BsEye, BsHourglass, BsTrash3, BsUpload, BsX,
 };
 use dioxus_free_icons::Icon;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, error, info};
 
 // ---------------------------------------------------------------------------
@@ -291,6 +292,257 @@ fn is_entry_visible(relative_path: &str, collapsed: &HashSet<String>) -> bool {
     true
 }
 
+/// Build a map: directory path → list of (relative_path, name) for all files under it.
+/// Used by the folder-download feature to know which files belong to a directory.
+fn build_dir_files_map(files: &[OutputFile]) -> HashMap<String, Vec<(String, String)>> {
+    let mut map = HashMap::<String, Vec<(String, String)>>::new();
+    for f in files {
+        // Every file belongs to the root.
+        map.entry(String::new())
+            .or_default()
+            .push((f.relative_path.clone(), f.name.clone()));
+        // … and to each ancestor directory along its path.
+        if let Some(slash) = f.relative_path.rfind('/') {
+            let mut cur = f.relative_path[..slash].to_string();
+            map.entry(cur.clone())
+                .or_default()
+                .push((f.relative_path.clone(), f.name.clone()));
+            while let Some(slash) = cur.rfind('/') {
+                cur = cur[..slash].to_string();
+                map.entry(cur.clone())
+                    .or_default()
+                    .push((f.relative_path.clone(), f.name.clone()));
+            }
+        }
+    }
+    map
+}
+
+/// Compute a zip-entry path relative to `folder_path`.
+/// For the root folder (`""`) the full relative path is used unchanged;
+/// for sub-folders the folder prefix is stripped.
+fn zip_entry_path(relative_path: &str, folder_path: &str) -> String {
+    if folder_path.is_empty() {
+        relative_path.to_string()
+    } else {
+        let prefix = format!("{}/", folder_path);
+        relative_path
+            .strip_prefix(&prefix)
+            .unwrap_or(relative_path)
+            .to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Async folder download / restore helpers (called from spawn blocks)
+// ---------------------------------------------------------------------------
+
+/// Download every file under `folder_path` and save the user a ZIP archive.
+async fn download_folder_zip(
+    project_name: &str,
+    folder_path: &str,
+    zip_name: &str,
+    entries: Vec<(String, String)>, // (relative_path, name)
+    _error_msg: Signal<String>,
+) -> Result<(), String> {
+    if entries.is_empty() {
+        return Err("Folder has no files".to_string());
+    }
+
+    // Download every file's bytes.
+    let mut file_data: Vec<(String, Vec<u8>)> = Vec::with_capacity(entries.len());
+    for (rel_path, _name) in &entries {
+        let pn = project_name.to_string();
+        let rp = rel_path.clone();
+        match get_project_output_bytes(pn, rp).await {
+            Ok(mut stream) => {
+                let mut bytes = Vec::new();
+                while let Some(chunk) = stream.next().await {
+                    match chunk {
+                        Ok(data) => bytes.extend_from_slice(&data),
+                        Err(e) => {
+                            return Err(format!("Failed to read {}: {e}", rel_path));
+                        }
+                    }
+                }
+                let zpath = zip_entry_path(rel_path, folder_path);
+                file_data.push((zpath, bytes));
+            }
+            Err(e) => {
+                return Err(format!("Failed to download {}: {e}", rel_path));
+            }
+        }
+    }
+
+    // Feed the files into JSZip running in the browser.
+    let js = format!(
+        r#"(async function() {{
+    const JSZip = (await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm')).default;
+    const zip = new JSZip();
+    while (true) {{
+        const path = await dioxus.recv();
+        if (path === null) break;
+        const b64 = await dioxus.recv();
+        zip.file(path, b64, {{base64: true}});
+    }}
+    const blob = await zip.generateAsync({{type: 'blob'}});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '{zip_name}';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {{
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+    }}, 10000);
+}})();"#
+    );
+
+    let eval_handle = document::eval(&js);
+
+    for (zpath, bytes) in &file_data {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        if eval_handle.send(zpath.clone()).is_err() {
+            return Err("JSZip communication error".to_string());
+        }
+        if eval_handle.send(b64).is_err() {
+            return Err("JSZip communication error".to_string());
+        }
+    }
+    // Signal end
+    let _ = eval_handle.send(None::<String>);
+
+    Ok(())
+}
+
+/// Present a file-picker for a ZIP archive, extract every entry and upload
+/// each file to the server inside `folder_path`.
+async fn restore_from_zip(
+    project_name: &str,
+    folder_path: &str,
+    mut restoring: Signal<bool>,
+    mut restore_progress: Signal<(usize, usize)>,
+    mut error_msg: Signal<String>,
+    mut refresh_counter: Signal<u32>,
+) {
+    let js = r#"
+(async function() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.zip';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    const file = await new Promise((resolve) => {
+        input.addEventListener('change', () => resolve(input.files[0]));
+        input.click();
+    });
+    document.body.removeChild(input);
+
+    if (!file) { dioxus.send(''); dioxus.send(''); return; }
+
+    const JSZip = (await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm')).default;
+    const zip = await JSZip.loadAsync(file);
+
+    const entries = [];
+    zip.forEach((path, entry) => { if (!entry.dir) entries.push(path); });
+
+    dioxus.send(String(entries.length));
+
+    for (const path of entries) {
+        const data = await zip.files[path].async('base64');
+        dioxus.send(path);
+        dioxus.send(data);
+    }
+
+    dioxus.send('__done__');
+})();
+"#;
+
+    let mut eval_handle = document::eval(js);
+
+    // First value: total count, or empty string if cancelled.
+    let total_str = match eval_handle.recv::<String>().await {
+        Ok(s) => s,
+        Err(_) => {
+            error_msg.set("Restore cancelled".to_string());
+            restoring.set(false);
+            return;
+        }
+    };
+
+    if total_str.is_empty() {
+        // User cancelled the file picker.
+        restoring.set(false);
+        return;
+    }
+
+    let total: usize = match total_str.parse() {
+        Ok(n) => n,
+        Err(_) => {
+            error_msg.set("Invalid zip file".to_string());
+            restoring.set(false);
+            return;
+        }
+    };
+
+    restore_progress.set((0, total));
+
+    let mut done = 0usize;
+    loop {
+        let path = match eval_handle.recv::<String>().await {
+            Ok(p) => p,
+            Err(_) => break,
+        };
+        if path == "__done__" {
+            break;
+        }
+        let b64_data = match eval_handle.recv::<String>().await {
+            Ok(d) => d,
+            Err(_) => break,
+        };
+
+        // Prepend folder prefix.
+        let target_path = if folder_path.is_empty() {
+            path.clone()
+        } else {
+            format!("{}/{}", folder_path, path)
+        };
+
+        // Decode and upload.
+        match base64::engine::general_purpose::STANDARD.decode(&b64_data) {
+            Ok(bytes) => {
+                let byte_stream =
+                    dioxus::fullstack::ByteStream::new(futures::stream::once(async move {
+                        dioxus::fullstack::body::Bytes::from(bytes)
+                    }));
+                match write_project_output(project_name.to_string(), target_path, byte_stream).await
+                {
+                    Ok(()) => {
+                        done += 1;
+                        restore_progress.set((done, total));
+                    }
+                    Err(e) => {
+                        error_msg.set(format!("Failed to write {}: {e}", path));
+                        break;
+                    }
+                }
+            }
+            Err(e) => {
+                error_msg.set(format!("Failed to decode {}: {e}", path));
+                break;
+            }
+        }
+    }
+
+    restoring.set(false);
+    refresh_counter += 1;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -308,6 +560,10 @@ pub fn OutputsTab(project_name: String) -> Element {
     let mut collapsed = use_signal(HashSet::<String>::new);
     let mut confirming_clear_all = use_signal(|| false);
     let mut clearing_all = use_signal(|| false);
+    let restoring = use_signal(|| false);
+    let restore_progress = use_signal(|| (0usize, 0usize)); // (done, total)
+    let mut downloading_folder = use_signal(|| Option::<String>::None);
+    let restore_folder = use_signal(|| Option::<String>::None); // which folder we are restoring into ("" = root)
 
     let project_name_res = project_name.clone();
     let files = use_resource(move || {
@@ -344,6 +600,91 @@ pub fn OutputsTab(project_name: String) -> Element {
                     onclick: move |_| collapsed.write().clear(),
                     Icon { icon: BsArrowsExpand }
                     span { class: "btn-label", " Expand All" }
+                }
+
+                // ── Backup (root download as ZIP) ────────────────
+                if downloading_folder().as_deref() == Some("") {
+                    span { class: "outputs-toolbar-status", Icon { icon: BsHourglass } }
+                } else {
+                    button {
+                        class: "outputs-btn outputs-backup-btn",
+                        title: "Download all outputs as ZIP",
+                        onclick: {
+                            let pn = project_name.clone();
+                            let err = error_msg;
+                            move |_| {
+                                let pn = pn.clone();
+                                let err = err.clone();
+                                downloading_folder.set(Some(String::new()));
+                                // Use the full fl list (captured from render) to find entries.
+                                // We peek the files resource directly to get the latest.
+                                let pn2 = pn.clone();
+                                let mut err2 = err.clone();
+                                let mut dl = downloading_folder;
+                                spawn(async move {
+                                    let fl = match crate::server::list_project_outputs(pn2.clone()).await {
+                                        Ok(f) => f,
+                                        Err(e) => {
+                                            err2.set(format!("Failed to list outputs: {e}"));
+                                            dl.set(None);
+                                            return;
+                                        }
+                                    };
+                                    let entries = build_dir_files_map(&fl);
+                                    let root_entries = entries.get("").cloned().unwrap_or_default();
+                                    let result = download_folder_zip(
+                                        &pn2, "", &format!("{}-backup.zip", pn2),
+                                        root_entries, err2.clone(),
+                                    ).await;
+                                    if let Err(e) = result {
+                                        err2.set(e);
+                                    }
+                                    dl.set(None);
+                                });
+                            }
+                        },
+                        Icon { icon: BsBoxArrowUp }
+                        span { class: "btn-label", " Backup" }
+                    }
+                }
+
+                // ── Restore (upload ZIP to root) ─────────────────
+                if restoring() {
+                    span { class: "outputs-toolbar-status",
+                        {
+                            let prog = restore_progress();
+                            if prog.1 > 0 {
+                                format!("Restoring… {}/{} files", prog.0, prog.1)
+                            } else {
+                                "Reading zip…".to_string()
+                            }
+                        }
+                    }
+                } else {
+                    button {
+                        class: "outputs-btn outputs-restore-btn",
+                        title: "Restore outputs from a ZIP archive",
+                        onclick: {
+                            let pn = project_name.clone();
+                            let err = error_msg;
+                            let mut rst = restoring;
+                            let prog = restore_progress;
+                            let rc = refresh_counter;
+                            move |_| {
+                                rst.set(true);
+                                let pn = pn.clone();
+                                let err = err.clone();
+                                let rst = rst.clone();
+                                let prog = prog.clone();
+                                let rc = rc.clone();
+                                spawn(async move {
+                                    restore_from_zip(&pn, "", rst, prog, err, rc).await;
+                                });
+                            }
+                        },
+                        Icon { icon: BsUpload }
+                        span { class: "btn-label", " Restore" }
+                    }
                 }
 
                 if clearing_all() {
@@ -532,6 +873,97 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                 if !date_text.is_empty() {
                                                                     span { class: "meta-sep", " · " }
                                                                     span { class: "meta-date", "{date_text}" }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    // Folder download (real and virtual dirs)
+                                                    if is_dir {
+                                                        if downloading_folder().as_deref() == Some(&rel_path) {
+                                                            span { class: "outputs-btn", Icon { icon: BsHourglass } }
+                                                        } else {
+                                                            button {
+                                                                class: "outputs-btn outputs-dir-download-btn",
+                                                                title: "Download folder as ZIP",
+                                                                onclick: {
+                                                                    let pn = project_name.clone();
+                                                                    let fp = rel_path.clone();
+                                                                    let fn_ = entry_name.clone();
+                                                                    let err = error_msg;
+                                                                    let mut dl = downloading_folder;
+                                                                    let fl_clone = fl.clone();
+                                                                    move |_| {
+                                                                        dl.set(Some(fp.clone()));
+                                                                        let pn = pn.clone();
+                                                                        let fp = fp.clone();
+                                                                        let fn_ = fn_.clone();
+                                                                        let mut err = err.clone();
+                                                                        let mut dl = dl.clone();
+                                                                        let fl = fl_clone.clone();
+                                                                        spawn(async move {
+                                                                            let entries = build_dir_files_map(&fl);
+                                                                            let file_entries = entries.get(&fp).cloned().unwrap_or_default();
+                                                                            let zip_name = format!("{}-{}.zip", pn, fn_);
+                                                                            let result = download_folder_zip(
+                                                                                &pn, &fp, &zip_name, file_entries, err.clone(),
+                                                                            ).await;
+                                                                            if let Err(e) = result {
+                                                                                err.set(e);
+                                                                            }
+                                                                            dl.set(None);
+                                                                        });
+                                                                    }
+                                                                },
+                                                                Icon { icon: BsDownload }
+                                                                span { class: "btn-label", " Download" }
+                                                            }
+                                                        }
+
+                                                        // Folder restore (non-virtual dirs only)
+                                                        if !is_virtual {
+                                                            if restoring() && restore_folder() == Some(rel_path.clone()) {
+                                                                span { class: "outputs-toolbar-status",
+                                                                    {
+                                                                        let rp = restore_progress();
+                                                                        if rp.1 > 0 {
+                                                                            format!("{}/{}", rp.0, rp.1)
+                                                                        } else {
+                                                                            "…".to_string()
+                                                                        }
+                                                                    }
+                                                                }
+                                                            } else {
+                                                                button {
+                                                                    class: "outputs-btn outputs-restore-btn",
+                                                                    disabled: restoring(),
+                                                                    title: "Restore folder contents from ZIP",
+                                                                    onclick: {
+                                                                        let pn = project_name.clone();
+                                                                        let fp = rel_path.clone();
+                                                                        let err = error_msg;
+                                                                        let mut rst = restoring;
+                                                                        let prog = restore_progress;
+                                                                        let rc = refresh_counter;
+                                                                        let mut rst_f = restore_folder;
+                                                                        move |_| {
+                                                                            rst_f.set(Some(fp.clone()));
+                                                                            rst.set(true);
+                                                                            let pn = pn.clone();
+                                                                            let fp = fp.clone();
+                                                                            let err = err.clone();
+                                                                            let rst = rst.clone();
+                                                                            let prog = prog.clone();
+                                                                            let rc = rc.clone();
+                                                                            let mut rst_f = rst_f.clone();
+                                                                            spawn(async move {
+                                                                                restore_from_zip(&pn, &fp, rst, prog, err, rc).await;
+                                                                                rst_f.set(None);
+                                                                            });
+                                                                        }
+                                                                    },
+                                                                    Icon { icon: BsUpload }
+                                                                    span { class: "btn-label", " Restore" }
                                                                 }
                                                             }
                                                         }

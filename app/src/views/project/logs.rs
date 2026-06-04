@@ -347,8 +347,20 @@ fn spawn_pipeline_stream(
                                 drop(s);
                                 if auto_scroll() {
                                     let _ = eval(
-                                        "var el = document.getElementById('logs-output'); \
-                                         if (el) el.scrollTop = el.scrollHeight;",
+                                        r#"
+                                        (function () {
+                                            const el = document.getElementById('logs-output');
+                                            if (!el) return;
+                                            let elapsed = 0;
+                                            const id = setInterval(() => {
+                                                el.scrollTop = el.scrollHeight;
+                                                elapsed += 33;
+                                                if (elapsed >= 500) {
+                                                    clearInterval(id);
+                                                }
+                                            }, 33);
+                                        })();
+                                        "#,
                                     );
                                 }
                             }
@@ -732,8 +744,6 @@ pub fn LogsTab(project_name: String) -> Element {
                                 ("○", "stage-status-pending")
                             };
 
-
-
                             // Suffix shown next to stage name.
                             let name_suffix = if stage.cached { " (cached)" } else if stage.skipped { " (skipped)" } else { "" };
 
@@ -756,7 +766,6 @@ pub fn LogsTab(project_name: String) -> Element {
                                             class: "stage-chevron",
                                             if is_expanded { "▾" } else { "▸" }
                                         }
-
                                         span {
                                             class: "stage-name",
                                             "{stage.name}{name_suffix}"
