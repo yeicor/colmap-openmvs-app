@@ -117,7 +117,10 @@ pub(crate) struct ImageMetadata {
     working_dir: Option<String>,
 }
 
-/// Entry in the embedded rootfs manifest for a single regular file.
+/// Entry in the embedded rootfs manifest for a single ELF file.
+///
+/// ELF binaries are stored as `librootfs-<hash>.so` in jniLibs.
+/// Non-ELF files are bundled in rootfs.zip and extracted at startup.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct RootfsFileInfo {
@@ -128,12 +131,12 @@ struct RootfsFileInfo {
     size: Option<u64>,
 }
 
-/// Manifest produced at build time describing the complete rootfs hierarchy.
+/// Manifest produced at build time describing the embedded rootfs.
 ///
-/// Files are stored as flat hash-named entries in jniLibs.  The manifest
-/// records every directory, every regular file (with its hash key), and
-/// every symlink so the app can reconstruct the directory skeleton at
-/// first launch without copying any file data.
+/// Only ELF files are recorded here (as flat hash-named entries in jniLibs).
+/// Non-ELF files are stored in a separate rootfs.zip bundle. The manifest
+/// also records every symlink (directory/file aliases) so the app can
+/// reconstruct the directory skeleton at first launch.
 #[derive(Debug, Deserialize)]
 pub(crate) struct RootfsManifest {
     #[serde(default)]
@@ -578,49 +581,53 @@ impl PRoot {
     }
 
     // -----------------------------------------------------------------------
-    // Embedded asset helpers (Android jniLibs)
+    // Embedded asset helpers (Android rootfs.zip manifest)
     // -----------------------------------------------------------------------
 
-    /// Path to the embedded rootfs manifest (`librootfs-manifest.so`).
-    /// Present when the APK was built with the embedded rootfs approach.
-    /// The file is a JSON document despite the `.so` extension (required so
-    /// Android's AGP packaging includes it automatically without a custom task).
-    pub fn embedded_rootfs_manifest_path(&self) -> Option<PathBuf> {
-        let p = self.runtime_dir.join("librootfs-manifest.so");
-        if p.exists() {
-            Some(p)
-        } else {
-            None
-        }
-    }
-
-    /// Read and parse the embedded [`RootfsManifest`].
+    /// Read and parse the embedded [`RootfsManifest`] from the compile-time
+    /// `rootfs.zip` (which contains `.rootfs_manifest.json`).
+    /// On non-Android targets this always returns an error.
     pub(crate) async fn read_embedded_manifest(&self) -> RuntimeResult<RootfsManifest> {
-        let path = self.embedded_rootfs_manifest_path().ok_or_else(|| {
-            anyhow::anyhow!(
-                "No embedded rootfs manifest found (librootfs-manifest.so missing from {})",
-                self.runtime_dir.display()
-            )
-        })?;
-        let content = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to read manifest: {}", e))?;
-        serde_json::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse manifest JSON: {}", e))
+        #[cfg(not(target_os = "android"))]
+        {
+            anyhow::bail!("No embedded rootfs.zip (non-Android target)")
+        }
+        #[cfg(target_os = "android")]
+        {
+            let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/rootfs.zip"));
+            let cursor = std::io::Cursor::new(bytes);
+            let mut archive = zip::ZipArchive::new(cursor)
+                .map_err(|e| anyhow::anyhow!("Failed to open embedded rootfs.zip: {e}"))?;
+            let mut entry = archive
+                .by_name(".rootfs_manifest.json")
+                .map_err(|_| anyhow::anyhow!(".rootfs_manifest.json not found in rootfs.zip"))?;
+            let mut content = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut content)
+                .map_err(|e| anyhow::anyhow!("Failed to read manifest from zip: {e}"))?;
+            serde_json::from_str(&content)
+                .map_err(|e| anyhow::anyhow!("Failed to parse manifest JSON: {e}"))
+        }
     }
 
     /// Build the lightweight rootfs skeleton from the embedded manifest.
     ///
     /// The skeleton consists of:
     /// - Directories recreated under `images_dir/<tag>/rootfs/`
-    /// - Symlinks for every file pointing to `/mnt/jni/<hash>` (the hash-named
-    ///   file extracted from jniLibs by Android at install time)
+    /// - Symlinks for ELF → `/mnt/jni/librootfs-<hash>.so`
     /// - Original rootfs symlinks (directory aliases, file aliases)
     ///
-    /// No file *data* is copied — the actual content lives in `runtime_dir`
-    /// (the native-lib directory) already extracted by the Android installer.
-    /// proot is invoked with `-b <runtime_dir>:/mnt/jni` so the symlink targets
-    /// resolve correctly inside the container.
+    /// On Android:
+    /// - ELF files live in jniLibs (direct .so from APK)
+    /// - Non-ELF files are extracted from assets/rootfs.zip to filesDir
+    /// - proot is invoked with `-b <jniLibs>:/mnt/jni` so ELF symlink
+    ///   targets resolve inside the container.
+    ///
+    /// On non-Android:
+    /// - All files are downloaded and extracted to the writable directory.
+    /// - No symlinks are needed for file access.
+    ///
+    /// NOTE: On Android, `setup_android_runtime()` should be called first
+    /// which handles both ELF and non-ELF. This method is a fallback path.
     async fn setup_rootfs_skeleton(
         &self,
         image_tag: &str,
@@ -646,13 +653,21 @@ impl PRoot {
         let total = (manifest.files.len() + manifest.symlinks.len()).max(1);
         let mut done = 0usize;
 
-        // ── Create /mnt/jni mount point ──────────────────
-        tokio::fs::create_dir_all(rootfs_dir.join("mnt/jni"))
-            .await
-            .ok();
-
-        // ── Create per-file symlinks: <rootfs>/<path> → /mnt/jni/librootfs-<hash>.so ──
+        // ── Create per-file symlinks ──
+        // The manifest only contains ELF files; non-ELF files are extracted
+        // from rootfs.zip at startup (see android_startup.rs).
         // Directories are created on-demand as parent dirs of each file path.
+
+        // On Android, resolve jniLibs path so symlinks point directly to it.
+        #[allow(unused_assignments, unused_mut)]
+        let mut jnilib_base_path = String::new();
+        #[cfg(target_os = "android")]
+        {
+            if let Some(p) = crate::settings::get_android_native_lib_dir() {
+                jnilib_base_path = p;
+            }
+        }
+
         for (hash, file_info) in &manifest.files {
             let dest = rootfs_dir.join(file_info.path.trim_start_matches('/'));
             if let Some(parent) = dest.parent() {
@@ -661,13 +676,19 @@ impl PRoot {
             let _ = tokio::fs::remove_file(&dest).await;
             #[cfg(unix)]
             {
-                let symlink_target = format!("/mnt/jni/librootfs-{}.so", hash);
+                let symlink_target = if jnilib_base_path.is_empty() {
+                    // Non-Android fallback: placeholder relative symlink.
+                    format!("librootfs-{}.so", hash)
+                } else {
+                    // Android: absolute symlink to the jniLibs location.
+                    format!("{}/librootfs-{}.so", jnilib_base_path, hash)
+                };
                 if let Err(e) = tokio::fs::symlink(&symlink_target, &dest).await {
                     warn!(
                         path = %dest.display(),
                         target = %symlink_target,
                         error = %e,
-                        "setup_rootfs_skeleton: failed to create file symlink"
+                        "setup_rootfs_skeleton: failed to create symlink"
                     );
                 }
             }
@@ -767,9 +788,7 @@ impl Runtime for PRoot {
         // On Android, if the embedded proot asset is present that is always
         // sufficient — no need for a system-wide installation.
         #[cfg(target_os = "android")]
-        if self.runtime_dir.join("libproot.so").exists()
-            && self.embedded_rootfs_manifest_path().is_some()
-        {
+        if self.runtime_dir.join("libproot.so").exists() {
             return Ok(());
         }
 
@@ -868,12 +887,10 @@ impl Runtime for PRoot {
 
         // On Android, if the embedded proot asset is present, skip download.
         #[cfg(target_os = "android")]
-        if self.runtime_dir.join("libproot.so").exists()
-            && self.embedded_rootfs_manifest_path().is_some()
-        {
+        if self.runtime_dir.join("libproot.so").exists() {
             info!(
                 runtime_dir = %self.runtime_dir.display(),
-                "download: embedded proot + manifest present — skipping download"
+                "download: embedded proot present — skipping download"
             );
             return Ok(());
         }
@@ -1073,10 +1090,10 @@ impl Runtime for PRoot {
         // Only the container's environment will be used
         cmd.env_clear();
 
-        // On Android, bind the jniLibs directory for symlink resolution.
-        // Symlinks now point directly to jniLibs, so we bind the parent directory.
+        // On Android, bind the jniLibs directory so that ELF symlinks
+        // (librootfs-<hash>.so) resolve inside the container.
         #[cfg(target_os = "android")]
-        if self.embedded_rootfs_manifest_path().is_some() {
+        {
             if let Some(jnilib_dir) = crate::settings::get_android_native_lib_dir() {
                 cmd.arg("-b").arg(jnilib_dir);
             }

@@ -53,6 +53,9 @@ libc = { version = "0.2" }
 # Gzip decompression for Docker layers
 flate2 = { version = "1.0" }
 
+# ZIP extraction for rootfs bundle
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 # Date and time handling
 chrono = { workspace = true }
 
@@ -77,8 +80,15 @@ rfd = { git = "https://github.com/yeicor/rfd.git", branch = "feature/web-dialogs
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-jni = { version = "0.21", default-features = false }
+jni = { version = "0.21" }
 ndk-context = { version = "0.1" }
+
+[build-dependencies]
+serde = { workspace = true }
+serde_json = { version = "1.0" }
+zip = { version = "2", features = ["deflate"] }
+tar = { version = "0.4" }
+xz2 = { version = "0.1" }
 
 [dev-dependencies]
 tempfile = "3.27.0"

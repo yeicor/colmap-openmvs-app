@@ -63,7 +63,7 @@ fn main() {
 fn generate_demo_assets(manifest_dir: &Path) {
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("demo_assets.rs");
-    
+
     let demo_dir = manifest_dir.join("assets").join("demo");
     println!("cargo:rerun-if-changed={}", demo_dir.display());
 
@@ -76,13 +76,14 @@ fn generate_demo_assets(manifest_dir: &Path) {
              pub const DOWNLOAD_EVENTS_JSON: &str = \"[]\";\n\
              pub const PIPELINE_EVENTS_JSON: &str = \"[]\";\n\
              pub fn demo_image_bytes(_name: &str) -> Option<&'static [u8]> { None }\n\
-             pub fn demo_output_bytes(_path: &str) -> Option<&'static [u8]> { None }\n"
-        ).unwrap();
+             pub fn demo_output_bytes(_path: &str) -> Option<&'static [u8]> { None }\n",
+        )
+        .unwrap();
         return;
     }
 
     let manifest_str = fs::read_to_string(&manifest_path).unwrap();
-    
+
     let download_events_path = demo_dir.join("download_events.json");
     let download_events_str = if download_events_path.exists() {
         fs::read_to_string(&download_events_path).unwrap()
@@ -98,7 +99,7 @@ fn generate_demo_assets(manifest_dir: &Path) {
         "[]".to_string()
     };
     println!("cargo:rerun-if-changed={}", pipeline_events_path.display());
-    
+
     let mut out = String::new();
     out.push_str(&format!(
         "pub const DEMO_MANIFEST: &str = r###\"{}\"###;\n\n",
@@ -112,7 +113,7 @@ fn generate_demo_assets(manifest_dir: &Path) {
         "pub const PIPELINE_EVENTS_JSON: &str = r###\"{}\"###;\n\n",
         pipeline_events_str
     ));
-    
+
     // Images (flat directory, no subdirectories)
     out.push_str("pub fn demo_image_bytes(name: &str) -> Option<&'static [u8]> {\n");
     out.push_str("    match name {\n");
@@ -134,7 +135,7 @@ fn generate_demo_assets(manifest_dir: &Path) {
     }
     out.push_str("        _ => None,\n");
     out.push_str("    }\n}\n\n");
-    
+
     // Outputs (recursive, preserves relative directory structure)
     out.push_str("pub fn demo_output_bytes(path: &str) -> Option<&'static [u8]> {\n");
     out.push_str("    match path {\n");
@@ -165,7 +166,7 @@ fn collect_files(base: &Path, dir: &Path, out: &mut String) {
             ));
         }
     }
-    }
+}
 
 // ── npm ci ────────────────────────────────────────────────────────────────────
 

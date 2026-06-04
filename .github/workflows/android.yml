@@ -116,9 +116,9 @@ jobs:
         run: curl -sSL https://dioxus.dev/install.sh | bash
 
       - shell: bash
-        run: | # Note: keep in sync with ci.yml
-          ./build_android.sh --release --target=arm64
-          ./build_android.sh --release --target=x86_64
+        run: |
+          dx bundle --android --package-types aab --features server --target x86_64-linux-android
+          dx bundle --android --package-types aab --features server --target aarch64-linux-android
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -135,8 +135,8 @@ jobs:
           else
             echo "tracks=internal" >> "$GITHUB_OUTPUT"
           fi
-          echo "release-files=$(find target -type f -path '*/release/android/*/app-release.aab' | tr '\n' ',')" >> "$GITHUB_OUTPUT"
-          echo "debug-symbols-folder=$(find target -type d -path '*/release/android/*/merged_native_libs/release/*/lib')" >> "$GITHUB_OUTPUT"
+          echo "release-files=$(find target -type f -path '*/release/android/*/bundle/*.aab' | tr '\n' ',')" >> "$GITHUB_OUTPUT"
+          echo "debug-symbols-folder=$(find target -type d -path '*/release/android/*/merged_jni_libs/release/*/out')" >> "$GITHUB_OUTPUT"
           echo "mapping-file=$(find target -type f -path '*/release/android/*/mapping.txt')" >> "$GITHUB_OUTPUT"
 
       - uses: r0adkll/upload-google-play@v1

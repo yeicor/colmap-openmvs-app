@@ -1241,7 +1241,7 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
             if tags_loading() {
                 p { class: "loading", "Loading…" }
             } else if available_tags().is_empty() {
-                p { class: "empty", "Could not load available tags." }
+                p { class: "empty", "There are no available images to pull." }
             } else {
                 ul { class: "tags-list",
                     {available_tags().into_iter().map(|tag_info| {

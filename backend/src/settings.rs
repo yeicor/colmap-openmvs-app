@@ -120,51 +120,19 @@ pub fn get_android_native_lib_dir() -> Option<String> {
     }
 }
 
-/// Read the embedded image tag from `librootfs-manifest.so` bundled in the APK's jniLibs.
+/// Read the embedded image tag that was baked into the binary by `backend/build.rs`.
 ///
-/// Despite the `.so` extension, the file is a JSON document with at least a `"tag"` field, e.g.:
-/// ```json
-/// { "tag": "mirror.gcr.io/yeicor/colmap-openmvs:20240101-abc123" }
-/// ```
-/// The `.so` extension is used so Android's AGP packaging includes it automatically
-/// without needing a custom Gradle merge task.
-#[cfg(target_os = "android")]
+/// The tag is set via `cargo:rustc-env=EMBEDDED_IMAGE_TAG=...` during the Android
+/// build, so `option_env!()` resolves it at compile time. On non-Android targets
+/// the env var is not present and this function returns `None`.
 pub fn read_embedded_image_tag() -> Option<String> {
-    let jnilib_dir = get_android_native_lib_dir()?;
-    let metadata_path = format!("{}/librootfs-manifest.so", jnilib_dir);
-
-    match std::fs::read_to_string(&metadata_path) {
-        Ok(contents) => match serde_json::from_str::<serde_json::Value>(&contents) {
-            Ok(json) => {
-                let tag = json.get("tag").and_then(|v| v.as_str()).map(str::to_owned);
-                if tag.is_none() {
-                    warn!(path = %metadata_path, "Embedded rootfs manifest has no 'tag' field");
-                }
-                tag
-            }
-            Err(e) => {
-                warn!(path = %metadata_path, error = %e, "Failed to parse embedded metadata JSON");
-                None
-            }
-        },
-        Err(e) => {
-            warn!(path = %metadata_path, error = %e, "Failed to read embedded metadata file");
-            None
-        }
-    }
+    option_env!("EMBEDDED_IMAGE_TAG").map(|s| s.to_string())
 }
 
 /// Public, cross-platform wrapper around `read_embedded_image_tag`.
-/// Returns `None` on non-Android targets.
+/// Returns `None` on non-Android targets (where `EMBEDDED_IMAGE_TAG` is not set).
 pub fn read_embedded_image_tag_public() -> Option<String> {
-    #[cfg(target_os = "android")]
-    {
-        read_embedded_image_tag()
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        None
-    }
+    read_embedded_image_tag()
 }
 
 // ─── CUDA detection ──────────────────────────────────────────────────────────

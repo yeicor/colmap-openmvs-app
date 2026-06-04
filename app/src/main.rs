@@ -56,17 +56,6 @@ pub fn App() -> Element {
         ));
     }
 
-    // On android, add a top margin to the body equal to an guesstimated status bar height to avoid content being overlapped.
-    #[cfg(target_os = "android")]
-    {
-        let _ = dioxus::document::eval(
-            r#"
-            const statusBarHeight = 24; // Approximate height in pixels, may need adjustment for different devices
-            document.body.style.marginTop = statusBarHeight + 'px';
-            "#,
-        );
-    }
-
     use crate::task_manager::{TasksCtx, TasksState};
     use_context_provider(|| Signal::new(TasksState::default()) as TasksCtx);
 
