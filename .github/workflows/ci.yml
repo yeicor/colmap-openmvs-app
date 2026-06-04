@@ -75,7 +75,7 @@ jobs:
         if: startsWith(matrix.build-type, 'web')
         run: |
           echo -e "\n\n[web.app]\nbase_path = \"/${{ github.event.repository.name }}\"" >> Dioxus.toml  # Ensure correct base path for GitHub Pages
-          $HOME/.dx/bin/dx bundle --release --web --verbose ${{ matrix.build-type == 'web-demo' && '--features=demo' || '' }}
+          $HOME/.dx/bin/dx bundle --release --web --verbose ${{ matrix.build-type == 'web-demo' && '--no-default-features --features=demo' || '' }}
       - shell: bash
         run: |
           set -euo pipefail

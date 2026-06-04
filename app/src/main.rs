@@ -7,6 +7,7 @@ use dioxus::prelude::*;
 use tracing::info;
 pub mod backend_url;
 pub mod components;
+pub mod fullstack_compat;
 pub mod logging;
 pub mod mycomponents;
 pub mod picker;

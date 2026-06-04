@@ -729,9 +729,9 @@ pub fn ImagesTab(project_name: String) -> Element {
                                     let mut failed: Vec<String> = Vec::new();
 
                                     for (name, bytes) in files {
-                                        let byte_stream = dioxus::fullstack::ByteStream::new(
+                                        let byte_stream = crate::fullstack_compat::ByteStream::new(
                                             futures::stream::once(async {
-                                                dioxus::fullstack::body::Bytes::from(bytes)
+                                                crate::fullstack_compat::body::Bytes::from(bytes)
                                             }),
                                         );
                                         match crate::server::add_project_image(

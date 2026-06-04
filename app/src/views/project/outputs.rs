@@ -554,8 +554,8 @@ async fn restore_from_zip(
         match base64::engine::general_purpose::STANDARD.decode(&b64_data) {
             Ok(bytes) => {
                 let byte_stream =
-                    dioxus::fullstack::ByteStream::new(futures::stream::once(async move {
-                        dioxus::fullstack::body::Bytes::from(bytes)
+                    crate::fullstack_compat::ByteStream::new(futures::stream::once(async move {
+                        crate::fullstack_compat::body::Bytes::from(bytes)
                     }));
                 match write_project_output(project_name.to_string(), target_path, byte_stream).await
                 {

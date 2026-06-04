@@ -1,10 +1,11 @@
+use crate::fullstack_compat::body;
 use colmap_openmvs_api::{
     ConfigSchema, ImageTagInfo, LoadedProjectConfig, OutputFile, PreparedImageInfo, Project,
     ProjectRunStatus, RuntimeInfo, Settings, TaskEvent, TaskEventBatch, TaskInfo,
 };
 use dioxus::Result;
 
-use dioxus::fullstack::ByteStream;
+use crate::fullstack_compat::ByteStream;
 
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -75,7 +76,7 @@ pub async fn get_project_image_bytes(
 ) -> Result<ByteStream> {
     match demo_image_bytes(image_name.as_str()) {
         Some(bytes) => Ok(ByteStream::new(futures::stream::once(async move {
-            dioxus::fullstack::body::Bytes::from(bytes.to_vec())
+            body::Bytes::from(bytes.to_vec())
         }))),
         None => Err(dioxus::CapturedError::msg("Image not found in demo data")),
     }
@@ -182,7 +183,7 @@ pub async fn get_project_output_bytes(
 ) -> Result<ByteStream> {
     match demo_output_bytes(&relative_path) {
         Some(bytes) => Ok(ByteStream::new(futures::stream::once(async move {
-            dioxus::fullstack::body::Bytes::from(bytes.to_vec())
+            body::Bytes::from(bytes.to_vec())
         }))),
         None => Err(dioxus::CapturedError::msg("Output not found in demo data")),
     }

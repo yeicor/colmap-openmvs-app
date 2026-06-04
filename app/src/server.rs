@@ -3,7 +3,7 @@
 
 use dioxus::prelude::*;
 
-use dioxus::fullstack::ByteStream;
+use crate::fullstack_compat::ByteStream;
 
 use colmap_openmvs_api::{
     ConfigSchema, ImageTagInfo, LoadedProjectConfig, OutputFile, PreparedImageInfo, Project,
