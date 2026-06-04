@@ -55,8 +55,12 @@ pub fn App() -> Element {
         ));
     }
 
+    use crate::mycomponents::ToastContainer;
     use crate::task_manager::{TasksCtx, TasksState};
     use_context_provider(|| Signal::new(TasksState::default()) as TasksCtx);
+
+    // Global toast notification system (single container for all floating toasts).
+    mycomponents::use_toast_provider();
 
     use_future(move || async move {
         if let Err(e) = server::startup().await {
@@ -93,6 +97,7 @@ pub fn App() -> Element {
         document::Link { rel: "stylesheet", href: asset!("/assets/tasks-panel.css") }
         document::Title { "COLMAP + OpenMVS" }
         Router::<Route> {}
+        ToastContainer {}
     }
 }
 

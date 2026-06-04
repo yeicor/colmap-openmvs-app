@@ -217,3 +217,41 @@
     color: var(--primary-color-7);
     user-select: none;
 }
+
+/* ------------------------------------------------------------------
+   Inline notices (demo / backend URL) — page-level, not floating
+   ------------------------------------------------------------------ */
+
+.inline-notice {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    margin-bottom: 0.5rem;
+    border-radius: 0.4rem;
+    font-size: 0.85rem;
+    background: var(--primary-info-color);
+    color: var(--secondary-info-color);
+    border: 1px solid var(--secondary-info-color);
+}
+
+.inline-notice span {
+    flex: 1;
+    min-width: 0;
+}
+
+.inline-notice-close {
+    flex-shrink: 0;
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-size: 1.1rem;
+    cursor: pointer;
+    padding: 0 0.25rem;
+    line-height: 1;
+    opacity: 0.7;
+}
+
+.inline-notice-close:hover {
+    opacity: 1;
+}

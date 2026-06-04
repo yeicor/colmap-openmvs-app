@@ -160,15 +160,26 @@
 }
 
 /* =======================================================================
-   Floating toasts (replacing inline banners)
+   Toast container – fixed-position wrapper that stacks toasts vertically
    ======================================================================= */
 
-.toast-float {
+.toast-container {
     position: fixed;
     top: 1rem;
     right: 1rem;
     z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
     max-width: min(420px, calc(100vw - 2rem));
+    pointer-events: none; /* allow clicks to pass through the container */
+}
+
+.toast-container > * {
+    pointer-events: auto; /* re-enable clicks on individual toasts */
+}
+
+.toast-float {
     padding: 0.55rem 0.75rem;
     border-radius: 0.5rem;
     font-size: 0.9rem;
@@ -240,15 +251,5 @@
     background-color: rgba(0, 0, 0, 0.1);
 }
 
-/* Stack multiple toasts with slight offset */
-.toast-float ~ .toast-float {
-    top: 4.5rem;
-}
-
-.toast-float ~ .toast-float ~ .toast-float {
-    top: 8rem;
-}
-
-.toast-float ~ .toast-float ~ .toast-float ~ .toast-float {
-    top: 11.5rem;
-}
+/* Toasts within the container are naturally stacked by flexbox — no
+   hardcoded offsets needed, and any number of toasts remains readable. */

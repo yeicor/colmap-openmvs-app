@@ -1,4 +1,4 @@
-use crate::mycomponents::{Banner, BannerType, PageHeaderButton, TasksPanel};
+use crate::mycomponents::{add_toast, use_toast_ctx, PageHeaderButton, TasksPanel, ToastType};
 use crate::server::{create_project, delete_project, get_projects, rename_project};
 use crate::{backend_url, Route};
 use crate::{
@@ -69,6 +69,7 @@ pub fn Projects(
     #[props(default)] is_sidebar: bool,
     #[props(default)] selected: Option<String>,
 ) -> Element {
+    let toast_ctx = use_toast_ctx();
     let mut dialog_type = use_signal(|| None::<DialogType>);
     let mut input_value = use_signal(String::new);
     let mut error_message = use_signal(String::new);
@@ -77,7 +78,10 @@ pub fn Projects(
     let mut loading = use_signal(|| true);
     let mut is_demo_banner_open = use_signal(|| !is_sidebar && cfg!(feature = "demo"));
 
+    let handle_toast_ctx = toast_ctx;
+    let refresh_toast_ctx = toast_ctx;
     let refresh_projects = move || {
+        let mut tc = refresh_toast_ctx.clone();
         debug!("Refreshing projects list");
         spawn({
             async move {
@@ -92,6 +96,12 @@ pub fn Projects(
                     Err(e) => {
                         error!(error = %e, "Failed to load projects");
                         error_message.set(format!("Failed to load projects: {}", e));
+                        add_toast(
+                            &mut tc,
+                            format!("Failed to load projects: {e}"),
+                            ToastType::Error,
+                            None,
+                        );
                     }
                 }
                 loading.set(false);
@@ -101,7 +111,8 @@ pub fn Projects(
 
     use_effect(refresh_projects);
 
-    let handle_confirm = move |_| {
+    let handle_confirm = move |_: ()| {
+        let mut tc = handle_toast_ctx.clone();
         spawn({
             async move {
                 if let Some(dialog) = dialog_type() {
@@ -139,21 +150,19 @@ pub fn Projects(
 
                     match result {
                         Ok(_) => {
-                            let operation = match dialog {
-                                DialogType::Create => "created",
-                                DialogType::Rename(_) => "renamed",
-                                DialogType::Delete(_) => "deleted",
-                            };
-                            info!(operation, "Project operation succeeded");
-                            dialog_type.set(None);
-                            info_message.set(
-                                match dialog {
-                                    DialogType::Create => "Project created successfully",
-                                    DialogType::Rename(_) => "Project renamed successfully",
-                                    DialogType::Delete(_) => "Project deleted successfully",
+                            let (verb, msg) = match dialog {
+                                DialogType::Create => ("created", "Project created successfully"),
+                                DialogType::Rename(_) => {
+                                    ("renamed", "Project renamed successfully")
                                 }
-                                .to_string(),
-                            );
+                                DialogType::Delete(_) => {
+                                    ("deleted", "Project deleted successfully")
+                                }
+                            };
+                            info!(verb, "Project operation succeeded");
+                            dialog_type.set(None);
+                            info_message.set(msg.to_string());
+                            add_toast(&mut tc, msg.to_string(), ToastType::Info, None);
                             refresh_projects();
                         }
                         Err(e) => {
@@ -164,6 +173,12 @@ pub fn Projects(
                             };
                             error!(error = %e, operation, "Project operation failed");
                             error_message.set(e.to_string());
+                            add_toast(
+                                &mut tc,
+                                format!("Failed to {operation} project: {e}"),
+                                ToastType::Error,
+                                None,
+                            );
                         }
                     }
                 }
@@ -222,29 +237,32 @@ pub fn Projects(
                 }
             }
 
-            Banner {
-                message: error_message(),
-                banner_type: BannerType::Error,
-                on_close: move |_| error_message.set(String::new()),
-            }
-            Banner {
-                message: info_message(),
-                banner_type: BannerType::Info,
-                on_close: move |_| info_message.set(String::new()),
-            }
-            if !backend_url::BACKEND_URL.get().map(|s| s.as_str()).unwrap_or("").is_empty() {
-                Banner {
-                    message: format!("Using backend: {}", backend_url::BACKEND_URL.get().unwrap()),
-                    banner_type: BannerType::Info,
-                    on_close: move |_| {},
+            // Persistent inline notices (not floating toasts).
+            if let Some(url) = backend_url::BACKEND_URL.get().filter(|s| !s.is_empty()) {
+                div {
+                    class: "inline-notice",
+                    span { "🔗 Using backend: {url}" }
+                    button {
+                        class: "inline-notice-close",
+                        onclick: move |_| {
+                            // Hide this notice by clearing the backend URL
+                            // (next page load will re-read from storage if present).
+                            let _ = backend_url::BACKEND_URL.set(String::new());
+                        },
+                        "×"
+                    }
                 }
             }
 
             if is_demo_banner_open() {
-                Banner {
-                    message: "This is a demo build running with mock data and without a real backend connection. Download the full version for your preferred platform to manage your actual projects and tasks.",
-                    banner_type: BannerType::Info,
-                    on_close: move |_| { is_demo_banner_open.set(false); },
+                div {
+                    class: "inline-notice",
+                    span { "🧪 This is a demo build running with mock data. Download the full version to manage your actual projects." }
+                    button {
+                        class: "inline-notice-close",
+                        onclick: move |_| is_demo_banner_open.set(false),
+                        "×"
+                    }
                 }
             }
 
