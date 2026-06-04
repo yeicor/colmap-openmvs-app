@@ -20,10 +20,22 @@
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::path::PathBuf;
+use std::sync::OnceLock;
+use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
+
+/// Global mutex to serialise concurrent calls to [`setup_android_runtime`].
+/// Without this, multiple API invocations can race on the idempotency check
+/// (e.g. two threads both see that `.rootfs_ready` is missing and both start
+/// extracting / symlinking, causing spurious failures).
+static SETUP_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// Set up the Android runtime environment for PRoot and the embedded rootfs.
 pub async fn setup_android_runtime() -> anyhow::Result<()> {
+    // Serialise concurrent callers — only one thread performs the setup while
+    // the others wait, then all observe the completed state.
+    let _guard = SETUP_MUTEX.get_or_init(|| Mutex::new(())).lock().await;
+
     info!("Android startup: initializing PRoot runtime environment");
 
     let settings = crate::settings::get_settings()

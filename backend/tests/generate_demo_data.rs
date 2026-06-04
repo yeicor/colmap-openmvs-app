@@ -93,9 +93,10 @@ async fn test_generate_demo_data() {
                     .unsupported_reason
                     .as_deref()
                     .unwrap_or("unknown");
-                panic!(
-                    "Neither PRoot nor Docker are supported on this platform!\n  Docker unsupported reason: {reason}"
+                println!(
+                    "Skipping test: neither PRoot nor Docker are supported on this platform.\n  Docker unsupported reason: {reason}"
                 );
+                return;
             }
 
             // Switch to docker

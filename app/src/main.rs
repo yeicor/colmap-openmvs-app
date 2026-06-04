@@ -36,8 +36,6 @@ pub enum Route {
 
 #[component]
 pub fn App() -> Element {
-    log_build_info();
-
     // Eruda debug console — only injected in debug builds.
     // The eruda.js file is copied from node_modules by build.rs and referenced
     // here so that dx includes it in the asset bundle.
@@ -156,20 +154,9 @@ pub fn log_build_info() {
 
 fn main() {
     init_logging();
-    init_backend();
+    log_build_info();
 
-    // Disable Android 15+ edge-to-edge enforcement *before* the Dioxus
-    // renderer initialises and creates the WebView.  The Window flag must
-    // be set before the first frame is drawn to have any effect.
-    #[cfg(all(target_os = "android", feature = "server"))]
-    {
-        if let Err(e) = colmap_openmvs_backend::disable_edge_to_edge() {
-            tracing::warn!(
-                error = %e,
-                "Failed to disable edge-to-edge — content may appear behind system bars"
-            );
-        }
-    }
+    init_backend();
 
     dioxus::launch(App);
 }

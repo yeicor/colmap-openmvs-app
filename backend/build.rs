@@ -643,87 +643,71 @@ fn patch_gradle_project(profile: &str) {
             );
         }
 
-        // Ensure the manifest references our theme (for edge-to-edge opt-out).
-        // If no android:theme is set on <application>, add one pointing to @style/AppTheme.
-        if !modified.contains("android:theme") {
-            modified = modified.replacen(
-                "<application",
-                "<application android:theme=\"@style/AppTheme\"",
-                1,
-            );
-        }
-
         if modified != content {
             std::fs::write(&manifest, &modified).expect("write AndroidManifest.xml");
-            eprintln!("  Patched AndroidManifest.xml (extractNativeLibs + theme ref)");
+            eprintln!("  Patched AndroidManifest.xml (extractNativeLibs)");
         }
     }
 
-    // ── Theme XML (res/values/themes.xml) ───────────────────────────────
-    // Add windowOptOutEdgeToEdgeEnforcement to opt out of Android 15+
-    // edge-to-edge enforcement at the theme level (works on API ≤ 35).
-    // On API 36+ this attribute is ignored, so the JNI approach in theme.rs
-    // is the primary mechanism.
-    let themes_xml = app_dir
+    // ── WryActivity.kt — inject WindowInsetsCompat listener in onCreate ──
+    // Uses the modern WindowInsetsCompat API (via ViewCompat) to dynamically
+    // listen for system bar insets and apply them as padding to the decor
+    // view.  This is more reliable across Android versions than the old
+    // fitsSystemWindows / setDecorFitsSystemWindows approaches.
+    //
+    // The generated project uses Kotlin, and onCreate lives in WryActivity.kt
+    // (the abstract base).  MainActivity.kt is just a thin
+    // `class MainActivity : WryActivity()` with no override.
+    let wry_activity_kt = app_dir
         .join("app")
         .join("src")
         .join("main")
-        .join("res")
-        .join("values")
-        .join("themes.xml");
-    // Fall back to the legacy styles.xml path
-    let styles_xml = app_dir
-        .join("app")
-        .join("src")
+        .join("kotlin")
+        .join("dev")
+        .join("dioxus")
         .join("main")
-        .join("res")
-        .join("values")
-        .join("styles.xml");
+        .join("WryActivity.kt");
 
-    // Helper to patch a theme XML file.
-    let patch_theme_file = |path: &std::path::Path| -> bool {
-        if !path.exists() {
-            return false;
-        }
-        let content = std::fs::read_to_string(path).unwrap_or_default();
-        if content.contains("windowOptOutEdgeToEdgeEnforcement") {
-            return false; // already patched
-        }
-        // Insert into the first <style> block (typically AppTheme).
-        if let Some(style_start) = content.find("<style") {
-            // Find the opening brace of that style block
-            if let Some(brace) = content[style_start..].find('>') {
-                let insert_at = style_start + brace + 1;
-                let item = "\n        <item name=\"android:windowOptOutEdgeToEdgeEnforcement\">true</item>";
-                let modified =
-                    format!("{}{}{}", &content[..insert_at], item, &content[insert_at..],);
-                if modified != content {
-                    std::fs::write(path, &modified).expect("write themes.xml");
-                    return true;
+    if wry_activity_kt.exists() {
+        let content = std::fs::read_to_string(&wry_activity_kt).unwrap_or_default();
+        let mut modified = content.clone();
+
+        // Only patch if we haven't already (idempotent).
+        if !modified.contains("ViewCompat.setOnApplyWindowInsetsListener") {
+            // ── Inject imports (after the last existing import) ────────────
+            if !modified.contains("import androidx.core.view.ViewCompat") {
+                if let Some(pos) = modified.rfind("import ") {
+                    if let Some(eol) = modified[pos..].find('\n') {
+                        let insert_at = pos + eol + 1;
+                        let snippet = "import androidx.core.view.ViewCompat\n";
+                        modified.insert_str(insert_at, snippet);
+                    }
+                }
+            }
+            if !modified.contains("import androidx.core.view.WindowInsetsCompat") {
+                if let Some(pos) = modified.rfind("import ") {
+                    if let Some(eol) = modified[pos..].find('\n') {
+                        let insert_at = pos + eol + 1;
+                        let snippet = "import androidx.core.view.WindowInsetsCompat\n";
+                        modified.insert_str(insert_at, snippet);
+                    }
+                }
+            }
+
+            // ── Inject the insets listener right after super.onCreate(…) ──
+            if let Some(pos) = modified.find("super.onCreate") {
+                if let Some(brace) = modified[pos..].find(')') {
+                    let insert_at = pos + brace + 1;
+                    let snippet = "\n        \n        // Listen for system window insets and force padding onto the view layout\n        ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, windowInsets ->\n            val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())\n\n            // Forces the app content to inset perfectly by applying status and navigation bar heights\n            view.setPadding(insets.left, insets.top, insets.right, insets.bottom)\n\n            windowInsets\n        }\n\n        // Set status bar color and icon appearance based on the current theme\n        val nightModeFlags = resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK\n        if (nightModeFlags == android.content.res.Configuration.UI_MODE_NIGHT_YES) {\n            window.decorView.setBackgroundColor(android.graphics.Color.BLACK)\n            window.statusBarColor = android.graphics.Color.BLACK\n            ViewCompat.getWindowInsetsController(window.decorView)?.isAppearanceLightStatusBars = false\n        } else {\n            window.decorView.setBackgroundColor(android.graphics.Color.WHITE)\n            window.statusBarColor = android.graphics.Color.WHITE\n            ViewCompat.getWindowInsetsController(window.decorView)?.isAppearanceLightStatusBars = true\n        }";
+                    modified.insert_str(insert_at, snippet);
                 }
             }
         }
-        false
-    };
 
-    if patch_theme_file(&themes_xml) {
-        eprintln!("  Patched themes.xml (windowOptOutEdgeToEdgeEnforcement=true)");
-    } else if patch_theme_file(&styles_xml) {
-        eprintln!("  Patched styles.xml (windowOptOutEdgeToEdgeEnforcement=true)");
-    } else {
-        // No existing theme file — create one with the opt-out.
-        if let Some(parent) = themes_xml.parent() {
-            std::fs::create_dir_all(parent).ok();
+        if modified != content {
+            std::fs::write(&wry_activity_kt, &modified).expect("write WryActivity.kt");
+            eprintln!("  Patched WryActivity.kt (WindowInsetsCompat listener in onCreate)");
         }
-        let theme_content = r##"<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
-    </style>
-</resources>
-"##;
-        std::fs::write(&themes_xml, theme_content).expect("write themes.xml");
-        eprintln!("  Created themes.xml with windowOptOutEdgeToEdgeEnforcement=true");
     }
 }
 
@@ -890,7 +874,7 @@ fn remove_stale_build_artifacts(profile: &str) {
         .join("app")
         .join("build")
         .join("intermediates")
-        .join("apk_ide_redirect_file");
+        .join("incremental");
     if maybe_stale_build_cache.exists() {
         let _ = std::fs::remove_dir_all(&maybe_stale_build_cache);
         eprintln!("  Removed stale Gradle build cache");

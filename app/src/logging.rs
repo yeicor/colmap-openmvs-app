@@ -1,15 +1,35 @@
 /// Initializes the logger for the application.
 ///
-/// - On native targets (not wasm32), sets the `RUST_LOG` environment variable to a default value if not already set.
-/// - On wasm32 (WebAssembly), determines the log level from the URL query parameters or hash fragment (`log` or `level`),
-///   or falls back to `DEBUG` in debug builds and `INFO` otherwise.
+/// - On native targets (not wasm32), registers a `tracing_subscriber` with
+///   the `RUST_LOG` filter (defaulting to `info` if not already set).
+/// - On wasm32 (WebAssembly), determines the log level from the URL query
+///   parameters or hash fragment (`log` or `level`), or falls back to
+///   `DEBUG` in debug builds and `INFO` otherwise.
+///
+/// **Important**: must be called before `dioxus::launch` because Dioxus does
+/// not register a subscriber — it only sets up a logger bridge.  If you
+/// `tracing::info!` in `main()` before `dioxus::launch` without a subscriber,
+/// the message is silently dropped.
 pub fn init() {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // Set a default RUST_LOG if not already set
-        if std::env::var("RUST_LOG").is_err() {
-            std::env::set_var("RUST_LOG", "info,colmap_openmvs_backend=trace");
-        }
+        use tracing_subscriber::EnvFilter;
+
+        // Default filter if none is set by the user / environment.
+        let filter = if std::env::var("RUST_LOG").is_ok() {
+            EnvFilter::from_default_env()
+        } else {
+            if cfg!(debug_assertions) {
+                EnvFilter::new("info,colmap_openmvs_app=debug")
+            } else {
+                EnvFilter::new("info")
+            }
+        };
+
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .pretty()
+            .init();
     }
 
     #[cfg(target_arch = "wasm32")]

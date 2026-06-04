@@ -54,8 +54,6 @@ mod pipeline;
 pub use pipeline::run_pipeline;
 
 mod theme;
-#[cfg(target_os = "android")]
-pub use theme::disable_edge_to_edge;
 pub use theme::get_dark_mode;
 
 mod process;

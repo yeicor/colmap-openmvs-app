@@ -89,53 +89,85 @@ impl Runtime for Docker {
 
         let mut details = format!("PATH={path}");
 
-        match which::which("docker") {
+        let docker_found = match which::which("docker") {
             Ok(p) => {
                 debug!("Docker::is_supported: found via `which` at {}", p.display());
-                return Ok(());
+                true
             }
             Err(e) => {
                 let msg = format!("`which` did not find docker: {e}");
                 debug!("Docker::is_supported: {msg}");
                 details.push_str(&format!("\n  {msg}"));
+                false
             }
-        }
+        };
 
         // Fallback: try to run `docker --version` directly.  On some
         // configurations (e.g. macOS Docker Desktop, Windows with non-standard
         // PATH), the `which` crate may miss the binary even though the shell
         // can resolve it.
-        match std::process::Command::new("docker")
-            .arg("--version")
-            .output()
-        {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let code = output
-                    .status
-                    .code()
-                    .map_or("none (signal?)".into(), |c| c.to_string());
-                debug!(
-                    "Docker::is_supported: `docker --version` exit_code={code}, stdout={stdout:?}, stderr={stderr:?}"
-                );
-                details.push_str(&format!(
-                    "\n  `docker --version` exit_code={code}, stdout={stdout:?}, stderr={stderr:?}"
-                ));
-                if output.status.success() {
-                    return Ok(());
+        let docker_found = docker_found
+            || match std::process::Command::new("docker")
+                .arg("--version")
+                .output()
+            {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    let code = output
+                        .status
+                        .code()
+                        .map_or("none (signal?)".into(), |c| c.to_string());
+                    debug!(
+                        "Docker::is_supported: `docker --version` exit_code={code}, stdout={stdout:?}, stderr={stderr:?}"
+                    );
+                    details.push_str(&format!(
+                        "\n  `docker --version` exit_code={code}, stdout={stdout:?}, stderr={stderr:?}"
+                    ));
+                    output.status.success()
                 }
-            }
-            Err(e) => {
-                let msg = format!("failed to spawn `docker --version`: {e}");
-                debug!("Docker::is_supported: {msg}");
-                details.push_str(&format!("\n  {msg}"));
-            }
+                Err(e) => {
+                    let msg = format!("failed to spawn `docker --version`: {e}");
+                    debug!("Docker::is_supported: {msg}");
+                    details.push_str(&format!("\n  {msg}"));
+                    false
+                }
+            };
+
+        if !docker_found {
+            return Err(anyhow::anyhow!(
+                "The `docker` binary was not found in $PATH.\nPlease install Docker and make sure it is accessible.\n  {details}"
+            ));
         }
 
-        Err(anyhow::anyhow!(
-            "The `docker` binary was not found in $PATH.\nPlease install Docker and make sure it is accessible.\n  {details}"
-        ))
+        // Binary found -- verify the Docker daemon is actually reachable.
+        // This catches cases where `docker.exe` exists in PATH but the Docker
+        // service / daemon is not running (e.g. Windows CI runners).
+        match std::process::Command::new("docker").args(["info"]).output() {
+            Ok(output) if output.status.success() => {
+                debug!("Docker::is_supported: daemon is reachable");
+                Ok(())
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let msg = format!(
+                    "Docker daemon is not running or not reachable (exit code {:?}): {}",
+                    output.status.code(),
+                    stderr
+                );
+                debug!("Docker::is_supported: {msg}");
+                Err(anyhow::anyhow!(
+                    "{msg}\n\nThe Docker daemon is not accessible.\nPlease start the Docker daemon and try again.\n  {details}"
+                ))
+            }
+            Err(e) => {
+                let msg = format!("failed to check Docker daemon connectivity: {e}");
+                debug!("Docker::is_supported: {msg}");
+                Err(anyhow::anyhow!(
+                    "{msg}\n\nThe Docker daemon could not be checked.\n  {details}"
+                ))
+            }
+        }
     }
 
     // ── Version ──────────────────────────────────────────────────────────────
