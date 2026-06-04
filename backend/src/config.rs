@@ -485,7 +485,7 @@ fn parse_env_var_line(line: &str) -> Option<EnvVarConfig> {
 }
 
 /// Save environment variable configuration to config.sh in a project directory.
-async fn save_project_config_by_path(
+pub(crate) async fn save_project_config_by_path(
     project_path: String,
     config: SavedProjectConfig,
 ) -> dioxus::Result<()> {

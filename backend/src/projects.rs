@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use colmap_openmvs_api::types::Project;
+use colmap_openmvs_api::types::{EnvVarConfig, Project, SavedProjectConfig};
 use dioxus::Result as DioxusResult;
 use std::path::Path;
 use tracing::{debug, error, info, warn};
@@ -88,11 +88,102 @@ pub async fn create_project(name: String) -> DioxusResult<Project> {
             anyhow!("Failed to create project: {}", e)
         })?;
 
+    // On Android devices write a default config.sh with conservative settings
+    // that prioritise stability on resource-constrained hardware (single-thread,
+    // reduced quality, lower memory usage).
+    if cfg!(target_os = "android") {
+        if let Err(e) = write_low_resource_project_config(&project_path, &settings).await {
+            warn!(
+                project_name = %name,
+                error = %e,
+                "Failed to write default config.sh, continuing without it"
+            );
+        } else {
+            debug!(
+                project_name = %name,
+                "Default config.sh written successfully"
+            );
+        }
+    }
+
     info!(project_name = %name, project_path = %project_path.display(), "Project created successfully");
     Ok(Project {
         name,
         path: project_path.to_string_lossy().to_string(),
     })
+}
+
+/// Write a default config.sh with conservative settings for low-resource / stability-oriented devices.
+/// Only called on Android builds.
+async fn write_low_resource_project_config(
+    project_path: &Path,
+    settings: &colmap_openmvs_api::Settings,
+) -> DioxusResult<()> {
+    let image_tag = settings
+        .parse_default_image()
+        .1
+        .unwrap_or("unknown")
+        .to_string();
+
+    let config = SavedProjectConfig {
+        image_tag,
+        environment_variables: vec![
+            EnvVarConfig {
+                name: "COLMAP_FEATURE_EXTRACTOR_ARGS".into(),
+                value: "--FeatureExtraction.num_threads=1 --SiftExtraction.max_num_features=2048 --SiftExtraction.first_octave=0 --SiftExtraction.peak_threshold=0.01".into(),
+            },
+            EnvVarConfig {
+                name: "COLMAP_MATCHER_ARGS".into(),
+                value: "--FeatureMatching.num_threads=1 --SiftMatching.max_ratio=0.85 --FeatureMatching.max_num_matches=8192".into(),
+            },
+            EnvVarConfig {
+                name: "COLMAP_MAPPER_ARGS".into(),
+                value: "--GlobalMapper.num_threads=1 --GlobalMapper.ba_ceres_max_num_iterations=50".into(),
+            },
+            EnvVarConfig {
+                name: "COLMAP_UNDISTORTER_ARGS".into(),
+                value: "--num_threads=1 --max_image_size=1600".into(),
+            },
+            EnvVarConfig {
+                name: "OPENMVS_INTERFACE_COLMAP_ARGS".into(),
+                value: "--max-threads=1".into(),
+            },
+            EnvVarConfig {
+                name: "OPENMVS_DENSIFY_POINT_CLOUD_ARGS".into(),
+                value: "--max-threads=1 --resolution-level=2 --max-resolution=1600".into(),
+            },
+            EnvVarConfig {
+                name: "OPENMVS_RECONSTRUCT_MESH_SPARSE_ARGS".into(),
+                value: "--max-threads=1".into(),
+            },
+            EnvVarConfig {
+                name: "OPENMVS_REFINE_MESH_SPARSE_ARGS".into(),
+                value: "--max-threads=1 --resolution-level=1".into(),
+            },
+            EnvVarConfig {
+                name: "OPENMVS_TEXTURE_MESH_SPARSE_ARGS".into(),
+                value: "--max-threads=1 --resolution-level=1".into(),
+            },
+            EnvVarConfig {
+                name: "OPENMVS_RECONSTRUCT_MESH_DENSE_ARGS".into(),
+                value: "--max-threads=1".into(),
+            },
+            EnvVarConfig {
+                name: "OPENMVS_REFINE_MESH_DENSE_ARGS".into(),
+                value: "--max-threads=1 --resolution-level=1".into(),
+            },
+            EnvVarConfig {
+                name: "OPENMVS_TEXTURE_MESH_DENSE_ARGS".into(),
+                value: "--max-threads=1 --resolution-level=1".into(),
+            },
+        ],
+        custom_script: None,
+    };
+
+    crate::config::save_project_config_by_path(project_path.to_string_lossy().into_owned(), config)
+        .await?;
+
+    Ok(())
 }
 
 pub async fn delete_project(name: String) -> DioxusResult<()> {

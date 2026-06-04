@@ -29,8 +29,8 @@ use zip::{CompressionMethod, ZipWriter};
 
 fn main() {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR not set"));
-    let target = std::env::var("TARGET").unwrap_or_default();
-    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    let target = std::env::var("TARGET").expect("TARGET must be set during cargo build");
+    let profile = std::env::var("PROFILE").expect("PROFILE must be set during cargo build");
 
     if !target.contains("android") {
         return;
@@ -78,8 +78,10 @@ fn main() {
     //          Also removes stale ABI jniLibs and the Gradle build cache so
     //          that a sequential arm64 + x86_64 build succeeds without error.
     patch_gradle_project(&profile);
-    copy_assets_to_jnilibs(&profile, &cache);
+    // Patch the cached proot binary BEFORE copying it to jniLibs so the
+    // patched version (RPATH=$ORIGIN, NEEDED libtalloc.so) ends up in the APK.
     patch_proot_binary(&cache);
+    copy_assets_to_jnilibs(&profile, &cache);
     remove_stale_build_artifacts(&profile);
 
     // ── Change-detection for cargo ───────────────────────────────────────
@@ -99,16 +101,11 @@ fn main() {
         .join("target")
         .join("android-cache")
         .join(".build-trigger");
-    let _ = std::fs::write(
-        &trigger,
-        format!(
-            "{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos(),
-        ),
-    );
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time before epoch")
+        .as_nanos();
+    std::fs::write(&trigger, nanos.to_string().as_bytes()).expect("write .build-trigger");
     println!("cargo:rerun-if-changed={}", trigger.display());
 }
 
@@ -177,7 +174,7 @@ fn image_digest(image: &str, platform: &str) -> String {
         .expect("docker image inspect failed");
     assert!(output.status.success(), "docker inspect failed for {image}");
     String::from_utf8(output.stdout)
-        .unwrap_or_default()
+        .expect("docker inspect output is valid UTF-8")
         .trim()
         .to_string()
 }
@@ -192,7 +189,7 @@ fn export_docker_tar(image: &str, platform: &str, dest: &Path) {
         "docker create failed for {image}"
     );
     let cid = String::from_utf8(cid_output.stdout)
-        .unwrap_or_default()
+        .expect("docker create output is valid UTF-8")
         .trim()
         .to_string();
 
@@ -205,7 +202,14 @@ fn export_docker_tar(image: &str, platform: &str, dest: &Path) {
     let status = child.wait().expect("docker export wait failed");
     assert!(status.success(), "docker export failed");
 
-    let _ = Command::new("docker").args(["rm", "-f", &cid]).output();
+    // Clean up the temporary container — best-effort is acceptable here.
+    if Command::new("docker")
+        .args(["rm", "-f", &cid])
+        .output()
+        .map_or(true, |o| !o.status.success())
+    {
+        eprintln!("  NOTE: docker rm -f {cid} failed (container may still exist)");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +239,7 @@ fn download_prerequisites(cache: &CacheDir, termux_arch: &str) {
         &PathBuf::new(),
     );
 
-    std::fs::write(cache.stamp("prereq"), b"").ok();
+    std::fs::write(cache.stamp("prereq"), b"").expect("write .stamp_prereq");
 }
 
 fn download_and_extract_deb(
@@ -279,8 +283,14 @@ fn download_and_extract_deb(
         } else if package == "libtalloc" {
             if let Some(name) = path.file_name() {
                 if name.to_string_lossy().starts_with("libtalloc.so") {
-                    entry.unpack(dest_bin).expect("extract libtalloc");
-                    eprintln!("  [libtalloc] → libtalloc.so");
+                    // The deb may contain multiple entries (e.g. libtalloc.so.2.3.4,
+                    // plus libtalloc.so.2 and libtalloc.so as symlinks).  Only
+                    // extract the first real file to avoid overwriting it with a
+                    // broken symlink.
+                    if !entry.header().entry_type().is_symlink() {
+                        entry.unpack(dest_bin).expect("extract libtalloc");
+                        eprintln!("  [libtalloc] → libtalloc.so");
+                    }
                 }
             }
         }
@@ -318,7 +328,7 @@ fn export_rootfs(cache: &CacheDir, image: &str, platform: &str) {
     }
     eprintln!("  Exporting rootfs from {image} …");
     export_docker_tar(image, platform, &cache.rootfs_tar());
-    std::fs::write(cache.stamp("rootfs_export"), b"").ok();
+    std::fs::write(cache.stamp("rootfs_export"), b"").expect("write .stamp_rootfs_export");
 }
 
 /// Extract the runtime config (env, entrypoint, cmd, working_dir) from a
@@ -339,7 +349,7 @@ fn image_config(image: &str, platform: &str) -> ImageConfig {
         .expect("docker image inspect failed");
     assert!(output.status.success(), "docker inspect failed for {image}");
 
-    let stdout = String::from_utf8(output.stdout).unwrap_or_default();
+    let stdout = String::from_utf8(output.stdout).expect("docker inspect output is valid UTF-8");
     #[allow(non_snake_case)]
     #[derive(serde::Deserialize)]
     struct DockerConfig {
@@ -370,8 +380,11 @@ fn build_rootfs_artifacts(cache: &CacheDir, tag: String, config: ImageConfig) {
     // Stale cache cleanup: old builds used `rootfs_files` instead of `rootfs_binaries`.
     let old_dir = cache.root.join("rootfs_files");
     if old_dir.exists() {
-        let _ = std::fs::remove_dir_all(&old_dir);
-        let _ = std::fs::remove_file(cache.stamp("split"));
+        std::fs::remove_dir_all(&old_dir).expect("remove stale rootfs_files");
+        let split_stamp = cache.stamp("split");
+        if split_stamp.exists() {
+            std::fs::remove_file(&split_stamp).expect("remove stale .stamp_split");
+        }
     }
 
     // Validate cached rootfs.zip: it MUST contain `.rootfs_manifest.json`.
@@ -392,13 +405,20 @@ fn build_rootfs_artifacts(cache: &CacheDir, tag: String, config: ImageConfig) {
         }
         eprintln!("  Cached rootfs.zip is stale (missing manifest) — regenerating");
         // Remove stale artifacts so we rebuild below.
-        let _ = std::fs::remove_file(cache.rootfs_zip());
-        let _ = std::fs::remove_file(cache.stamp("split"));
+        if cache.rootfs_zip().exists() {
+            std::fs::remove_file(cache.rootfs_zip()).expect("remove stale rootfs.zip");
+        }
+        let split_stamp = cache.stamp("split");
+        if split_stamp.exists() {
+            std::fs::remove_file(&split_stamp).expect("remove stale .stamp_split");
+        }
     }
     eprintln!("  Splitting rootfs into ELF / non-ELF …");
 
     let files_dir = cache.rootfs_binaries_dir();
-    let _ = std::fs::remove_dir_all(&files_dir);
+    if files_dir.exists() {
+        std::fs::remove_dir_all(&files_dir).expect("remove old rootfs_binaries");
+    }
     std::fs::create_dir_all(&files_dir).expect("create rootfs_binaries dir");
 
     let tar_file = std::fs::File::open(cache.rootfs_tar()).expect("open rootfs.tar");
@@ -417,7 +437,11 @@ fn build_rootfs_artifacts(cache: &CacheDir, tag: String, config: ImageConfig) {
 
         // Symlinks
         if entry.header().entry_type().is_symlink() {
-            if let Ok(Some(link_target)) = entry.link_name() {
+            let link_target = entry
+                .link_name()
+                .expect("read symlink target")
+                .unwrap_or_default();
+            if !link_target.as_os_str().is_empty() {
                 symlinks.insert(rel, link_target.to_string_lossy().to_string());
             }
             continue;
@@ -454,7 +478,10 @@ fn build_rootfs_artifacts(cache: &CacheDir, tag: String, config: ImageConfig) {
             );
         } else {
             let zip_path = path.strip_prefix("/").unwrap_or(&path);
-            let mode = entry.header().mode().unwrap_or(0o644);
+            let mode = entry
+                .header()
+                .mode()
+                .expect("tar entry should have mode bits");
             let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
                 .compression_method(CompressionMethod::Deflated)
                 .unix_permissions(mode);
@@ -491,9 +518,11 @@ fn build_rootfs_artifacts(cache: &CacheDir, tag: String, config: ImageConfig) {
     );
 
     // Clean up the tar — no longer needed now that we have the zip and binaries.
-    let _ = std::fs::remove_file(cache.rootfs_tar());
+    if cache.rootfs_tar().exists() {
+        std::fs::remove_file(cache.rootfs_tar()).expect("remove rootfs.tar");
+    }
 
-    std::fs::write(cache.stamp("split"), b"").ok();
+    std::fs::write(cache.stamp("split"), b"").expect("write .stamp_split");
 }
 
 // ---------------------------------------------------------------------------
@@ -557,10 +586,13 @@ fn write_cache_marker(profile: &str, cache: &CacheDir) {
     }
 
     let marker = app_dir.join(".rootfs_cache_dir");
-    let arch_abi = match std::env::var("TARGET").unwrap_or_default().as_str() {
+    let arch_abi = match std::env::var("TARGET")
+        .expect("TARGET must be set during cargo build")
+        .as_str()
+    {
         t if t.contains("aarch64") => "arm64-v8a",
         t if t.contains("x86_64") => "x86_64",
-        _ => return,
+        t => panic!("write_cache_marker: unsupported TARGET: {t}"),
     };
     std::fs::write(&marker, format!("{}\n{arch_abi}\n", cache.root.display()))
         .expect("write .rootfs_cache_dir");
@@ -592,36 +624,37 @@ fn patch_gradle_project(profile: &str) {
 
     // ── app/build.gradle.kts ───────────────────────────────────────────
     let app_gradle = app_dir.join("app").join("build.gradle.kts");
-    if app_gradle.exists() {
-        let content = std::fs::read_to_string(&app_gradle).unwrap_or_default();
-        let mut modified = content.clone();
+    if !app_gradle.exists() {
+        panic!("expected {} to exist", app_gradle.display());
+    }
+    let content = std::fs::read_to_string(&app_gradle).expect("read app/build.gradle.kts");
+    let mut modified = content.clone();
 
-        // useLegacyPackaging
-        if !modified.contains("useLegacyPackaging") {
-            modified = modified.replace(
-                "android {",
-                "android {\n    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }",
-            );
-        }
+    // useLegacyPackaging
+    if !modified.contains("useLegacyPackaging") {
+        modified = modified.replace(
+            "android {",
+            "android {\n    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }",
+        );
+    }
 
-        // Bump compileSdk / targetSdk to 36.
-        modified = set_kv(&modified, "compileSdk", "36");
-        modified = set_kv(&modified, "targetSdk", "36");
+    // Bump compileSdk / targetSdk to 36.
+    modified = set_kv(&modified, "compileSdk", "36");
+    modified = set_kv(&modified, "targetSdk", "36");
 
-        // Time-based versionCode (minutes since 2026-01-01).
-        modified = set_kv(&modified, "versionCode", &minutes_since_2026().to_string());
+    // Time-based versionCode (minutes since 2026-01-01).
+    modified = set_kv(&modified, "versionCode", &minutes_since_2026().to_string());
 
-        // versionName
-        let desc = git_describe().unwrap_or_else(|| "0.0.0".into());
-        let hash = git_short_hash().unwrap_or_else(|| "unknown".into());
-        let dirty = if git_is_dirty() { "-dirty" } else { "" };
-        let hash = format!("{}{}", hash, dirty);
-        modified = set_kv_str(&modified, "versionName", &format!("{desc}+{hash}"));
+    // versionName
+    let desc = git_describe().unwrap_or_else(|| "0.0.0".into());
+    let hash = git_short_hash().unwrap_or_else(|| "unknown".into());
+    let dirty = if git_is_dirty() { "-dirty" } else { "" };
+    let hash = format!("{}{}", hash, dirty);
+    modified = set_kv_str(&modified, "versionName", &format!("{desc}+{hash}"));
 
-        if modified != content {
-            std::fs::write(&app_gradle, &modified).expect("write build.gradle.kts");
-            eprintln!("  Patched app/build.gradle.kts");
-        }
+    if modified != content {
+        std::fs::write(&app_gradle, &modified).expect("write build.gradle.kts");
+        eprintln!("  Patched app/build.gradle.kts");
     }
 
     // ── AndroidManifest.xml ─────────────────────────────────────────────
@@ -631,7 +664,7 @@ fn patch_gradle_project(profile: &str) {
         .join("main")
         .join("AndroidManifest.xml");
     if manifest.exists() {
-        let content = std::fs::read_to_string(&manifest).unwrap_or_default();
+        let content = std::fs::read_to_string(&manifest).expect("read AndroidManifest.xml");
         let mut modified = content.clone();
 
         // android:extractNativeLibs="true"
@@ -669,7 +702,7 @@ fn patch_gradle_project(profile: &str) {
         .join("WryActivity.kt");
 
     if wry_activity_kt.exists() {
-        let content = std::fs::read_to_string(&wry_activity_kt).unwrap_or_default();
+        let content = std::fs::read_to_string(&wry_activity_kt).expect("read WryActivity.kt");
         let mut modified = content.clone();
 
         // Only patch if we haven't already (idempotent).
@@ -715,10 +748,13 @@ fn patch_gradle_project(profile: &str) {
 /// directly into the jniLibs directory so they end up in the APK.
 /// This replaces the old Gradle `copyRootfsToJniLibs` task approach.
 fn copy_assets_to_jnilibs(profile: &str, cache: &CacheDir) {
-    let arch_abi = match std::env::var("TARGET").unwrap_or_default().as_str() {
+    let arch_abi = match std::env::var("TARGET")
+        .expect("TARGET must be set during cargo build")
+        .as_str()
+    {
         t if t.contains("aarch64") => "arm64-v8a",
         t if t.contains("x86_64") => "x86_64",
-        _ => return,
+        t => panic!("copy_assets_to_jnilibs: unsupported TARGET: {t}"),
     };
 
     let app_dir = project_root()
@@ -748,16 +784,14 @@ fn copy_assets_to_jnilibs(profile: &str, cache: &CacheDir) {
     // When building sequentially (e.g. arm64 then x86_64) the Gradle
     // packager fails if it finds native libs from multiple ABIs.
     if let Some(jni_parent) = jni_dir.parent() {
-        if let Ok(entries) = std::fs::read_dir(jni_parent) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let name = entry.file_name();
-                    let name_str = name.to_string_lossy();
-                    if name_str != arch_abi && entry.path().is_dir() {
-                        let _ = std::fs::remove_dir_all(&entry.path());
-                        eprintln!("  Removed stale jniLibs/{name_str}");
-                    }
-                }
+        for entry in std::fs::read_dir(jni_parent).expect("read jniLibs parent directory") {
+            let entry = entry.expect("read jniLibs entry");
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str != arch_abi && entry.path().is_dir() {
+                std::fs::remove_dir_all(&entry.path())
+                    .expect(&format!("remove stale jniLibs/{name_str}"));
+                eprintln!("  Removed stale jniLibs/{name_str}");
             }
         }
     }
@@ -773,11 +807,12 @@ fn copy_assets_to_jnilibs(profile: &str, cache: &CacheDir) {
     for (src_name, dst_name) in mappings {
         let src = cache.root.join(src_name);
         let dst = jni_dir.join(dst_name);
-        if src.exists() {
-            std::fs::copy(&src, &dst).expect(&format!("copy {src_name} → {dst_name}"));
-            set_executable(&dst);
-            eprintln!("  Copied {src_name} → {dst_name}");
+        if !src.exists() {
+            panic!("required source {} not found", src.display());
         }
+        std::fs::copy(&src, &dst).expect(&format!("copy {src_name} → {dst_name}"));
+        set_executable(&dst);
+        eprintln!("  Copied {src_name} → {dst_name}");
     }
 
     // Copy ELF files from rootfs_binaries as librootfs-<hash>.so
@@ -789,19 +824,21 @@ fn copy_assets_to_jnilibs(profile: &str, cache: &CacheDir) {
     // Quick idempotency check: count existing librootfs-*.so files
     // and compare to the number in rootfs_binaries.
     let existing_count = std::fs::read_dir(&jni_dir)
-        .map(|it| {
-            it.filter_map(|e| e.ok())
-                .filter(|e| e.file_name().to_string_lossy().starts_with("librootfs-"))
-                .count()
+        .expect("read jniLibs dir for idempotency check")
+        .map(|e| {
+            let e = e.expect("read jniLibs dir entry");
+            e.file_name().to_string_lossy().starts_with("librootfs-")
         })
-        .unwrap_or(0);
+        .filter(|&b| b)
+        .count();
     let expected_count = std::fs::read_dir(&bin_dir)
-        .map(|it| {
-            it.filter_map(|e| e.ok())
-                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-                .count()
+        .expect("read rootfs_binaries dir for idempotency check")
+        .map(|e| {
+            let e = e.expect("read rootfs_binaries dir entry");
+            !e.file_name().to_string_lossy().starts_with('.')
         })
-        .unwrap_or(0);
+        .filter(|&b| b)
+        .count();
 
     if existing_count >= expected_count && existing_count > 0 {
         eprintln!(
@@ -833,34 +870,48 @@ fn patch_proot_binary(cache: &CacheDir) {
         return;
     }
 
-    // Check if patchelf is available by running it with --version.
-    if Command::new("patchelf").arg("--version").output().is_err() {
-        eprintln!("  NOTE: patchelf not found — skipping proot RPATH patching");
-        return;
-    }
+    // Verify patchelf is available.
+    let check = Command::new("patchelf")
+        .arg("--version")
+        .output()
+        .expect("failed to execute patchelf");
+    assert!(
+        check.status.success(),
+        "patchelf --version failed:\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
 
-    let output = Command::new("patchelf")
+    // Set RPATH to $ORIGIN so proot finds libtalloc in its own directory.
+    let rpath = Command::new("patchelf")
         .arg("--set-rpath")
         .arg("$ORIGIN")
         .arg(&proot_path)
-        .output();
-    if let Ok(o) = &output {
-        if o.status.success() {
-            eprintln!("  Patched proot RPATH");
-        }
-    }
+        .output()
+        .expect("failed to execute patchelf --set-rpath");
+    assert!(
+        rpath.status.success(),
+        "patchelf --set-rpath \"$ORIGIN\" {} failed:\n{}",
+        proot_path.display(),
+        String::from_utf8_lossy(&rpath.stderr)
+    );
+    eprintln!("  Patched proot RPATH ($ORIGIN)");
 
-    let output = Command::new("patchelf")
+    // Replace NEEDED libtalloc.so.2 → libtalloc.so so the Android linker
+    // finds the versionless name we ship as libtalloc.so in jniLibs.
+    let needed = Command::new("patchelf")
         .arg("--replace-needed")
         .arg("libtalloc.so.2")
         .arg("libtalloc.so")
         .arg(&proot_path)
-        .output();
-    if let Ok(o) = &output {
-        if o.status.success() {
-            eprintln!("  Patched proot NEEDED (libtalloc.so.2 → libtalloc.so)");
-        }
-    }
+        .output()
+        .expect("failed to execute patchelf --replace-needed");
+    assert!(
+        needed.status.success(),
+        "patchelf --replace-needed libtalloc.so.2 libtalloc.so {} failed:\n{}",
+        proot_path.display(),
+        String::from_utf8_lossy(&needed.stderr)
+    );
+    eprintln!("  Patched proot NEEDED (libtalloc.so.2 → libtalloc.so)");
 }
 
 /// Remove the stale Gradle build cache so that a sequential arm64 + x86_64 build succeeds without error.
@@ -876,7 +927,8 @@ fn remove_stale_build_artifacts(profile: &str) {
         .join("intermediates")
         .join("incremental");
     if maybe_stale_build_cache.exists() {
-        let _ = std::fs::remove_dir_all(&maybe_stale_build_cache);
+        std::fs::remove_dir_all(&maybe_stale_build_cache)
+            .expect("remove stale Gradle incremental build cache");
         eprintln!("  Removed stale Gradle build cache");
     }
 }
@@ -1006,7 +1058,7 @@ fn fetch_url(url: &str) -> String {
         .output()
         .expect("curl not found — is curl installed?");
     assert!(output.status.success(), "curl failed for {url}");
-    String::from_utf8(output.stdout).unwrap_or_default()
+    String::from_utf8(output.stdout).expect("curl output is valid UTF-8")
 }
 
 fn fetch_url_bytes(url: &str) -> Vec<u8> {
@@ -1070,14 +1122,15 @@ fn set_executable(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).ok();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .expect(&format!("chmod 755 {}", path.display()));
     }
 }
 
 fn minutes_since_2026() -> i64 {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
+        .expect("system time before Unix epoch")
         .as_secs() as i64;
     // Unix timestamp for 2026-01-01 00:00:00 UTC
     const EPOCH_2026: i64 = 1767225600;
