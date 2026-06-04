@@ -16,10 +16,6 @@
 pub async fn get_dark_mode() -> dioxus::Result<Option<bool>> {
     #[cfg(target_os = "android")]
     {
-        // Hacky side effect to disable Android 15+ edge-to-edge default so content doesn't render behind system bars.
-        if let Err(err) = disable_edge_to_edge() {
-            tracing::warn!(error = %err, "Failed to disable Android edge-to-edge mode; content may render partially behind system bars");
-        }
         return Ok(Some(detect_android_dark_mode()?));
     }
 
@@ -99,72 +95,55 @@ fn detect_android_dark_mode() -> anyhow::Result<bool> {
 }
 
 #[cfg(target_os = "android")]
-fn disable_edge_to_edge() -> anyhow::Result<()> {
+pub fn disable_edge_to_edge() -> anyhow::Result<()> {
     use jni::objects::JValue;
 
     let (vm, context) = grab_vm_and_context()?;
     let mut env = vm.attach_current_thread()?;
 
-    // ── Disable edge-to-edge ───────────────────────────────────────────
-    // Android 15+ renders app content behind system bars by default.
-    // We opt out via Window.setDecorFitsSystemWindows(true).
-    if let Ok(sdk_class) = env.find_class("android/os/Build$VERSION") {
-        if let Ok(sdk_field) = env.get_static_field(&sdk_class, "SDK_INT", "I") {
-            if let Ok(sdk_int) = sdk_field.i() {
-                // Try to get the Window object from the Activity context.
-                if let Ok(window_result) =
-                    env.call_method(&context, "getWindow", "()Landroid/view/Window;", &[])
-                {
-                    if let Ok(window) = window_result.l() {
-                        if sdk_int >= 35 {
-                            // API 35+: Window.setDecorFitsSystemWindows(true)
-                            let _ = env.call_method(
-                                &window,
-                                "setDecorFitsSystemWindows",
-                                "(Z)V",
-                                &[JValue::Bool(true.into())],
-                            );
-                            return Ok(());
-                        } else {
-                            // Older: Window.addFlags(FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-                            if let Ok(lp_class) =
-                                env.find_class("android/view/WindowManager$LayoutParams")
-                            {
-                                if let Ok(flag_field) = env.get_static_field(
-                                    &lp_class,
-                                    "FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS",
-                                    "I",
-                                ) {
-                                    if let Ok(flag) = flag_field.i() {
-                                        let _ = env.call_method(
-                                            &window,
-                                            "addFlags",
-                                            "(I)V",
-                                            &[JValue::Int(flag)],
-                                        );
-                                    }
-                                }
-                            }
-                            return Ok(());
-                        }
-                    }
-                    return Err(anyhow::anyhow!(
-                        "getWindow() succeeded but return type error: expected Window object"
-                    ));
-                }
-                return Err(anyhow::anyhow!(
-                    "Failed to call getWindow() on context to disable edge-to-edge"
-                ));
-            }
-            return Err(anyhow::anyhow!(
-                "SDK_INT field access failed or type error: expected int"
-            ));
-        }
-        return Err(anyhow::anyhow!(
-            "SDK_INT field not found in Build.VERSION class"
-        ));
+    // ── Only API 35+ enforces edge-to-edge ───────────────────────────
+    let sdk_class = env.find_class("android/os/Build$VERSION")?;
+    let sdk_field = env.get_static_field(&sdk_class, "SDK_INT", "I")?;
+    let sdk_int = sdk_field.i()?;
+
+    if sdk_int < 35 {
+        // Before Android 15 edge-to-edge was opt-in, not enforced.
+        tracing::trace!("SDK {sdk_int} < 35 – edge-to-edge not enforced, skipping");
+        return Ok(());
     }
-    return Err(anyhow::anyhow!(
-        "Build.VERSION class not found for SDK_INT access"
-    ));
+
+    // ── Check that context is an Activity (needed for getWindow()) ────
+    // ndk_context only guarantees a plain android.content.Context.
+    // getWindow() is defined on Activity, so we must verify first.
+    let activity_class = env.find_class("android/app/Activity")?;
+    let is_activity = env.is_instance_of(&context, &activity_class)?;
+    if !is_activity {
+        anyhow::bail!(
+            "Context is not an Activity, cannot call getWindow(). \
+             Falling back to AndroidManifest theme opt-out if available."
+        );
+    }
+
+    // ── Get the Window object ─────────────────────────────────────────
+    let window = env
+        .call_method(&context, "getWindow", "()Landroid/view/Window;", &[])
+        .and_then(|w| w.l())
+        .map_err(|e| anyhow::anyhow!("getWindow() failed: {e}"))?;
+
+    // ── Opt out of edge-to-edge ───────────────────────────────────────
+    // Window.setDecorFitsSystemWindows(true) tells the Window to draw
+    // its own backgrounds behind system bars instead of letting content
+    // draw there. This works on API 35+ (deprecated on 36+ but still
+    // functional at least through Android 16).
+    let _ = env
+        .call_method(
+            &window,
+            "setDecorFitsSystemWindows",
+            "(Z)V",
+            &[JValue::Bool(true.into())],
+        )
+        .map_err(|e| anyhow::anyhow!("setDecorFitsSystemWindows() failed: {e}"))?;
+    tracing::debug!("Disabled edge-to-edge via Window.setDecorFitsSystemWindows(true)");
+
+    Ok(())
 }

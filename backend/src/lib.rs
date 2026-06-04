@@ -54,6 +54,8 @@ mod pipeline;
 pub use pipeline::run_pipeline;
 
 mod theme;
+#[cfg(target_os = "android")]
+pub use theme::disable_edge_to_edge;
 pub use theme::get_dark_mode;
 
 mod process;
@@ -163,9 +165,9 @@ pub async fn get_project_output_bytes(
     let bytes = tokio::fs::read(&full_path)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e))?;
-    Ok(ByteStream::new(
-        futures::stream::once(async move { Bytes::from(bytes) }),
-    ))
+    Ok(ByteStream::new(futures::stream::once(async move {
+        Bytes::from(bytes)
+    })))
 }
 
 /// Delete an output file from a project.

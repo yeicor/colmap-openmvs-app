@@ -157,5 +157,19 @@ pub fn log_build_info() {
 fn main() {
     init_logging();
     init_backend();
+
+    // Disable Android 15+ edge-to-edge enforcement *before* the Dioxus
+    // renderer initialises and creates the WebView.  The Window flag must
+    // be set before the first frame is drawn to have any effect.
+    #[cfg(all(target_os = "android", feature = "server"))]
+    {
+        if let Err(e) = colmap_openmvs_backend::disable_edge_to_edge() {
+            tracing::warn!(
+                error = %e,
+                "Failed to disable edge-to-edge — content may appear behind system bars"
+            );
+        }
+    }
+
     dioxus::launch(App);
 }

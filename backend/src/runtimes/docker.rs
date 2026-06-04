@@ -81,27 +81,60 @@ impl Runtime for Docker {
     // ── Support check ────────────────────────────────────────────────────────
 
     fn is_supported(&self) -> RuntimeResult<()> {
-        // Fast path: check PATH via `which`
-        if which::which("docker").is_ok() {
-            return Ok(());
+        let path = std::env::var("PATH").unwrap_or_default();
+        debug!(
+            "Docker::is_supported: checking PATH entries: {}",
+            path.split(':').collect::<Vec<_>>().join(", ")
+        );
+
+        let mut details = format!("PATH={path}");
+
+        match which::which("docker") {
+            Ok(p) => {
+                debug!("Docker::is_supported: found via `which` at {}", p.display());
+                return Ok(());
+            }
+            Err(e) => {
+                let msg = format!("`which` did not find docker: {e}");
+                debug!("Docker::is_supported: {msg}");
+                details.push_str(&format!("\n  {msg}"));
+            }
         }
 
         // Fallback: try to run `docker --version` directly.  On some
         // configurations (e.g. macOS Docker Desktop, Windows with non-standard
         // PATH), the `which` crate may miss the binary even though the shell
         // can resolve it.
-        if let Ok(output) = std::process::Command::new("docker")
+        match std::process::Command::new("docker")
             .arg("--version")
             .output()
         {
-            if output.status.success() {
-                return Ok(());
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let code = output
+                    .status
+                    .code()
+                    .map_or("none (signal?)".into(), |c| c.to_string());
+                debug!(
+                    "Docker::is_supported: `docker --version` exit_code={code}, stdout={stdout:?}, stderr={stderr:?}"
+                );
+                details.push_str(&format!(
+                    "\n  `docker --version` exit_code={code}, stdout={stdout:?}, stderr={stderr:?}"
+                ));
+                if output.status.success() {
+                    return Ok(());
+                }
+            }
+            Err(e) => {
+                let msg = format!("failed to spawn `docker --version`: {e}");
+                debug!("Docker::is_supported: {msg}");
+                details.push_str(&format!("\n  {msg}"));
             }
         }
 
         Err(anyhow::anyhow!(
-            "The `docker` binary was not found in $PATH. \
-             Please install Docker and make sure it is accessible."
+            "The `docker` binary was not found in $PATH.\nPlease install Docker and make sure it is accessible.\n  {details}"
         ))
     }
 
@@ -316,7 +349,8 @@ impl Runtime for Docker {
 
                 if std::path::Path::new(&host_path).exists() {
                     debug!(host_path = %host_path, container_path = %container_path, "run: adding custom mount");
-                    cmd.arg("-v").arg(format!("{}:{}", host_path, container_path));
+                    cmd.arg("-v")
+                        .arg(format!("{}:{}", host_path, container_path));
                 } else {
                     warn!(host_path = %host_path, "run: skipping custom mount, host path does not exist");
                 }

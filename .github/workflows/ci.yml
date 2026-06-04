@@ -67,7 +67,7 @@ jobs:
         run: |
           # cargo build --release --features server,desktop -vv # helps detect errors
           $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --features server --verbose
-          cargo test --workspace --all-targets --all-features
+          RUST_LOG=debug,h2=info cargo test --workspace --all-targets --all-features -- --show-output
         env:
           CARGO_TERM_VERBOSE: true
           CARGO_TERM_COLOR: always

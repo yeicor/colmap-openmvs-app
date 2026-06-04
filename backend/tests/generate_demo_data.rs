@@ -10,8 +10,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::time::{sleep, Duration};
 
+/// Initialize tracing for the test, respecting `RUST_LOG` if set.
+fn init_tracing() {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+}
+
 #[tokio::test]
 async fn test_generate_demo_data() {
+    init_tracing();
     let out_dir = env::var("DEMO_ASSETS_DIR").unwrap_or_else(|_| {
         let manifest = env::var("CARGO_MANIFEST_DIR").unwrap();
         format!("{}/../app/assets/demo", manifest)
@@ -80,7 +89,13 @@ async fn test_generate_demo_data() {
                 .await
                 .expect("Docker check failed");
             if !docker_info.supported {
-                panic!("Neither PRoot nor Docker are supported on this platform!");
+                let reason = docker_info
+                    .unsupported_reason
+                    .as_deref()
+                    .unwrap_or("unknown");
+                panic!(
+                    "Neither PRoot nor Docker are supported on this platform!\n  Docker unsupported reason: {reason}"
+                );
             }
 
             // Switch to docker

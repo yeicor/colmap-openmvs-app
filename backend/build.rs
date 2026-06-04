@@ -632,17 +632,98 @@ fn patch_gradle_project(profile: &str) {
         .join("AndroidManifest.xml");
     if manifest.exists() {
         let content = std::fs::read_to_string(&manifest).unwrap_or_default();
-        if !content.contains("extractNativeLibs") {
-            let modified = content.replacen(
+        let mut modified = content.clone();
+
+        // android:extractNativeLibs="true"
+        if !modified.contains("extractNativeLibs") {
+            modified = modified.replacen(
                 "<application",
                 "<application android:extractNativeLibs=\"true\"",
                 1,
             );
-            if modified != content {
-                std::fs::write(&manifest, &modified).expect("write AndroidManifest.xml");
-                eprintln!("  Patched AndroidManifest.xml (extractNativeLibs=true)");
+        }
+
+        // Ensure the manifest references our theme (for edge-to-edge opt-out).
+        // If no android:theme is set on <application>, add one pointing to @style/AppTheme.
+        if !modified.contains("android:theme") {
+            modified = modified.replacen(
+                "<application",
+                "<application android:theme=\"@style/AppTheme\"",
+                1,
+            );
+        }
+
+        if modified != content {
+            std::fs::write(&manifest, &modified).expect("write AndroidManifest.xml");
+            eprintln!("  Patched AndroidManifest.xml (extractNativeLibs + theme ref)");
+        }
+    }
+
+    // ── Theme XML (res/values/themes.xml) ───────────────────────────────
+    // Add windowOptOutEdgeToEdgeEnforcement to opt out of Android 15+
+    // edge-to-edge enforcement at the theme level (works on API ≤ 35).
+    // On API 36+ this attribute is ignored, so the JNI approach in theme.rs
+    // is the primary mechanism.
+    let themes_xml = app_dir
+        .join("app")
+        .join("src")
+        .join("main")
+        .join("res")
+        .join("values")
+        .join("themes.xml");
+    // Fall back to the legacy styles.xml path
+    let styles_xml = app_dir
+        .join("app")
+        .join("src")
+        .join("main")
+        .join("res")
+        .join("values")
+        .join("styles.xml");
+
+    // Helper to patch a theme XML file.
+    let patch_theme_file = |path: &std::path::Path| -> bool {
+        if !path.exists() {
+            return false;
+        }
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        if content.contains("windowOptOutEdgeToEdgeEnforcement") {
+            return false; // already patched
+        }
+        // Insert into the first <style> block (typically AppTheme).
+        if let Some(style_start) = content.find("<style") {
+            // Find the opening brace of that style block
+            if let Some(brace) = content[style_start..].find('>') {
+                let insert_at = style_start + brace + 1;
+                let item = "\n        <item name=\"android:windowOptOutEdgeToEdgeEnforcement\">true</item>";
+                let modified =
+                    format!("{}{}{}", &content[..insert_at], item, &content[insert_at..],);
+                if modified != content {
+                    std::fs::write(path, &modified).expect("write themes.xml");
+                    return true;
+                }
             }
         }
+        false
+    };
+
+    if patch_theme_file(&themes_xml) {
+        eprintln!("  Patched themes.xml (windowOptOutEdgeToEdgeEnforcement=true)");
+    } else if patch_theme_file(&styles_xml) {
+        eprintln!("  Patched styles.xml (windowOptOutEdgeToEdgeEnforcement=true)");
+    } else {
+        // No existing theme file — create one with the opt-out.
+        if let Some(parent) = themes_xml.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let theme_content = r##"<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+    </style>
+</resources>
+"##;
+        std::fs::write(&themes_xml, theme_content).expect("write themes.xml");
+        eprintln!("  Created themes.xml with windowOptOutEdgeToEdgeEnforcement=true");
     }
 }
 
