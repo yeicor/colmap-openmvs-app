@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   check-image-updates:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       should-build: ${{ steps.check.outputs.should-build }}
       digest: ${{ steps.check.outputs.digest }}
@@ -112,13 +112,13 @@ jobs:
             librsvg2-dev \
             lld
 
-      - uses: actions/setup-java@v4
-        with:
-          java-version: "17"
-          distribution: "temurin"
-      - uses: android-actions/setup-android@v2
-        with:
-          packages: "build-tools;36.1.0 cmake;4.1.2 cmdline-tools;latest ndk;30.0.14904198 platform-tools platforms;android-36"
+      # - uses: actions/setup-java@v4
+      #   with:
+      #     java-version: "17"
+      #     distribution: "temurin"
+      # - uses: android-actions/setup-android@v2
+      #   with:
+      #     packages: "build-tools;36.1.0 cmake;4.1.2 cmdline-tools;latest ndk;30.0.14904198 platform-tools platforms;android-36"
 
       - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
@@ -130,7 +130,6 @@ jobs:
         env:
           CARGO_TERM_VERBOSE: true
           CARGO_TERM_COLOR: always
-          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/30.0.14904198
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
