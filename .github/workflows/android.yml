@@ -112,6 +112,14 @@ jobs:
             librsvg2-dev \
             lld
 
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+      - uses: android-actions/setup-android@v2
+        with:
+          packages: "build-tools;36.1.0 cmake;4.1.2 cmdline-tools;latest ndk;30.0.14904198 platform-tools platforms;android-36"
+
       - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
 
