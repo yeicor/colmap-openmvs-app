@@ -638,9 +638,9 @@ fn patch_gradle_project(profile: &str) {
         );
     }
 
-    // Bump compileSdk / targetSdk to 35.
-    modified = set_kv(&modified, "compileSdk", "35");
-    modified = set_kv(&modified, "targetSdk", "35");
+    // Bump compileSdk / targetSdk to 36.
+    modified = set_kv(&modified, "compileSdk", "34");
+    modified = set_kv(&modified, "targetSdk", "34");
 
     // Time-based versionCode (minutes since 2026-01-01).
     modified = set_kv(&modified, "versionCode", &minutes_since_2026().to_string());
