@@ -120,6 +120,8 @@ jobs:
           dx bundle --android --package-types aab --features server --target x86_64-linux-android
           dx bundle --android --package-types aab --features server --target aarch64-linux-android
         env:
+          CARGO_TERM_VERBOSE: true
+          CARGO_TERM_COLOR: always
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}

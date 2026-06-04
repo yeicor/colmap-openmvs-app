@@ -316,18 +316,10 @@
     border-color: var(--primary-color-5);
 }
 
-.task-card-cancel {
-    /* Override for cancel button */
-}
-
 .task-card-cancel:hover {
     background: var(--primary-error-color);
     border-color: var(--secondary-error-color);
     color: var(--secondary-error-color);
-}
-
-.task-card-forget {
-    /* Override for forget button */
 }
 
 .task-card-forget:hover {
