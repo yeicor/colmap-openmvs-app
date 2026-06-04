@@ -170,7 +170,8 @@
 }
 
 .tasks-drawer-body {
-    flex: 1;
+    flex: 1 1 0; /* Prevent flex-shrink from collapsing */
+    min-height: 0; /* Allow shrinking below content size — critical for nested overflow */
     overflow-y: auto;
     padding: 0.75rem;
     display: flex;
@@ -203,6 +204,19 @@
     border-radius: 8px;
     overflow: hidden;
     background: var(--primary-color-3);
+    min-width: 0; /* Allow flex items to shrink below content size */
+    animation: fade-slide-in 0.3s ease-out both;
+}
+
+@keyframes fade-slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .task-card--running {
@@ -227,6 +241,7 @@
     user-select: none;
     transition: background 0.2s;
     color: var(--secondary-color);
+    min-width: 0; /* Allow meta to shrink below content size */
 }
 
 .task-card-header:hover {
@@ -275,6 +290,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0; /* Allow shrinking below content */
 }
 
 .task-card-actions {
@@ -332,10 +348,12 @@
     height: 3px;
     background: var(--primary-color-6);
     overflow: hidden;
+    min-width: 0;
 }
 
 .task-card-progress-fill {
     height: 100%;
+    max-width: 100%; /* Safety net: never exceed track bounds */
     background: var(--secondary-info-color);
     transition: width 0.4s ease;
 }
@@ -343,7 +361,8 @@
 /* ── Log lines ──────────────────────────────────────────── */
 
 .task-card-logs {
-    max-height: 50vh;
+    /* Clamp logs to a sensible height within the drawer, never overflowing it. */
+    max-height: min(100% - 60px, 100vh - 180px);
     overflow-y: auto;
     padding: 0.5rem 0.75rem;
     border-top: 1px solid var(--primary-color-6);
@@ -351,6 +370,7 @@
     display: flex;
     flex-direction: column;
     gap: 0;
+    min-width: 0; /* Prevent overflow in narrow containers */
 }
 
 .task-card-log-line {
@@ -361,6 +381,7 @@
     white-space: pre-wrap;
     word-break: break-all;
     flex-shrink: 0;
+    min-width: 0; /* Prevent flex overflow */
 }
 
 .task-card-logs-empty {
