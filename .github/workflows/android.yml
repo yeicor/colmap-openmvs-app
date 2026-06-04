@@ -130,6 +130,7 @@ jobs:
         env:
           CARGO_TERM_VERBOSE: true
           CARGO_TERM_COLOR: always
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/30.0.14904198
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
