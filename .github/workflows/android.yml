@@ -120,35 +120,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: "platform-tools cmdline-tools;latest build-tools;36.1.0 cmake;4.1.2 platforms;android-36"
-
-      - name: Install Android NDK r26d
-        shell: bash
-        run: |
-          NDK_VERSION="26.3.11579264"
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-          echo "SDK_ROOT=$SDK_ROOT"
-          NDK_DIR="$SDK_ROOT/ndk/$NDK_VERSION"
-          if [ -d "$NDK_DIR" ]; then
-            echo "NDK already installed at $NDK_DIR"
-          else
-            echo "Downloading NDK r26d..."
-            # Download from Google's official NDK releases
-            curl -L -o /tmp/ndk.zip \
-              "https://dl.google.com/android/repository/android-ndk-r26d-linux.zip"
-            unzip -q /tmp/ndk.zip -d /tmp/ndk-extract
-            mkdir -p "$SDK_ROOT/ndk/"
-            mv /tmp/ndk-extract/android-ndk-r26d "$NDK_DIR"
-            rm -rf /tmp/ndk.zip /tmp/ndk-extract
-            echo "NDK installed at $NDK_DIR"
-          fi
-          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
-          TOOLCHAIN_PATH="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          echo "$TOOLCHAIN_PATH" >> "$GITHUB_PATH"
-          echo "CC_x86_64-linux-android=$TOOLCHAIN_PATH/x86_64-linux-android21-clang" >> "$GITHUB_ENV"
-          echo "AR_x86_64-linux-android=$TOOLCHAIN_PATH/llvm-ar" >> "$GITHUB_ENV"
-          echo "CC_aarch64-linux-android=$TOOLCHAIN_PATH/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
-          echo "AR_aarch64-linux-android=$TOOLCHAIN_PATH/llvm-ar" >> "$GITHUB_ENV"
+          packages: "platform-tools cmdline-tools;latest build-tools;36.1.0 cmake;4.1.2 platforms;android-34"
 
       - shell: bash
         run: |
@@ -157,28 +129,17 @@ jobs:
       - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
 
-      - name: Verify NDK setup
-        shell: bash
-        run: |
-          set +e
-          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}"
-          ls -la "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android"*-clang 2>/dev/null || echo "No x86_64 clang found"
-          echo "=== libunwind check ==="
-          find "${ANDROID_NDK_HOME}" -name "*unwind*" 2>/dev/null || echo "No libunwind"
-          echo "=== NDK version ==="
-          cat "${ANDROID_NDK_HOME}/source.properties" 2>/dev/null || echo "No source.properties"
-
       - shell: bash
         run: |
-          # Direct cargo build to see the actual error (dx bundle hides it)
-          NDK_SYSROOT="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          echo "Sysroot: $NDK_SYSROOT"
-          echo "Android target lib dirs:"
-          ls -d "$NDK_SYSROOT/usr/lib/x86_64-linux-android"/*/ 2>/dev/null || echo "no x86_64 lib subdirs"
-          echo "Trying cargo build with dx bundle's settings..."
-          export RUSTFLAGS="-C link-arg=-landroid -C link-arg=-llog -C link-arg=-lOpenSLES -C link-arg=-lc++abi -C link-arg=-Wl,--export-dynamic -C link-arg=-Wl,--sysroot=${NDK_SYSROOT} -C link-arg=-Wl,-z,max-page-size=16384"
-          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang"
-          cargo build --target x86_64-linux-android --features server --release --color always 2>&1 || true
+          # Debug NDK layout and test a minimal Android link
+          echo "=== NDK info ==="
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          ls "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/" | grep "x86_64-linux-android" | sort | head -10
+          echo "=== Test linking ==="
+          echo 'int main(){}' > /tmp/test.c && \
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android28-clang" \
+            -o /tmp/test /tmp/test.c -llog 2>&1 && \
+          echo "Linking test PASSED" || echo "Linking test FAILED"
 
       - shell: bash
         run: |
