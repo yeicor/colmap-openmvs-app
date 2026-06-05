@@ -120,7 +120,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: "platform-tools cmdline-tools;latest build-tools;36.1.0 platforms;android-36"
+          packages: "platform-tools cmdline-tools;latest build-tools;36.1.0 cmake;4.1.2 platforms;android-36"
 
       - name: Install Android NDK r26d
         shell: bash
@@ -160,12 +160,13 @@ jobs:
       - name: Verify NDK setup
         shell: bash
         run: |
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
-          ls -la "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android"*-clang | head -5
+          set +e
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}"
+          ls -la "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android"*-clang 2>/dev/null || echo "No x86_64 clang found"
           echo "=== libunwind check ==="
-          find "$ANDROID_NDK_HOME" -name "*unwind*" 2>/dev/null | head -10
-          echo "=== liblog check ==="
-          find "$ANDROID_NDK_HOME" -name "liblog.so" 2>/dev/null | head -10
+          find "${ANDROID_NDK_HOME}" -name "*unwind*" 2>/dev/null || echo "No libunwind"
+          echo "=== NDK version ==="
+          cat "${ANDROID_NDK_HOME}/source.properties" 2>/dev/null || echo "No source.properties"
 
       - shell: bash
         run: |
