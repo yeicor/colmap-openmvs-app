@@ -914,7 +914,7 @@ impl Runtime for PRoot {
         let image_owned = image.to_string();
         let rootfs_dir_for_blocking = rootfs_dir.clone();
         let pulled = tokio::task::spawn_blocking(move || {
-            let (os, arch) = shared::host_platform();
+            let (os, arch) = host_platform();
             let platform = format!("{os}/{arch}");
             shared::pull_and_extract_image(&image_owned, &platform, &rootfs_dir_for_blocking)
                 .map_err(|e| anyhow::anyhow!("pull_and_extract_image failed: {e}"))
@@ -1514,4 +1514,44 @@ fn extract_tar_xz_sync(
 
     debug!(package_name = %package_name, "extract_tar_xz_sync: extraction completed");
     Ok(())
+}
+
+/// Metadata persisted alongside each prepared image on disk.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ImageMetadata {
+    #[serde(default)]
+    pub(crate) tag: String,
+    #[serde(default)]
+    pub(crate) build_date: Option<String>,
+    #[serde(default)]
+    pub(crate) env: Vec<String>,
+    #[serde(default)]
+    pub(crate) entrypoint: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) cmd: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) working_dir: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Host platform detection
+// ---------------------------------------------------------------------------
+
+/// Return (os, architecture) matching OCI platform conventions.
+pub(crate) fn host_platform() -> (String, String) {
+    let os = match std::env::consts::OS {
+        "linux" => "linux",
+        "macos" => "darwin",
+        "windows" => "windows",
+        "android" => "android",
+        _ => "linux",
+    };
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        "arm" => "arm",
+        "i686" => "386",
+        _ => "amd64",
+    };
+    (os.to_string(), arch.to_string())
 }

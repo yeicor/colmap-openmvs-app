@@ -704,8 +704,6 @@ pub fn LogsTab(project_name: String) -> Element {
     let is_running = matches!(pipeline_status(), PipelineStatus::Running);
 
     rsx! {
-        document::Link { rel: "stylesheet", href: asset!("/assets/views/project/logs.css") }
-
         div {
             class: "tab-content logs-tab",
 

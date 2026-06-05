@@ -1,6 +1,6 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::{fs, panic};
 
 #[cfg(target_family = "windows")]
 const SHELL: &str = "cmd.exe";
@@ -52,7 +52,10 @@ fn main() {
     // ── 4. Extract build metadata from Git, date, and Rust version ───────────
     extract_build_metadata();
 
-    // ── 5. Generate demo assets if the demo feature is enabled ────────────────
+    // ── 5. Copy icon into the Android project (if building for Android) ──────
+    embed_android_icon(&manifest_dir);
+
+    // ── 6. Generate demo assets if the demo feature is enabled ─────────────────
     if std::env::var("CARGO_FEATURE_DEMO").is_ok() {
         generate_demo_assets(&manifest_dir);
     }
@@ -267,33 +270,30 @@ fn copy_eruda(workspace_root: &Path, manifest_dir: &Path) {
     }
 }
 
-// ── Extract build metadata ────────────────────────────────────────────────────────────────
+// ── Extract build metadata ────────────────────────────────────────────────
 
 fn extract_build_metadata() {
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/index");
 
-    // Git information
-    let git_hash =
-        run("git", &["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    // Git information (pure Rust — reads .git files directly)
+    let head_commit = read_git_head();
 
-    let git_hash_full = run("git", &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    let git_hash = head_commit
+        .as_ref()
+        .map(|h| h[..12.min(h.len())].to_string())
+        .unwrap_or_else(|| "unknown".into());
 
-    let git_branch =
-        run("git", &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    let git_hash_full = head_commit.unwrap_or_else(|| "unknown".into());
 
-    let git_tag =
-        run("git", &["describe", "--tags", "--abrev=0"]).unwrap_or_else(|| "unknown".into());
+    let git_branch = read_git_branch().unwrap_or_else(|| "unknown".into());
 
-    let git_dirty = Command::new("git")
-        .args(["diff", "--quiet"])
-        .status()
-        .map(|s| !s.success())
-        .unwrap_or(false);
+    let git_tag = find_latest_tag().unwrap_or_else(|| "unknown".into());
 
-    // UTC timestamp
-    let build_date =
-        run("date", &["-u", "+%Y-%m-%dT%H:%M:%SZ"]).unwrap_or_else(|| "unknown".into());
+    let git_dirty = false;
+
+    // UTC timestamp (pure Rust — chrono)
+    let build_date = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     // Profile and target from environment
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "unknown".into());
@@ -311,6 +311,184 @@ fn extract_build_metadata() {
     println!("cargo:rustc-env=GIT_BRANCH={git_branch}");
     println!("cargo:rustc-env=GIT_DIRTY={git_dirty}");
     println!("cargo:rustc-env=RUSTC_VERSION={rustc_version}");
+}
+
+/// Read the current commit hash from HEAD (resolving refs if needed).
+fn read_git_head() -> Option<String> {
+    let head_path = Path::new(".git").join("HEAD");
+    let head = std::fs::read_to_string(&head_path).ok()?;
+    let head = head.trim().to_string();
+    if let Some(ref_path) = head.strip_prefix("ref: ") {
+        let ref_file = Path::new(".git").join(ref_path);
+        std::fs::read_to_string(&ref_file)
+            .ok()
+            .map(|s| s.trim().to_string())
+    } else {
+        Some(head)
+    }
+}
+
+/// Read the current branch name from HEAD.
+fn read_git_branch() -> Option<String> {
+    let head_path = Path::new(".git").join("HEAD");
+    let head = std::fs::read_to_string(&head_path).ok()?;
+    let head = head.trim().to_string();
+    head.strip_prefix("ref: refs/heads/").map(|s| s.to_string())
+}
+
+/// Find the latest tag by listing .git/refs/tags/.
+fn find_latest_tag() -> Option<String> {
+    let tags_dir = Path::new(".git").join("refs").join("tags");
+    if !tags_dir.is_dir() {
+        return None;
+    }
+    let mut tags: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(tags_dir) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                if let Some(name) = entry.file_name().to_str() {
+                    tags.push(name.to_string());
+                }
+            }
+        }
+    }
+    tags.sort();
+    tags.last().cloned()
+}
+
+// ── Android-specific patching ────────────────────────────────────────────────
+
+/// Customise the generated Android project:
+///
+/// 1. **Icon** — Resizes `assets/icon.png` into each density-specific
+///    `mipmap-*dpi/ic_launcher.webp` and removes the adaptive-icon XML so the
+///    custom icon is shown on all API levels.  (Dioxus CLI issue #3685 — the
+///    generated project always uses placeholder icons regardless of
+///    `Dioxus.toml`'s `[bundle] icon` setting.)
+///
+/// 2. **App name** — Overrides `res/values/strings.xml` with the canonical
+///    Play Store display name.
+fn embed_android_icon(manifest_dir: &Path) {
+    let profile = std::env::var("PROFILE").unwrap_or_default();
+
+    // Compute the Android project's resource root WITHOUT canonicalize (which
+    // would fail if parts of the path don't exist yet).
+    let android_res = manifest_dir
+        .join("..")
+        .join("target")
+        .join("dx")
+        .join("colmap-openmvs-app")
+        .join(&profile)
+        .join("android")
+        .join("app")
+        .join("app")
+        .join("src")
+        .join("main")
+        .join("res");
+
+    if !android_res.is_dir() {
+        // Not building for Android (or `dx bundle` hasn't generated the project yet).
+        return;
+    }
+
+    // ── App name ──────────────────────────────────────────────────────────
+    let strings_xml = android_res.join("values").join("strings.xml");
+    if strings_xml.is_file() {
+        let content = fs::read_to_string(&strings_xml).unwrap_or_default();
+        let desired = r#"<string name="app_name">"#;
+        if let Some(start) = content.find(desired) {
+            let after_open = start + desired.len();
+            if let Some(end) = content[after_open..].find("</string>") {
+                let current = &content[after_open..after_open + end];
+                let new_name = "Photos to 3D Model Offline";
+                if current != new_name {
+                    let patched = format!("{desired}{new_name}</string>");
+                    // Skip past the old </string> closing tag so we don't end up
+                    // with a duplicate (patched already contains it).
+                    let close_tag_len = "</string>".len();
+                    let new_content = format!(
+                        "{}{}{}",
+                        &content[..start],
+                        patched,
+                        &content[after_open + end + close_tag_len..]
+                    );
+                    if fs::write(&strings_xml, &new_content).is_ok() {
+                        eprintln!("cargo:warning=Set Android app name to \"{new_name}\"");
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Icon ──────────────────────────────────────────────────────────────
+    let icon_src = manifest_dir
+        .join("assets")
+        .join("icon.png")
+        .canonicalize()
+        .unwrap_or_else(|_| manifest_dir.join("assets").join("icon.png"));
+    if !icon_src.is_file() {
+        eprintln!("cargo:warning=icon.png not found at {}", icon_src.display());
+        return;
+    }
+
+    println!("cargo:rerun-if-changed={}", icon_src.display());
+
+    const DENSITIES: &[(&str, u32)] = &[
+        ("mdpi", 48),
+        ("hdpi", 72),
+        ("xhdpi", 96),
+        ("xxhdpi", 144),
+        ("xxxhdpi", 192),
+    ];
+
+    let img = match image::open(&icon_src) {
+        Ok(img) => img,
+        Err(e) => {
+            eprintln!("cargo:warning=Failed to open icon.png: {e}");
+            return;
+        }
+    };
+
+    let mut any_written = false;
+    for &(density, size) in DENSITIES {
+        let mipmap_dir = android_res.join(format!("mipmap-{density}"));
+        if !mipmap_dir.is_dir() {
+            continue;
+        }
+
+        let resized = img.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
+        let dest = mipmap_dir.join("ic_launcher.webp");
+        if let Err(e) = resized.save(&dest) {
+            eprintln!("cargo:warning=Failed to write {}: {e}", dest.display());
+        } else {
+            any_written = true;
+            eprintln!("cargo:warning=Updated Android launcher icon  mipmap-{density}");
+        }
+    }
+
+    if !any_written {
+        return;
+    }
+
+    // ── Remove the adaptive-icon XML ──────────────────────────────────────
+    // When `mipmap-anydpi-v26/ic_launcher.xml` is present and targets API 26+,
+    // Android uses the adaptive foreground/background drawables instead of the
+    // density-specific ic_launcher.webp files.  We delete it so that our icon
+    // is used on every API level.
+    let anydpi_xml = android_res
+        .join("mipmap-anydpi-v26")
+        .join("ic_launcher.xml");
+    if anydpi_xml.is_file() {
+        match std::fs::remove_file(&anydpi_xml) {
+            Ok(_) => eprintln!(
+                "cargo:warning=Removed adaptive-icon XML so custom icon is used on API 26+"
+            ),
+            Err(e) => eprintln!(
+                "cargo:warning=Failed to remove {}: {e}",
+                anydpi_xml.display()
+            ),
+        }
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

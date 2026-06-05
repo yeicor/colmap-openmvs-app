@@ -38,24 +38,6 @@ pub enum Route {
 
 #[component]
 pub fn App() -> Element {
-    // Eruda debug console — only injected in debug builds.
-    // The eruda.js file is copied from node_modules by build.rs and referenced
-    // here so that dx includes it in the asset bundle.
-    #[cfg(debug_assertions)]
-    {
-        let eruda_url = asset!("/assets/lib/eruda/eruda.js").to_string();
-        let _ = dioxus::document::eval(&format!(
-            r#"
-            if (typeof eruda === 'undefined') {{
-                const s = document.createElement('script');
-                s.src = '{eruda_url}';
-                s.onload = () => eruda.init();
-                document.head.appendChild(s);
-            }}
-            "#
-        ));
-    }
-
     use crate::mycomponents::ToastContainer;
     use crate::task_manager::{TasksCtx, TasksState};
     use_context_provider(|| Signal::new(TasksState::default()) as TasksCtx);
@@ -85,11 +67,29 @@ pub fn App() -> Element {
 
     rsx! {
         document::Link { rel: "icon", type: "image/png", href: asset!("/assets/icon.png") }
-        document::Link { rel: "stylesheet", href: asset!("/assets/main.css") }
-        document::Link { rel: "stylesheet", href: asset!("/assets/dx-components-theme.css") }
-        document::Link { rel: "stylesheet", href: asset!("/assets/dx-components-theme-override.css") }
-        document::Link { rel: "stylesheet", href: asset!("/assets/mycomponents.css") }
-        document::Link { rel: "stylesheet", href: asset!("/assets/tasks-panel.css") }
+        // ── Global stylesheets (loaded eagerly, no flashing on route changes) ────────────────
+        document::Link { rel: "stylesheet", href: asset!("/assets/main.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("/assets/dx-components-theme.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("/assets/dx-components-theme-override.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("/assets/mycomponents.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("/assets/tasks-panel.css", AssetOptions::css().with_preload(true)) }
+        // ── View stylesheets (preloaded to avoid FOUC) ───────────────────
+        document::Link { rel: "stylesheet", href: asset!("/assets/views/projects.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("/assets/views/settings.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("/assets/views/project.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("/assets/views/project/images.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("/assets/views/project/config.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("/assets/views/project/logs.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("/assets/views/project/outputs.css", AssetOptions::css().with_preload(true)) }
+        // ── Component-library stylesheets (preloaded to avoid FOUC) ──────
+        document::Link { rel: "stylesheet", href: asset!("./components/alert_dialog/style.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("./components/button/style.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("./components/progress/style.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("./components/separator/style.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("./components/sheet/style.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("./components/sidebar/style.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("./components/tabs/style.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("./components/tooltip/style.css", AssetOptions::css().with_preload(true)) }
         document::Title { "Photos to 3D Model Offline" }
         Router::<Route> {}
         ToastContainer {}

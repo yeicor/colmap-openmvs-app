@@ -60,28 +60,12 @@ pub(crate) struct ImageConfig {
     pub(crate) working_dir: Option<String>,
 }
 
-/// Metadata persisted alongside each prepared image on disk.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
-pub(crate) struct ImageMetadata {
-    #[serde(default)]
-    pub(crate) tag: String,
-    #[serde(default)]
-    pub(crate) build_date: Option<String>,
-    #[serde(default)]
-    pub(crate) env: Vec<String>,
-    #[serde(default)]
-    pub(crate) entrypoint: Option<Vec<String>>,
-    #[serde(default)]
-    pub(crate) cmd: Option<Vec<String>>,
-    #[serde(default)]
-    pub(crate) working_dir: Option<String>,
-}
-
 /// Full result of pulling an OCI image from a registry.
 #[derive(Debug, Clone)]
 pub(crate) struct PulledImage {
     pub(crate) image_config: ImageConfig,
     /// Image build date / created timestamp from config.
+    #[allow(dead_code)] // because currently only used by backend but not on build.rs
     pub(crate) created: Option<String>,
 }
 
@@ -138,29 +122,6 @@ pub(crate) fn decompress_xz(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Host platform detection
-// ---------------------------------------------------------------------------
-
-/// Return (os, architecture) matching OCI platform conventions.
-pub(crate) fn host_platform() -> (String, String) {
-    let os = match std::env::consts::OS {
-        "linux" => "linux",
-        "macos" => "darwin",
-        "windows" => "windows",
-        "android" => "android",
-        _ => "linux",
-    };
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "amd64",
-        "aarch64" => "arm64",
-        "arm" => "arm",
-        "i686" => "386",
-        _ => "amd64",
-    };
-    (os.to_string(), arch.to_string())
-}
-
-// ---------------------------------------------------------------------------
 // OCI image reference parser
 // ---------------------------------------------------------------------------
 
@@ -192,30 +153,35 @@ pub(crate) fn parse_image_ref(image: &str) -> (String, String, String) {
 }
 
 // ---------------------------------------------------------------------------
-// OCI Registry HTTP helpers (curl-based, sync)
+// OCI Registry HTTP helpers (ureq-based, sync)
 // ---------------------------------------------------------------------------
 
 fn registry_token(registry: &str, _repo: &str) -> String {
     let probe_url = format!("https://{}/v2/", registry);
-    let output = std::process::Command::new("curl")
-        .args([
-            "-fsSI",
-            "--max-time",
-            "15",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}\n%header{www-authenticate}",
-            &probe_url,
-        ])
-        .output()
-        .expect("curl probe failed");
-    let stdout = String::from_utf8(output.stdout).expect("curl output");
-    let mut lines = stdout.lines();
-    let http_code = lines.next().unwrap_or("").trim();
-    let auth_header = lines.next().unwrap_or("").trim().to_string();
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(15))
+        .build();
 
-    if http_code == "200" || http_code.is_empty() {
+    let response = match agent.head(&probe_url).call() {
+        Ok(r) => r,
+        Err(ureq::Error::Status(401, r)) => r,
+        Err(ureq::Error::Status(code, _)) => {
+            tracing::warn!("Registry probe returned {code}");
+            return String::new();
+        }
+        Err(e) => {
+            tracing::warn!("Registry probe failed: {e}");
+            return String::new();
+        }
+    };
+
+    let auth_header = response
+        .header("www-authenticate")
+        .unwrap_or("")
+        .to_string();
+
+    if auth_header.is_empty() {
+        // No auth required.
         return String::new();
     }
 
@@ -248,21 +214,13 @@ fn registry_token(registry: &str, _repo: &str) -> String {
         token_url.push_str(&format!("&scope={scope}"));
     }
 
-    let output = std::process::Command::new("curl")
-        .args([
-            "-fsSL",
-            "--max-time",
-            "15",
-            "-H",
-            "Accept: application/json",
-            &token_url,
-        ])
-        .output()
-        .expect("curl token request failed");
-    assert!(
-        output.status.success(),
-        "Failed to get registry token from {realm}"
-    );
+    let body = agent
+        .get(&token_url)
+        .set("Accept", "application/json")
+        .call()
+        .unwrap_or_else(|e| panic!("Failed to get registry token from {realm}: {e}"))
+        .into_string()
+        .expect("token response UTF-8");
 
     #[derive(serde::Deserialize)]
     struct TokenResponse {
@@ -271,7 +229,6 @@ fn registry_token(registry: &str, _repo: &str) -> String {
         #[serde(default)]
         access_token: String,
     }
-    let body = String::from_utf8(output.stdout).expect("token response UTF-8");
     let token_resp: TokenResponse = serde_json::from_str(&body).expect("parse token response JSON");
     if !token_resp.token.is_empty() {
         token_resp.token
@@ -282,30 +239,28 @@ fn registry_token(registry: &str, _repo: &str) -> String {
 
 fn registry_fetch(registry: &str, path: &str, accept: Option<&str>, token: &str) -> Vec<u8> {
     let url = format!("https://{registry}{path}");
-    let mut args = vec![
-        "-fsSL".to_string(),
-        "--max-time".to_string(),
-        "30".to_string(),
-    ];
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(30))
+        .build();
+
+    let mut req = agent.get(&url);
     if let Some(accept_val) = accept {
-        args.push("-H".to_string());
-        args.push(format!("Accept: {accept_val}"));
+        req = req.set("Accept", accept_val);
     }
     if !token.is_empty() {
-        args.push("-H".to_string());
-        args.push(format!("Authorization: Bearer {token}"));
+        req = req.set("Authorization", &format!("Bearer {token}"));
     }
-    args.push(url);
 
-    let output = std::process::Command::new("curl")
-        .args(&args)
-        .output()
-        .expect("curl registry_fetch failed");
-    assert!(
-        output.status.success(),
-        "registry_fetch failed for {registry}{path}"
-    );
-    output.stdout
+    let response = req.call().unwrap_or_else(|e| {
+        panic!("registry_fetch failed for {registry}{path}: {e}");
+    });
+
+    let mut body: Vec<u8> = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut body)
+        .expect("read registry response body");
+    body
 }
 
 // ---------------------------------------------------------------------------
@@ -339,8 +294,8 @@ fn fetch_image_manifest(
         .as_str()
         .unwrap_or("application/vnd.docker.distribution.manifest.v2+json");
 
-    let target_arch = platform.split('/').next().unwrap_or("amd64");
-    let target_os = platform.split('/').nth(1).unwrap_or("linux");
+    let target_os = platform.split('/').next().unwrap_or("linux");
+    let target_arch = platform.split('/').nth(1).unwrap_or("amd64");
 
     if media_type.contains("manifest.list")
         || media_type.contains("image.index")
@@ -370,23 +325,7 @@ fn fetch_image_manifest(
                 return extract_manifest_info(&plat_data, &plat_digest);
             }
         }
-        tracing::warn!("Platform {platform} not found in manifest list, using first entry");
-        let first = &manifests[0];
-        let plat_digest = first["digest"]
-            .as_str()
-            .expect("first platform digest")
-            .to_string();
-        let plat_path = format!("/v2/{repo}/manifests/{plat_digest}");
-        let plat_data = registry_fetch(
-            registry,
-            &plat_path,
-            Some(
-                "application/vnd.oci.image.manifest.v1+json, \
-                 application/vnd.docker.distribution.manifest.v2+json",
-            ),
-            token,
-        );
-        return extract_manifest_info(&plat_data, &plat_digest);
+        panic!("Platform {platform} not found in manifest list");
     }
 
     let digest = json["config"]["digest"]
@@ -547,7 +486,10 @@ pub(crate) fn pull_and_extract_image(
     tracing::info!("Config digest: {config_digest}");
     tracing::info!("Layers: {}", layers.len());
 
-    // Ensure target directory exists.
+    // Clean any previous extraction and ensure target directory exists.
+    if target_dir.exists() {
+        std::fs::remove_dir_all(target_dir).expect("clean target_dir for image extraction");
+    }
     std::fs::create_dir_all(target_dir).expect("create target_dir for image extraction");
 
     // Download and extract every layer directly into target_dir.

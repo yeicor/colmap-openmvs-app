@@ -9,7 +9,7 @@ mod registry;
 pub(crate) mod shared;
 
 pub use docker::Docker;
-pub use proot::PRoot;
+pub use proot::{ImageMetadata, PRoot};
 pub use registry::{ImageDigest, ImageTag, RegistryClient, RemoteImage, UpdateInfo, Version};
 
 /// A filesystem bind-mount to pass into the container.

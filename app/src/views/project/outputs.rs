@@ -646,7 +646,6 @@ pub fn OutputsTab(project_name: String) -> Element {
     });
 
     rsx! {
-        document::Link { rel: "stylesheet", href: asset!("/assets/views/project/outputs.css") }
         div {
             class: "tab-content outputs-tab",
 
@@ -655,7 +654,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                 class: "outputs-toolbar",
                 // ── Backup (root download as ZIP) ────────────────
                 button {
-                    class: "outputs-btn action-btn action-btn-primary",
+                    class: "action-btn action-btn-primary",
                     disabled: downloading_folder().as_deref() == Some(""),
                     title: "Download all outputs as ZIP",
                     onclick: {
@@ -692,7 +691,7 @@ pub fn OutputsTab(project_name: String) -> Element {
 
                 // ── Restore (upload ZIP to root) ─────────────────
                 button {
-                    class: "outputs-btn action-btn action-btn-success",
+                    class: "action-btn action-btn-success",
                     disabled: restoring(),
                     title: "Restore outputs from a ZIP archive",
                     onclick: {
@@ -719,7 +718,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                     span { class: "outputs-toolbar-status", Icon { icon: BsHourglass } }
                 } else if confirming_clear_all() {
                     button {
-                        class: "outputs-btn action-btn action-btn-success",
+                        class: "action-btn action-btn-success",
                         title: "Confirm delete all",
                         onclick: {
                             let pn = project_name.clone();
@@ -750,13 +749,13 @@ pub fn OutputsTab(project_name: String) -> Element {
                         span { class: "btn-label", " Sure?" }
                     }
                     button {
-                        class: "outputs-btn action-btn",
+                        class: "action-btn",
                         onclick: move |_| confirming_clear_all.set(false),
                         Icon { icon: BsX }
                     }
                 } else {
                     button {
-                        class: "outputs-btn action-btn action-btn-danger",
+                        class: "action-btn action-btn-danger",
                         title: "Delete all outputs",
                         onclick: move |_| confirming_clear_all.set(true),
                         Icon { icon: BsTrash3 }
@@ -765,7 +764,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                 }
 
                 button {
-                    class: "outputs-btn action-btn action-btn-warning",
+                    class: "action-btn action-btn-warning",
                     onclick: move |_| {
                         debug!("Refresh outputs");
                         refresh_counter += 1;

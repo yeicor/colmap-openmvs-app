@@ -205,8 +205,6 @@ pub fn Projects(
     let is_open = dialog_type().is_some();
 
     rsx! {
-        document::Link { rel: "stylesheet", href: asset!("/assets/views/projects.css") }
-
         div {
             id: "projects",
             PageHeader {

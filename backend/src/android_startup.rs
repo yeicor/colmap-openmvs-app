@@ -17,7 +17,8 @@
 //! Google Play's LOAD-segment alignment check), while the full rootfs is
 //! still available via symlinks + the extracted flat archive.
 
-use crate::runtimes::shared::{self, ImageMetadata};
+use crate::runtimes::shared;
+use crate::runtimes::ImageMetadata;
 use std::io::{Cursor, Read};
 use std::path::PathBuf;
 use std::sync::OnceLock;

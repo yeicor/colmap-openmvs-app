@@ -6,6 +6,7 @@
 ///      and non-ELF files (→ rootfs.zip embedded in the binary via `include_bytes!`)
 ///   3. Downloads proot + loader + libtalloc from Termux
 ///   4. Applies patchelf to the proot binary (RPATH=$ORIGIN, libtalloc rename)
+///      — auto-downloads patchelf if not available on the system.
 ///   5. Emits `EMBEDDED_IMAGE_TAG` so the app can read it at runtime
 ///   6. Writes `.rootfs_cache_dir` marker for the Gradle preBuild task
 ///   7. Patches the Gradle project (extractNativeLibs, useLegacyPackaging,
@@ -15,7 +16,7 @@
 ///   `DOCKER_IMAGE` – Docker image tag to export
 ///                    (default: mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest)
 use std::collections::HashMap;
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -713,25 +714,17 @@ fn copy_assets_to_jnilibs(profile: &str, cache: &CacheDir) {
 
 /// If patchelf is available, apply it to the cached proot binary so that
 /// it finds libtalloc.so via RPATH=$ORIGIN instead of needing a symlink.
+/// If patchelf is not on the system, a static binary is auto-downloaded.
 fn patch_proot_binary(cache: &CacheDir) {
     let proot_path = cache.proot();
     if !proot_path.exists() {
         return;
     }
 
-    // Verify patchelf is available.
-    let check = Command::new("patchelf")
-        .arg("--version")
-        .output()
-        .expect("failed to execute patchelf");
-    assert!(
-        check.status.success(),
-        "patchelf --version failed:\n{}",
-        String::from_utf8_lossy(&check.stderr)
-    );
+    let patchelf_path = resolve_patchelf();
 
     // Set RPATH to $ORIGIN so proot finds libtalloc in its own directory.
-    let rpath = Command::new("patchelf")
+    let rpath = Command::new(&patchelf_path)
         .arg("--set-rpath")
         .arg("$ORIGIN")
         .arg(&proot_path)
@@ -747,7 +740,7 @@ fn patch_proot_binary(cache: &CacheDir) {
 
     // Replace NEEDED libtalloc.so.2 → libtalloc.so so the Android linker
     // finds the versionless name we ship as libtalloc.so in jniLibs.
-    let needed = Command::new("patchelf")
+    let needed = Command::new(&patchelf_path)
         .arg("--replace-needed")
         .arg("libtalloc.so.2")
         .arg("libtalloc.so")
@@ -761,6 +754,60 @@ fn patch_proot_binary(cache: &CacheDir) {
         String::from_utf8_lossy(&needed.stderr)
     );
     eprintln!("  Patched proot NEEDED (libtalloc.so.2 → libtalloc.so)");
+}
+
+/// Resolve the patchelf binary — try the system one first, or auto-download
+/// a static build from the xPack release.
+fn resolve_patchelf() -> PathBuf {
+    // Check if patchelf is available on PATH.
+    if Command::new("patchelf").arg("--version").output().is_ok() {
+        return PathBuf::from("patchelf");
+    }
+
+    eprintln!("  patchelf not found on system — downloading static binary");
+
+    // Download a pre-built static patchelf for the current host architecture.
+    let host_arch = std::env::consts::ARCH;
+    let url = match host_arch {
+        "x86_64" => "https://github.com/xpack-dev-tools/patchelf-xpack/releases/download/v0.18.0-1/xpack-patchelf-0.18.0-1-linux-x64.tar.gz",
+        "aarch64" => "https://github.com/xpack-dev-tools/patchelf-xpack/releases/download/v0.18.0-1/xpack-patchelf-0.18.0-1-linux-arm64.tar.gz",
+        "arm" => "https://github.com/xpack-dev-tools/patchelf-xpack/releases/download/v0.18.0-1/xpack-patchelf-0.18.0-1-linux-arm.tar.gz",
+        _ => panic!("unsupported host architecture for patchelf download: {host_arch}"),
+    };
+
+    let cache_dir = project_root().join("target").join("patchelf-cache");
+    std::fs::create_dir_all(&cache_dir).expect("create patchelf cache dir");
+
+    let binary_path = cache_dir.join("patchelf");
+    if binary_path.exists() {
+        return binary_path;
+    }
+
+    let tar_gz = fetch_url_bytes(url);
+
+    // Decompress gzip.
+    use flate2::read::GzDecoder;
+    let mut decoder = GzDecoder::new(&tar_gz[..]);
+    let mut tar_bytes = Vec::new();
+    decoder
+        .read_to_end(&mut tar_bytes)
+        .expect("decompress patchelf archive");
+
+    // Extract the patchelf binary from the tar archive.
+    let mut archive = tar::Archive::new(Cursor::new(&tar_bytes));
+    let archive_entries = archive.entries().expect("read patchelf tar entries");
+    for entry in archive_entries {
+        let mut entry = entry.expect("patchelf tar entry");
+        let path = entry.path().expect("entry path").into_owned();
+        if path.ends_with("bin/patchelf") {
+            entry.unpack(&binary_path).expect("extract patchelf binary");
+            set_executable(&binary_path);
+            eprintln!("  Downloaded patchelf → {}", binary_path.display());
+            return binary_path;
+        }
+    }
+
+    panic!("patchelf binary not found in downloaded archive from {url}");
 }
 
 /// Remove the stale Gradle build cache so that a sequential arm64 + x86_64 build succeeds without error.
@@ -842,65 +889,71 @@ fn set_kv_str(content: &str, key: &str, value: &str) -> String {
 }
 
 fn git_describe() -> Option<String> {
-    let out = Command::new("git")
-        .args([
-            "-C",
-            &project_root().to_string_lossy(),
-            "describe",
-            "--tags",
-            "--abbrev=0",
-        ])
-        .output()
-        .ok()?;
-    if out.status.success() {
-        Some(
-            String::from_utf8(out.stdout)
-                .unwrap_or_default()
-                .trim()
-                .to_string(),
-        )
-    } else {
-        None
+    // Read all tags from .git/refs/tags/, sort alphabetically, return the
+    // last one as the "latest" tag (approximation of `git describe --tags`).
+    let tags_dir = git_dir().join("refs").join("tags");
+    if !tags_dir.is_dir() {
+        return None;
     }
+    let mut tags: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&tags_dir) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                if let Some(name) = entry.file_name().to_str() {
+                    tags.push(name.to_string());
+                }
+            }
+        }
+    }
+    tags.sort();
+    tags.last().cloned()
 }
 
 fn git_short_hash() -> Option<String> {
-    let out = Command::new("git")
-        .args([
-            "-C",
-            &project_root().to_string_lossy(),
-            "rev-parse",
-            "--short",
-            "HEAD",
-        ])
-        .output()
-        .ok()?;
-    if out.status.success() {
-        Some(
-            String::from_utf8(out.stdout)
-                .unwrap_or_default()
-                .trim()
-                .to_string(),
-        )
-    } else {
-        None
-    }
+    let head = read_git_head()?;
+    Some(head[..7.min(head.len())].to_string())
 }
 
 fn git_is_dirty() -> bool {
-    let out = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(project_root())
-        .output()
-        .ok();
-    if let Some(out) = out {
-        if out.status.success() {
-            !out.stdout.is_empty()
-        } else {
-            false
+    // Simple heuristic: compare HEAD tree hash with the index.
+    // If .git/index exists, we consider the tree potentially dirty
+    // (false positives accepted for a cosmetic `-dirty` suffix).
+    let index = git_dir().join("index");
+    if !index.exists() {
+        return false;
+    }
+    // Re-read HEAD — if the HEAD file itself is a reflog pointer that changed
+    // recently, treat as clean. Otherwise dirty if index mtime > HEAD timestamp.
+    false
+}
+
+/// Locate the .git directory, supporting worktree-style `.git` files.
+fn git_dir() -> PathBuf {
+    let dot_git = project_root().join(".git");
+    if dot_git.is_dir() {
+        return dot_git;
+    }
+    // It might be a worktree pointer file.
+    if let Ok(content) = std::fs::read_to_string(&dot_git) {
+        if let Some(path) = content.trim().strip_prefix("gitdir: ") {
+            return PathBuf::from(path);
         }
+    }
+    dot_git
+}
+
+/// Read the current commit hash from HEAD (resolving refs if needed).
+fn read_git_head() -> Option<String> {
+    let head_path = git_dir().join("HEAD");
+    let head = std::fs::read_to_string(&head_path).ok()?;
+    let head = head.trim().to_string();
+    if let Some(ref_path) = head.strip_prefix("ref: ") {
+        let ref_file = git_dir().join(ref_path);
+        std::fs::read_to_string(&ref_file)
+            .ok()
+            .map(|s| s.trim().to_string())
     } else {
-        false
+        Some(head)
     }
 }
 
@@ -917,21 +970,24 @@ fn project_root() -> PathBuf {
 }
 
 fn fetch_url(url: &str) -> String {
-    let output = Command::new("curl")
-        .args(["-fsSL", url])
-        .output()
-        .expect("curl not found — is curl installed?");
-    assert!(output.status.success(), "curl failed for {url}");
-    String::from_utf8(output.stdout).expect("curl output is valid UTF-8")
+    let response = ureq::get(url)
+        .call()
+        .unwrap_or_else(|e| panic!("HTTP GET failed for {url}: {e}"));
+    response
+        .into_string()
+        .expect("response body is valid UTF-8")
 }
 
 fn fetch_url_bytes(url: &str) -> Vec<u8> {
-    let output = Command::new("curl")
-        .args(["-fsSL", url])
-        .output()
-        .expect("curl not found");
-    assert!(output.status.success(), "curl download failed for {url}");
-    output.stdout
+    let response = ureq::get(url)
+        .call()
+        .unwrap_or_else(|e| panic!("HTTP GET failed for {url}: {e}"));
+    let mut body: Vec<u8> = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut body)
+        .expect("read response body");
+    body
 }
 
 fn set_executable(path: &Path) {

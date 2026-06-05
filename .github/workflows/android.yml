@@ -117,8 +117,8 @@ jobs:
 
       - shell: bash
         run: |
-          dx bundle --android --package-types aab --features server --target x86_64-linux-android
-          dx bundle --android --package-types aab --features server --target aarch64-linux-android
+          dx bundle --android --package-types aab --features server --target x86_64-linux-android --release
+          dx bundle --android --package-types aab --features server --target aarch64-linux-android --release
         env:
           CARGO_TERM_VERBOSE: true
           CARGO_TERM_COLOR: always

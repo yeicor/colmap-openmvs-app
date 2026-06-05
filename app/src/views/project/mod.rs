@@ -74,11 +74,6 @@ pub fn Project(name: String) -> Element {
     };
 
     rsx! {
-        document::Link { rel: "stylesheet", href: asset!("/assets/views/project.css") }
-        document::Link { rel: "stylesheet", href: asset!("/assets/views/project/images.css") }
-        document::Link { rel: "stylesheet", href: asset!("/assets/views/project/config.css") }
-        document::Link { rel: "stylesheet", href: asset!("/assets/views/project/logs.css") }
-
         div {
             id: "project",
             PageHeader {

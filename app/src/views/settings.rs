@@ -83,8 +83,6 @@ pub fn SettingsView() -> Element {
     let mut active_tab = use_signal(|| Some("general".to_string()));
 
     rsx! {
-        document::Link { rel: "stylesheet", href: asset!("/assets/views/settings.css") }
-
         div {
             id: "settings",
 
