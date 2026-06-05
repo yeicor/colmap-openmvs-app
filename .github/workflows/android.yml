@@ -146,6 +146,14 @@ jobs:
 
       - shell: bash
         run: |
+          cargo build --target x86_64-linux-android --features server --release --color always 2>&1
+
+      - shell: bash
+        run: |
+          cargo build --target aarch64-linux-android --features server --release --color always 2>&1
+
+      - shell: bash
+        run: |
           dx bundle --android --package-types aab --features server --target x86_64-linux-android 2>&1
           dx bundle --android --package-types aab --features server --target aarch64-linux-android 2>&1
         env:
