@@ -131,8 +131,8 @@ jobs:
 
       - shell: bash
         run: |
-          dx bundle --android --package-types aab --features server --target x86_64-linux-android 2>&1
-          dx bundle --android --package-types aab --features server --target aarch64-linux-android 2>&1
+          dx bundle --android --package-types aab --features server --target x86_64-linux-android 2>&1 && echo "=== X86_64 SUCCESS ===" || echo "=== X86_64 FAILED ==="
+          dx bundle --android --package-types aab --features server --target aarch64-linux-android 2>&1 && echo "=== AARCH64 SUCCESS ===" || echo "=== AARCH64 FAILED ==="
         env:
           CARGO_TERM_VERBOSE: true
           CARGO_TERM_COLOR: always
