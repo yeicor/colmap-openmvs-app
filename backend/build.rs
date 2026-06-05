@@ -187,7 +187,7 @@ fn parse_image_ref(image: &str) -> (String, String, String) {
 
 /// Obtain an anonymous OCI bearer token from the registry's auth endpoint.
 /// Returns empty string if the registry allows anonymous access directly.
-fn registry_token(registry: &str, repo: &str) -> String {
+fn registry_token(registry: &str, _repo: &str) -> String {
     // First, probe the registry to get the auth challenge.
     let probe_url = format!("https://{}/v2/", registry);
     let output = Command::new("curl")
