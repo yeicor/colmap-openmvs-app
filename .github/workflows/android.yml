@@ -117,9 +117,6 @@ jobs:
           java-version: "17"
           distribution: "temurin"
 
-      - uses: docker/setup-qemu-action@v3
-        name: Setup QEMU (for ARM64 Docker emulation)
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:

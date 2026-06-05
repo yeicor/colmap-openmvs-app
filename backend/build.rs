@@ -153,63 +153,396 @@ impl CacheDir {
 }
 
 // ---------------------------------------------------------------------------
-// Docker helpers
+// OCI Distribution API client (replaces Docker for image export)
 // ---------------------------------------------------------------------------
 
-fn image_digest(image: &str, platform: &str) -> String {
-    let status = Command::new("docker")
-        .args(["pull", "--platform", platform, "--quiet", image])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .expect("docker pull failed — is Docker installed and running?");
-    assert!(
-        status.success(),
-        "docker pull failed for {image} ({platform})"
-    );
+/// Parse an image reference into (registry, repository, tag).
+/// Supports formats:
+///   - `registry/repo:tag`
+///   - `registry/repo` (default tag: latest)
+///   - `repo:tag` (default registry: docker.io)
+///   - `repo` (default registry and tag)
+fn parse_image_ref(image: &str) -> (String, String, String) {
+    let (registry, rest) = if let Some(slash) = image.find('/') {
+        let part = &image[..slash];
+        // If the part before the first slash contains a dot or colon, it's
+        // a registry hostname. Otherwise it's a Docker Hub namespace/user.
+        if part.contains('.') || part.contains(':') || part == "localhost" {
+            (part.to_string(), &image[slash + 1..])
+        } else {
+            ("registry-1.docker.io".to_string(), image)
+        }
+    } else {
+        ("registry-1.docker.io".to_string(), image)
+    };
 
-    let output = Command::new("docker")
-        .args(["image", "inspect", "--format", "{{.Id}}", image])
-        .output()
-        .expect("docker image inspect failed");
-    assert!(output.status.success(), "docker inspect failed for {image}");
-    String::from_utf8(output.stdout)
-        .expect("docker inspect output is valid UTF-8")
-        .trim()
-        .to_string()
+    let (repo, tag) = if let Some(colon) = rest.rfind(':') {
+        (&rest[..colon], &rest[colon + 1..])
+    } else {
+        (rest, "latest")
+    };
+
+    (registry, repo.to_string(), tag.to_string())
 }
 
-fn export_docker_tar(image: &str, platform: &str, dest: &Path) {
-    let cid_output = Command::new("docker")
-        .args(["create", "--platform", platform, image])
+/// Obtain an anonymous OCI bearer token from the registry's auth endpoint.
+/// Returns empty string if the registry allows anonymous access directly.
+fn registry_token(registry: &str, repo: &str) -> String {
+    // First, probe the registry to get the auth challenge.
+    let probe_url = format!("https://{}/v2/", registry);
+    let output = Command::new("curl")
+        .args([
+            "-fsSI",
+            "--max-time",
+            "15",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}\n%header{www-authenticate}",
+            &probe_url,
+        ])
         .output()
-        .expect("docker create failed");
+        .expect("curl probe failed");
+    let stdout = String::from_utf8(output.stdout).expect("curl output");
+    let mut lines = stdout.lines();
+    let http_code = lines.next().unwrap_or("").trim();
+    let auth_header = lines.next().unwrap_or("").trim().to_string();
+
+    if http_code == "200" || http_code == "" {
+        // No auth needed
+        return String::new();
+    }
+
+    // Parse Bearer challenge: Bearer realm="...",service="...",scope="..."
+    if !auth_header.starts_with("Bearer ") {
+        eprintln!("  WARNING: unsupported auth challenge: {auth_header}");
+        return String::new();
+    }
+    let params = &auth_header[7..];
+    let mut realm = String::new();
+    let mut service = String::new();
+    let mut scope = String::new();
+    for part in params.split(',') {
+        let part = part.trim();
+        if let Some(val) = part.strip_prefix("realm=\"") {
+            realm = val.trim_end_matches('"').to_string();
+        } else if let Some(val) = part.strip_prefix("service=\"") {
+            service = val.trim_end_matches('"').to_string();
+        } else if let Some(val) = part.strip_prefix("scope=\"") {
+            scope = val.trim_end_matches('"').to_string();
+        }
+    }
+
+    if realm.is_empty() {
+        eprintln!("  WARNING: no realm in auth challenge: {auth_header}");
+        return String::new();
+    }
+
+    let mut token_url = format!("{realm}?service={service}");
+    if !scope.is_empty() {
+        token_url.push_str(&format!("&scope={scope}"));
+    }
+
+    let output = Command::new("curl")
+        .args([
+            "-fsSL",
+            "--max-time",
+            "15",
+            "-H",
+            "Accept: application/json",
+            &token_url,
+        ])
+        .output()
+        .expect("curl token request failed");
     assert!(
-        cid_output.status.success(),
-        "docker create failed for {image}"
+        output.status.success(),
+        "Failed to get registry token from {realm}"
     );
-    let cid = String::from_utf8(cid_output.stdout)
-        .expect("docker create output is valid UTF-8")
-        .trim()
+
+    #[derive(serde::Deserialize)]
+    struct TokenResponse {
+        #[serde(default)]
+        token: String,
+        #[serde(default)]
+        access_token: String,
+    }
+    let body = String::from_utf8(output.stdout).expect("token response UTF-8");
+    let token_resp: TokenResponse = serde_json::from_str(&body).expect("parse token response JSON");
+    if !token_resp.token.is_empty() {
+        token_resp.token
+    } else {
+        token_resp.access_token
+    }
+}
+
+/// Fetch a path from the registry API, following redirects.
+fn registry_fetch(registry: &str, path: &str, accept: Option<&str>, token: &str) -> Vec<u8> {
+    let url = format!("https://{registry}{path}");
+    let mut args = vec![
+        "-fsSL".to_string(),
+        "--max-time".to_string(),
+        "30".to_string(),
+    ];
+    if let Some(accept_val) = accept {
+        args.push("-H".to_string());
+        args.push(format!("Accept: {accept_val}"));
+    }
+    if !token.is_empty() {
+        args.push("-H".to_string());
+        args.push(format!("Authorization: Bearer {token}"));
+    }
+    args.push(url);
+
+    let output = Command::new("curl")
+        .args(&args)
+        .output()
+        .expect("curl registry_fetch failed");
+    assert!(
+        output.status.success(),
+        "registry_fetch failed for {registry}{path}"
+    );
+    output.stdout
+}
+
+/// Get the manifest list (or single manifest) and return the platform-specific
+/// manifest digest plus the config digest and layer digests.
+fn fetch_image_manifest(
+    registry: &str,
+    repo: &str,
+    tag: &str,
+    platform: &str,
+    token: &str,
+) -> (String, Vec<String>, String, String) {
+    let path = format!("/v2/{repo}/manifests/{tag}");
+
+    // Try OCI image index first
+    let manifest_data = registry_fetch(
+        registry,
+        &path,
+        Some("application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"),
+        token,
+    );
+
+    let manifest_str = String::from_utf8_lossy(&manifest_data);
+    let json: serde_json::Value = serde_json::from_str(&manifest_str).expect("parse manifest JSON");
+
+    let media_type = json["mediaType"]
+        .as_str()
+        .unwrap_or("application/vnd.docker.distribution.manifest.v2+json");
+
+    let target_arch = platform.split('/').next().unwrap_or("amd64");
+    let target_os = platform.split('/').nth(1).unwrap_or("linux");
+
+    if media_type.contains("manifest.list")
+        || media_type.contains("image.index")
+        || json["manifests"].is_array()
+    {
+        // It's a manifest list — find the matching platform
+        let manifests = json["manifests"]
+            .as_array()
+            .expect("manifest list has manifests array");
+        for entry in manifests {
+            let arch = entry["platform"]["architecture"].as_str().unwrap_or("");
+            let os = entry["platform"]["os"].as_str().unwrap_or("");
+            if arch == target_arch && os == target_os {
+                let plat_digest = entry["digest"]
+                    .as_str()
+                    .expect("platform manifest digest")
+                    .to_string();
+                // Fetch the platform-specific manifest
+                let plat_path = format!("/v2/{repo}/manifests/{plat_digest}");
+                let plat_data = registry_fetch(
+                    registry,
+                    &plat_path,
+                    Some("application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"),
+                    token,
+                );
+                return extract_manifest_info(&plat_data, &plat_digest);
+            }
+        }
+        eprintln!("  Platform {platform} not found in manifest list, using first entry");
+        let first = &manifests[0];
+        let plat_digest = first["digest"]
+            .as_str()
+            .expect("first platform digest")
+            .to_string();
+        let plat_path = format!("/v2/{repo}/manifests/{plat_digest}");
+        let plat_data = registry_fetch(
+            registry,
+            &plat_path,
+            Some("application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"),
+            token,
+        );
+        return extract_manifest_info(&plat_data, &plat_digest);
+    }
+
+    // Single manifest — extract info directly
+    let digest = json["config"]["digest"]
+        .as_str()
+        .map(|s| {
+            // Use the config digest as the image digest
+            s.to_string()
+        })
+        .unwrap_or_else(|| tag.to_string());
+    extract_manifest_info(&manifest_data, &digest)
+}
+
+/// Extract config digest and layer digests from a platform-specific manifest.
+fn extract_manifest_info(
+    manifest_data: &[u8],
+    manifest_digest: &str,
+) -> (String, Vec<String>, String, String) {
+    let manifest_str = String::from_utf8_lossy(manifest_data);
+    let json: serde_json::Value =
+        serde_json::from_str(&manifest_str).expect("parse platform manifest");
+
+    let config_digest = json["config"]["digest"]
+        .as_str()
+        .expect("config digest")
         .to_string();
 
-    let tar_file = std::fs::File::create(dest).expect("create rootfs.tar");
-    let mut child = Command::new("docker")
-        .args(["export", &cid])
-        .stdout(tar_file)
-        .spawn()
-        .expect("docker export spawn failed");
-    let status = child.wait().expect("docker export wait failed");
-    assert!(status.success(), "docker export failed");
-
-    // Clean up the temporary container — best-effort is acceptable here.
-    if Command::new("docker")
-        .args(["rm", "-f", &cid])
-        .output()
-        .map_or(true, |o| !o.status.success())
-    {
-        eprintln!("  NOTE: docker rm -f {cid} failed (container may still exist)");
+    let mut layers = Vec::new();
+    if let Some(layer_list) = json["layers"].as_array() {
+        for layer in layer_list {
+            if let Some(digest) = layer["digest"].as_str() {
+                layers.push(digest.to_string());
+            }
+        }
     }
+
+    (
+        manifest_digest.to_string(),
+        layers,
+        config_digest,
+        manifest_str.to_string(),
+    )
+}
+
+/// Fetch and parse the image config blob.
+fn fetch_image_config(registry: &str, repo: &str, config_digest: &str, token: &str) -> ImageConfig {
+    let path = format!("/v2/{repo}/blobs/{config_digest}");
+    let data = registry_fetch(registry, &path, None, token);
+
+    let json: serde_json::Value = serde_json::from_slice(&data).expect("parse config JSON");
+    let cfg = &json["config"];
+
+    let env: Vec<String> = cfg["Env"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let entrypoint: Option<Vec<String>> = cfg["Entrypoint"].as_array().map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect()
+    });
+    let cmd: Option<Vec<String>> = cfg["Cmd"].as_array().map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect()
+    });
+    let working_dir = cfg["WorkingDir"].as_str().unwrap_or("").to_string();
+
+    ImageConfig {
+        env,
+        entrypoint,
+        cmd,
+        working_dir: if working_dir.is_empty() {
+            None
+        } else {
+            Some(working_dir)
+        },
+    }
+}
+
+/// Download and extract a single image layer (gzip-compressed tar).
+fn download_and_extract_layer(
+    registry: &str,
+    repo: &str,
+    digest: &str,
+    token: &str,
+    dest_tar: &mut tar::Builder<std::fs::File>,
+) {
+    let path = format!("/v2/{repo}/blobs/{digest}");
+    let data = registry_fetch(registry, &path, None, token);
+    eprintln!("  Layer {}: {} bytes", &digest[..20], data.len());
+
+    // Docker layers are gzip-compressed tar archives.
+    use std::io::Read;
+    let mut decoder = flate2::read::GzDecoder::new(&data[..]);
+    let mut tar_bytes = Vec::new();
+    decoder.read_to_end(&mut tar_bytes).expect("gunzip layer");
+
+    let mut archive = tar::Archive::new(std::io::Cursor::new(&tar_bytes));
+    for entry in archive.entries().expect("tar entries") {
+        let mut entry = entry.expect("tar entry");
+        // Append each entry into the destination tar
+        let header = entry.header().clone();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).expect("read entry");
+
+        dest_tar
+            .append(&header, std::io::Cursor::new(&data))
+            .expect("append to rootfs.tar");
+    }
+}
+
+/// Download all layers for an image and assemble them into a single tar,
+/// without needing Docker. Only supports gzip-compressed layers.
+fn export_image_via_registry(image: &str, platform: &str, dest: &Path) -> String {
+    let (registry, repo, tag) = parse_image_ref(image);
+    eprintln!("  Fetching image {image} ({platform}) via OCI registry API ...");
+    eprintln!("    Registry: {registry}, Repo: {repo}, Tag: {tag}");
+
+    let token = registry_token(&registry, &repo);
+    let (_manifest_digest, layers, config_digest, _manifest_str) =
+        fetch_image_manifest(&registry, &repo, &tag, platform, &token);
+
+    eprintln!("    Config: {config_digest}");
+    eprintln!("    Layers: {}", layers.len());
+
+    let tar_file = std::fs::File::create(dest).expect("create rootfs.tar");
+    let mut tar_builder = tar::Builder::new(tar_file);
+
+    for (i, layer_digest) in layers.iter().enumerate() {
+        eprint!("    [{}/{}] Downloading layer ... ", i + 1, layers.len());
+        download_and_extract_layer(&registry, &repo, layer_digest, &token, &mut tar_builder);
+    }
+
+    let tar_file = tar_builder.into_inner().expect("finish tar");
+    tar_file.sync_all().expect("sync rootfs.tar");
+
+    eprintln!("    Done — rootfs.tar created");
+
+    config_digest
+}
+
+fn image_digest(image: &str, platform: &str) -> String {
+    let (registry, repo, tag) = parse_image_ref(image);
+    let token = registry_token(&registry, &repo);
+    let (manifest_digest, _layers, _config_digest, _manifest_str) =
+        fetch_image_manifest(&registry, &repo, &tag, platform, &token);
+    manifest_digest
+}
+
+fn export_rootfs(cache: &CacheDir, image: &str, platform: &str) {
+    if cache.stamp("rootfs_export").exists() {
+        return;
+    }
+    eprintln!("  Exporting rootfs from {image} …");
+    let _config_digest = export_image_via_registry(image, platform, &cache.rootfs_tar());
+    std::fs::write(cache.stamp("rootfs_export"), b"").expect("write .stamp_rootfs_export");
+}
+
+fn image_config(image: &str, platform: &str) -> ImageConfig {
+    let (registry, repo, tag) = parse_image_ref(image);
+    let token = registry_token(&registry, &repo);
+    let (_manifest_digest, _layers, config_digest, _manifest_str) =
+        fetch_image_manifest(&registry, &repo, &tag, platform, &token);
+    fetch_image_config(&registry, &repo, &config_digest, &token)
 }
 
 // ---------------------------------------------------------------------------
@@ -321,60 +654,6 @@ fn find_latest_deb(html: &str, package: &str, arch: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 // Rootfs export & splitting
 // ---------------------------------------------------------------------------
-
-fn export_rootfs(cache: &CacheDir, image: &str, platform: &str) {
-    if cache.stamp("rootfs_export").exists() {
-        return;
-    }
-    eprintln!("  Exporting rootfs from {image} …");
-    export_docker_tar(image, platform, &cache.rootfs_tar());
-    std::fs::write(cache.stamp("rootfs_export"), b"").expect("write .stamp_rootfs_export");
-}
-
-/// Extract the runtime config (env, entrypoint, cmd, working_dir) from a
-/// Docker image.  These are baked into the rootfs manifest so the PRoot
-/// runtime can reconstruct the exact container environment.
-fn image_config(image: &str, platform: &str) -> ImageConfig {
-    let output = Command::new("docker")
-        .args([
-            "image",
-            "inspect",
-            "--format",
-            "{{json .Config}}",
-            "--platform",
-            platform,
-            image,
-        ])
-        .output()
-        .expect("docker image inspect failed");
-    assert!(output.status.success(), "docker inspect failed for {image}");
-
-    let stdout = String::from_utf8(output.stdout).expect("docker inspect output is valid UTF-8");
-    #[allow(non_snake_case)]
-    #[derive(serde::Deserialize)]
-    struct DockerConfig {
-        #[serde(default)]
-        Env: Vec<String>,
-        #[serde(default)]
-        Entrypoint: Option<Vec<String>>,
-        #[serde(default)]
-        Cmd: Option<Vec<String>>,
-        #[serde(default)]
-        WorkingDir: String,
-    }
-    let cfg: DockerConfig = serde_json::from_str(&stdout).expect("parse docker config JSON");
-
-    ImageConfig {
-        env: cfg.Env,
-        entrypoint: cfg.Entrypoint,
-        cmd: cfg.Cmd,
-        working_dir: if cfg.WorkingDir.is_empty() {
-            None
-        } else {
-            Some(cfg.WorkingDir)
-        },
-    }
-}
 
 fn build_rootfs_artifacts(cache: &CacheDir, tag: String, config: ImageConfig) {
     // Stale cache cleanup: old builds used `rootfs_files` instead of `rootfs_binaries`.
