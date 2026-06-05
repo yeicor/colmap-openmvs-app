@@ -3,12 +3,12 @@ use tracing::{debug, error, info};
 
 mod docker;
 pub(crate) mod docker_dind;
-mod image_manager;
 mod proot;
 mod registry;
+#[allow(dead_code)]
+pub(crate) mod shared;
 
 pub use docker::Docker;
-pub use image_manager::{ImageConfig, ImageManager};
 pub use proot::PRoot;
 pub use registry::{ImageDigest, ImageTag, RegistryClient, RemoteImage, UpdateInfo, Version};
 

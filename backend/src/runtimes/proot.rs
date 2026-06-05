@@ -1,13 +1,12 @@
 use super::{
-    ImageHash, ImageTag, Mount, PrepareProgressTx, PreparedImage, ProcessHandle, Runtime,
-    RuntimeResult,
+    shared, shared::*, ImageHash, ImageTag, Mount, PrepareProgressTx, PreparedImage, ProcessHandle,
+    Runtime, RuntimeResult,
 };
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tracing::{debug, error, info, trace, warn};
-
 // ---------------------------------------------------------------------------
 // PRoot binary detection
 // ---------------------------------------------------------------------------
@@ -99,65 +98,6 @@ fn setup_proot_command(proot_bin: &str) -> Command {
 // ---------------------------------------------------------------------------
 // Internal types
 // ---------------------------------------------------------------------------
-
-/// Metadata stored alongside each prepared image rootfs.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(crate) struct ImageMetadata {
-    #[serde(default)]
-    tag: String,
-    #[serde(default)]
-    build_date: Option<String>,
-    #[serde(default)]
-    env: Vec<String>,
-    #[serde(default)]
-    entrypoint: Option<Vec<String>>,
-    #[serde(default)]
-    cmd: Option<Vec<String>>,
-    #[serde(default)]
-    working_dir: Option<String>,
-}
-
-/// Entry in the embedded rootfs manifest for a single ELF file.
-///
-/// ELF binaries are stored as `librootfs-<hash>.so` in jniLibs.
-/// Non-ELF files are bundled in rootfs.zip and extracted at startup.
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct RootfsFileInfo {
-    path: String,
-    #[serde(default)]
-    executable: bool,
-    #[serde(default)]
-    size: Option<u64>,
-}
-
-/// Manifest produced at build time describing the embedded rootfs.
-///
-/// Only ELF files are recorded here (as flat hash-named entries in jniLibs).
-/// Non-ELF files are stored in a separate rootfs.zip bundle. The manifest
-/// also records every symlink (directory/file aliases) so the app can
-/// reconstruct the directory skeleton at first launch.
-#[derive(Debug, Deserialize)]
-pub(crate) struct RootfsManifest {
-    #[serde(default)]
-    tag: String,
-    #[serde(default)]
-    build_date: Option<String>,
-    #[serde(default)]
-    env: Vec<String>,
-    #[serde(default)]
-    entrypoint: Option<Vec<String>>,
-    #[serde(default)]
-    cmd: Option<Vec<String>>,
-    #[serde(default)]
-    working_dir: Option<String>,
-    /// Map from hash key (jniLibs filename) → file info.
-    #[serde(default)]
-    files: std::collections::HashMap<String, RootfsFileInfo>,
-    /// Map from absolute guest symlink path → symlink target.
-    #[serde(default)]
-    symlinks: std::collections::HashMap<String, String>,
-}
 
 impl RootfsManifest {
     fn into_image_metadata(self) -> ImageMetadata {
@@ -910,8 +850,6 @@ impl Runtime for PRoot {
     }
 
     async fn prepare(&self, image: &str, tx: PrepareProgressTx) -> RuntimeResult<()> {
-        use super::image_manager::ImageManager;
-
         // Helper for cleanup
         async fn cleanup_dir_if_exists(dir: &std::path::Path) {
             if dir.exists() {
@@ -972,26 +910,34 @@ impl Runtime for PRoot {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create image directory: {}", e))?;
 
-        // Pull and extract image using OCI-compliant client
-        let manager = ImageManager::new();
-        let image_config = manager.pull_and_extract(image, &rootfs_dir, &tx).await?;
+        // Pull and extract image using the shared sync function (curl-based).
+        let image_owned = image.to_string();
+        let rootfs_dir_for_blocking = rootfs_dir.clone();
+        let pulled = tokio::task::spawn_blocking(move || {
+            let (os, arch) = shared::host_platform();
+            let platform = format!("{os}/{arch}");
+            shared::pull_and_extract_image(&image_owned, &platform, &rootfs_dir_for_blocking)
+                .map_err(|e| anyhow::anyhow!("pull_and_extract_image failed: {e}"))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Blocking task panicked: {e}"))??;
 
         info!(
-            env_count = image_config.env.len(),
-            has_entrypoint = image_config.entrypoint.is_some(),
-            has_cmd = image_config.cmd.is_some(),
-            working_dir = ?image_config.working_dir,
+            env_count = pulled.image_config.env.len(),
+            has_entrypoint = pulled.image_config.entrypoint.is_some(),
+            has_cmd = pulled.image_config.cmd.is_some(),
+            working_dir = ?pulled.image_config.working_dir,
             "prepare: pulled image metadata from OCI registry"
         );
 
         // Persist complete image metadata
         let metadata = ImageMetadata {
             tag: image.to_string(),
-            build_date: image_config.created,
-            env: image_config.env,
-            entrypoint: image_config.entrypoint,
-            cmd: image_config.cmd,
-            working_dir: image_config.working_dir.or(Some("/".to_string())),
+            build_date: pulled.created,
+            env: pulled.image_config.env,
+            entrypoint: pulled.image_config.entrypoint,
+            cmd: pulled.image_config.cmd,
+            working_dir: pulled.image_config.working_dir.or(Some("/".to_string())),
         };
         info!(
             metadata_tag = %metadata.tag,
@@ -1489,76 +1435,22 @@ async fn resolve_nameservers() -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 /// Extract `data.tar.xz` from a Debian `.ar` archive.
+/// Extract `data.tar.xz` from a Debian `.ar` archive using the shared
+/// in-memory extraction, then write the result to `output_path`.
 fn extract_from_ar_sync(ar_path: &Path, output_path: &Path) -> RuntimeResult<()> {
     debug!(ar_path = %ar_path.display(), output_path = %output_path.display(), "extract_from_ar_sync: starting extraction");
 
-    trace!("extract_from_ar_sync: reading ar file");
     let file_data =
         std::fs::read(ar_path).map_err(|e| anyhow::anyhow!("Failed to read ar file: {}", e))?;
 
-    if file_data.len() < 8 {
-        error!(
-            size = file_data.len(),
-            "extract_from_ar_sync: ar file too small"
-        );
-        return Err(anyhow::anyhow!(
-            "Invalid ar archive format: file too small ({} bytes)",
-            file_data.len()
-        ));
-    }
+    let data = extract_data_tar_from_ar(&file_data)
+        .map_err(|e| anyhow::anyhow!("Failed to extract from ar archive: {}", e))?;
 
-    trace!("extract_from_ar_sync: validating ar magic signature");
-    if &file_data[0..8] != b"!<arch>\n" {
-        let magic = String::from_utf8_lossy(&file_data[0..8]);
-        error!(magic = %magic, "extract_from_ar_sync: invalid ar magic signature");
-        return Err(anyhow::anyhow!(
-            "Invalid ar archive format: bad magic signature. Got: {:?}",
-            magic
-        ));
-    }
-    debug!("extract_from_ar_sync: ar magic signature is valid");
+    std::fs::write(output_path, &data)
+        .map_err(|e| anyhow::anyhow!("Failed to write extracted data: {}", e))?;
 
-    let mut offset = 8usize;
-    trace!("extract_from_ar_sync: parsing ar members");
-    while offset + 60 <= file_data.len() {
-        let name = String::from_utf8_lossy(&file_data[offset..offset + 16])
-            .trim_end()
-            .trim_end_matches('/')
-            .to_string();
-
-        let size_str = String::from_utf8_lossy(&file_data[offset + 48..offset + 58])
-            .trim_end()
-            .to_string();
-        let size: usize = size_str
-            .parse()
-            .map_err(|_| anyhow::anyhow!("Invalid ar member size"))?;
-
-        trace!(member_name = %name, member_size = size, "extract_from_ar_sync: found ar member");
-        if name.contains("data.tar") {
-            debug!(member_name = %name, member_size = size, "extract_from_ar_sync: data.tar found");
-            let data_start = offset + 60;
-            std::fs::write(output_path, &file_data[data_start..data_start + size])
-                .map_err(|e| anyhow::anyhow!("Failed to write extracted data: {}", e))?;
-            debug!(output_path = %output_path.display(), bytes_written = size, "extract_from_ar_sync: extracted successfully");
-            return Ok(());
-        }
-
-        offset += 60 + ((size + 1) & !1);
-    }
-
-    error!("extract_from_ar_sync: data.tar not found in ar archive");
-    Err(anyhow::anyhow!("data.tar not found in ar archive"))
-}
-
-/// Decompress an XZ-compressed byte slice.
-fn decompress_xz_sync(data: &[u8]) -> RuntimeResult<Vec<u8>> {
-    use std::io::Read;
-    let mut decoder = xz2::read::XzDecoder::new(data);
-    let mut output = Vec::new();
-    decoder
-        .read_to_end(&mut output)
-        .map_err(|e| anyhow::anyhow!("Failed to decompress xz: {}", e))?;
-    Ok(output)
+    debug!(output_path = %output_path.display(), bytes_written = data.len(), "extract_from_ar_sync: extracted successfully");
+    Ok(())
 }
 
 /// Extract proot/libtalloc binaries from a `data.tar.xz`.
@@ -1576,7 +1468,8 @@ fn extract_tar_xz_sync(
         tar_xz_size = tar_xz_data.len(),
         "extract_tar_xz_sync: decompressing xz data"
     );
-    let tar_data = decompress_xz_sync(&tar_xz_data)?;
+    let tar_data = decompress_xz(&tar_xz_data)
+        .map_err(|e| anyhow::anyhow!("Failed to decompress xz: {}", e))?;
     debug!(
         tar_size = tar_data.len(),
         "extract_tar_xz_sync: tar data decompressed"

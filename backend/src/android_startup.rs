@@ -17,7 +17,7 @@
 //! Google Play's LOAD-segment alignment check), while the full rootfs is
 //! still available via symlinks + the extracted flat archive.
 
-use std::collections::HashMap;
+use crate::runtimes::shared::{self, ImageMetadata};
 use std::io::{Cursor, Read};
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -139,7 +139,7 @@ pub async fn setup_android_runtime() -> anyhow::Result<()> {
     // ── 7. Write metadata ──────────────────────────────────────────────
     let metadata = ImageMetadata {
         tag: manifest.tag.clone(),
-        build_date: manifest.created.clone(),
+        build_date: manifest.build_date.clone(),
         env: manifest.env.clone(),
         entrypoint: manifest.entrypoint.clone(),
         cmd: manifest.cmd.clone(),
@@ -176,7 +176,7 @@ pub async fn setup_android_runtime() -> anyhow::Result<()> {
 /// `include_bytes!(concat!(env!("OUT_DIR"), "/rootfs.zip"))`.
 /// On non-Android targets this function always returns an error (the
 /// code path that calls it is guarded by `#[cfg(target_os = "android")]`).
-fn read_embedded_manifest_and_zip() -> anyhow::Result<(EmbeddedManifest, Vec<u8>)> {
+fn read_embedded_manifest_and_zip() -> anyhow::Result<(shared::RootfsManifest, Vec<u8>)> {
     #[cfg(target_os = "android")]
     {
         let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/rootfs.zip"));
@@ -194,7 +194,7 @@ fn read_embedded_manifest_and_zip() -> anyhow::Result<(EmbeddedManifest, Vec<u8>
             .read_to_string(&mut content)
             .map_err(|e| anyhow::anyhow!("Failed to read manifest from zip: {e}"))?;
 
-        let manifest: EmbeddedManifest = serde_json::from_str(&content)
+        let manifest: shared::RootfsManifest = serde_json::from_str(&content)
             .map_err(|e| anyhow::anyhow!("Failed to parse embedded manifest: {e}"))?;
 
         Ok((manifest, bytes.to_vec()))
@@ -279,7 +279,7 @@ fn extract_rootfs_zip_inner(zip_bytes: &[u8], extract_dir: &str) -> anyhow::Resu
 /// On Android the jniLibs path changes after reinstall, so absolute symlinks
 /// from a previous install break.  This checks up to 5 entries; if any
 /// target is missing the rootfs is rebuilt.
-async fn verify_symlinks(rootfs_dir: &std::path::Path, manifest: &EmbeddedManifest) -> bool {
+async fn verify_symlinks(rootfs_dir: &std::path::Path, manifest: &shared::RootfsManifest) -> bool {
     let check_count = manifest.files.len().min(5);
     let mut checked = 0usize;
     for file_info in manifest.files.values() {
@@ -298,56 +298,4 @@ async fn verify_symlinks(rootfs_dir: &std::path::Path, manifest: &EmbeddedManife
         }
     }
     true
-}
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, serde::Deserialize)]
-#[allow(dead_code)]
-struct EmbeddedManifest {
-    version: u32,
-    #[serde(default)]
-    tag: String,
-    #[serde(default)]
-    created: Option<String>,
-    #[serde(default)]
-    env: Vec<String>,
-    #[serde(default)]
-    entrypoint: Option<Vec<String>>,
-    #[serde(default)]
-    cmd: Option<Vec<String>>,
-    #[serde(default)]
-    working_dir: Option<String>,
-    #[serde(default)]
-    files: HashMap<String, FileEntry>,
-    #[serde(default)]
-    symlinks: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[allow(dead_code)]
-struct FileEntry {
-    path: String,
-    #[serde(default)]
-    mode: u32,
-    #[serde(default)]
-    size: u64,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
-struct ImageMetadata {
-    tag: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    build_date: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    env: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    entrypoint: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    cmd: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    working_dir: Option<String>,
 }
