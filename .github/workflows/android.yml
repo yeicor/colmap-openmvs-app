@@ -170,6 +170,36 @@ jobs:
 
       - shell: bash
         run: |
+          echo "Checking sysroot library layout before building..."
+          SYSROOT="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          ls -la "$SYSROOT/usr/lib/x86_64-linux-android/" 2>/dev/null || echo "no x86_64 libs at sysroot/usr/lib level"
+          find "$SYSROOT/usr/lib/x86_64-linux-android/" -maxdepth 1 -type d 2>/dev/null | sort -V | head -10 || true
+          echo "=== Platform libs ==="
+          X86_DIR="$SYSROOT/usr/lib/x86_64-linux-android"
+          for api_dir in "$X86_DIR"/*/; do
+            if [ -f "${api_dir}liblog.so" ]; then
+              echo "Found liblog in $api_dir"
+              echo "LIB_DIR=${api_dir}" >> /tmp/ndk-lib-dir.txt
+              break
+            fi
+          done || echo "No liblog found"
+
+      - shell: bash
+        run: |
+          NDK_SYSROOT="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          X86_LIB_DIR="$NDK_SYSROOT/usr/lib/x86_64-linux-android"
+          # Find the lib directory with liblog
+          LIB_DIR=""
+          for d in $(ls -d "$X86_LIB_DIR"/*/ 2>/dev/null | sort -V -r); do
+            if [ -f "${d}liblog.so" ]; then
+              LIB_DIR="$d"
+              break
+            fi
+          done
+          if [ -n "$LIB_DIR" ]; then
+            echo "Using library dir: $LIB_DIR"
+            export RUSTFLAGS="-L ${LIB_DIR}${RUSTFLAGS:+ $RUSTFLAGS}"
+          fi
           dx bundle --android --package-types aab --features server --target x86_64-linux-android 2>&1
           dx bundle --android --package-types aab --features server --target aarch64-linux-android 2>&1
         env:
