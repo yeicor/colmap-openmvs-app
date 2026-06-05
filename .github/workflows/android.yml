@@ -112,21 +112,42 @@ jobs:
             librsvg2-dev \
             lld
 
-      # - uses: actions/setup-java@v4
-      #   with:
-      #     java-version: "17"
-      #     distribution: "temurin"
-      # - uses: android-actions/setup-android@v2
-      #   with:
-      #     packages: "build-tools;36.1.0 cmake;4.1.2 cmdline-tools;latest ndk;30.0.14904198 platform-tools platforms;android-36"
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: "build-tools;36.1.0 cmake;4.1.2 cmdline-tools;latest ndk;30.0.14904198 platform-tools platforms;android-36"
+
+      - shell: bash
+        run: |
+          rustup target add aarch64-linux-android x86_64-linux-android
+
+      - name: Setup Android NDK for cross-compilation
+        shell: bash
+        run: |
+          NDK_PATH="${ANDROID_NDK_HOME:-${ANDROID_SDK_ROOT}/ndk/$(ls ${ANDROID_SDK_ROOT}/ndk/ | sort -V | tail -1)}"
+          echo "NDK_PATH=$NDK_PATH"
+          TOOLCHAIN_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "TOOLCHAIN_PATH=$TOOLCHAIN_PATH"
+
+          # Add toolchain to PATH so cargo can find the cross-compiler/linker
+          echo "$TOOLCHAIN_PATH" >> "$GITHUB_PATH"
+
+          # Set CC/AR for each Android target so build.rs scripts can find the compiler
+          echo "CC_x86_64-linux-android=$TOOLCHAIN_PATH/x86_64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "AR_x86_64-linux-android=$TOOLCHAIN_PATH/llvm-ar" >> "$GITHUB_ENV"
+          echo "CC_aarch64-linux-android=$TOOLCHAIN_PATH/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64-linux-android=$TOOLCHAIN_PATH/llvm-ar" >> "$GITHUB_ENV"
 
       - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
 
       - shell: bash
         run: |
-          dx bundle --android --package-types aab --features server --target x86_64-linux-android
-          dx bundle --android --package-types aab --features server --target aarch64-linux-android
+          dx bundle --android --package-types aab --features server --target x86_64-linux-android 2>&1
+          dx bundle --android --package-types aab --features server --target aarch64-linux-android 2>&1
         env:
           CARGO_TERM_VERBOSE: true
           CARGO_TERM_COLOR: always
