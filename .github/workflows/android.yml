@@ -116,44 +116,56 @@ jobs:
         with:
           java-version: "17"
           distribution: "temurin"
-      - uses: android-actions/setup-android@v4
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
         with:
-          packages: "build-tools;36.1.0 cmake;4.1.2 cmdline-tools;latest ndk;30.0.14904198 platform-tools platforms;android-36"
+          packages: "platform-tools cmdline-tools;latest build-tools;36.1.0 platforms;android-36"
 
-      - shell: bash
-        run: |
-          rustup target add aarch64-linux-android x86_64-linux-android
-
-      - name: Setup Android NDK for cross-compilation
+      - name: Install Android NDK r26d
         shell: bash
         run: |
-          NDK_PATH="${ANDROID_NDK_HOME:-${ANDROID_SDK_ROOT}/ndk/$(ls ${ANDROID_SDK_ROOT}/ndk/ | sort -V | tail -1)}"
-          echo "NDK_PATH=$NDK_PATH"
-          TOOLCHAIN_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          echo "TOOLCHAIN_PATH=$TOOLCHAIN_PATH"
-
-          # Add toolchain to PATH so cargo can find the cross-compiler/linker
+          NDK_VERSION="26.3.11579264"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "SDK_ROOT=$SDK_ROOT"
+          NDK_DIR="$SDK_ROOT/ndk/$NDK_VERSION"
+          if [ -d "$NDK_DIR" ]; then
+            echo "NDK already installed at $NDK_DIR"
+          else
+            echo "Downloading NDK r26d..."
+            # Download from Google's official NDK releases
+            curl -L -o /tmp/ndk.zip \
+              "https://dl.google.com/android/repository/android-ndk-r26d-linux.zip"
+            unzip -q /tmp/ndk.zip -d /tmp/ndk-extract
+            mkdir -p "$SDK_ROOT/ndk/"
+            mv /tmp/ndk-extract/android-ndk-r26d "$NDK_DIR"
+            rm -rf /tmp/ndk.zip /tmp/ndk-extract
+            echo "NDK installed at $NDK_DIR"
+          fi
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          TOOLCHAIN_PATH="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
           echo "$TOOLCHAIN_PATH" >> "$GITHUB_PATH"
-
-          # Set CC/AR for each Android target so build.rs scripts can find the compiler
           echo "CC_x86_64-linux-android=$TOOLCHAIN_PATH/x86_64-linux-android21-clang" >> "$GITHUB_ENV"
           echo "AR_x86_64-linux-android=$TOOLCHAIN_PATH/llvm-ar" >> "$GITHUB_ENV"
           echo "CC_aarch64-linux-android=$TOOLCHAIN_PATH/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
           echo "AR_aarch64-linux-android=$TOOLCHAIN_PATH/llvm-ar" >> "$GITHUB_ENV"
 
       - shell: bash
+        run: |
+          rustup target add aarch64-linux-android x86_64-linux-android
+
+      - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
 
-      - name: Check NDK sysroot
+      - name: Verify NDK setup
         shell: bash
         run: |
-          NDK_SYSROOT="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          echo "NDK_SYSROOT=$NDK_SYSROOT"
-          ls -la "$NDK_SYSROOT/usr/lib/x86_64-linux-android/" 2>/dev/null | head -20 || echo "no x86_64 libs in sysroot/usr/lib"
-          ls -la "$NDK_SYSROOT/usr/lib/x86_64-linux-android/"*/liblog.so 2>/dev/null | head -5 || echo "no liblog in x86_64-linux-android subdirs"
-          find "$NDK_SYSROOT" -name "liblog.so" 2>/dev/null | head -10 || echo "no liblog found anywhere"
-          find "$NDK_SYSROOT" -name "libunwind*" 2>/dev/null | head -10 || echo "no libunwind"
-          ls -la "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/" 2>/dev/null | head -5
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          ls -la "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android"*-clang | head -5
+          echo "=== libunwind check ==="
+          find "$ANDROID_NDK_HOME" -name "*unwind*" 2>/dev/null | head -10
+          echo "=== liblog check ==="
+          find "$ANDROID_NDK_HOME" -name "liblog.so" 2>/dev/null | head -10
 
       - shell: bash
         run: |
