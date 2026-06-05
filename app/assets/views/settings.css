@@ -534,6 +534,59 @@
     white-space: nowrap;
 }
 
+/* Official image highlight */
+#settings .tags-item.tag-official {
+    border-left: 3px solid var(--primary-accent-color, #4a9eff);
+    background: color-mix(in srgb, var(--primary-color-3) 85%, var(--primary-accent-color, #4a9eff) 15%);
+}
+
+#settings .tags-item.tag-official:hover {
+    border-color: var(--focused-border-color);
+    border-left-color: var(--primary-accent-color, #4a9eff);
+}
+
+/* Official badge */
+#settings .tag-official-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.1rem 0.4rem;
+    border-radius: 0.25rem;
+    background: var(--primary-accent-color, #4a9eff);
+    color: #fff;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* Image search input */
+#settings .image-search-input {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.4rem 0.6rem;
+    margin-bottom: 0.5rem;
+    font-family: "Monaco", "Menlo", monospace;
+    font-size: 0.82rem;
+    background: var(--primary-color-3);
+    color: var(--secondary-color);
+    border: 1px solid var(--primary-color-6);
+    border-radius: 0.3rem;
+    outline: none;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
+}
+
+#settings .image-search-input:focus {
+    border-color: var(--focused-border-color);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--focused-border-color) 30%, transparent);
+}
+
+#settings .image-search-input::placeholder {
+    color: var(--secondary-color-6);
+}
+
 /* Action button sizing */
 #settings .tags-item .dx-button {
     height: 1.9rem;

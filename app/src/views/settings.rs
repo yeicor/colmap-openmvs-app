@@ -873,7 +873,6 @@ fn build_prepare_cb(
 
 #[component]
 fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<()>) -> Element {
-    // Store runtime_type in a signal so closures can capture it without moving a String.
     let rt_signal = use_signal(|| runtime_type.clone());
     let rt = runtime_type.clone();
     let mut tasks_ctx = use_context::<TasksCtx>();
@@ -888,8 +887,24 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
     let mut default_image_tag = use_signal(String::new);
     let mut preparing_tag = use_signal(String::new);
     let mut custom_tag = use_signal(String::new);
+    let mut ready_search = use_signal(String::new);
+    let mut available_search = use_signal(String::new);
 
     const COLMAP_IMAGE: &str = "mirror.gcr.io/yeicor/colmap-openmvs";
+
+    /// Returns true if the tag uses the official COLMAP-OpenMVS image repo.
+    fn is_official(tag: &str) -> bool {
+        tag.starts_with(COLMAP_IMAGE)
+    }
+
+    /// Shortened display name for official images (just tag part), full label otherwise.
+    fn display_label(tag: &str) -> &str {
+        if is_official(tag) {
+            tag.rsplit_once(':').map(|(_, t)| t).unwrap_or(tag)
+        } else {
+            tag
+        }
+    }
 
     // On mount: load images + available tags, reconnect any running task
     use_effect(move || {
@@ -898,10 +913,8 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
             loading.set(true);
             tags_loading.set(true);
 
-            // Load current default tag from settings
             if let Ok(s) = get_settings().await {
                 let (settings_runtime, tag) = s.parse_default_image();
-                // Only use this default if it's for the current runtime
                 if settings_runtime == Some(rt_inner.as_str()) {
                     if let Some(tag_str) = tag {
                         default_image_tag.set(tag_str.to_string());
@@ -909,7 +922,6 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                 }
             }
 
-            // Load prepared/pulled images
             let images_result = if rt_inner == "docker" {
                 list_docker_images().await
             } else {
@@ -917,22 +929,10 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
             };
 
             match images_result {
-                Ok(imgs) => {
-                    if rt_inner == "docker" {
-                        let prefix = format!("{}:", COLMAP_IMAGE);
-                        let filtered: Vec<_> = imgs
-                            .into_iter()
-                            .filter(|img| img.tag.starts_with(&prefix) || img.tag == COLMAP_IMAGE)
-                            .collect();
-                        ready_tags.set(filtered);
-                    } else {
-                        ready_tags.set(imgs);
-                    }
-                }
+                Ok(imgs) => ready_tags.set(imgs),
                 Err(e) => error.set(format!("Failed to load images: {}", e)),
             }
 
-            // Load available tags from registry
             match list_available_image_tags().await {
                 Ok(tags) => available_tags.set(tags),
                 Err(e) => error.set(format!("Failed to load available tags: {}", e)),
@@ -941,7 +941,6 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
             loading.set(false);
             tags_loading.set(false);
 
-            // Reconnect to any in-progress prepare task
             let reconnect_id = list_tasks(Some(TaskKind::PrepareImage), None)
                 .await
                 .ok()
@@ -987,7 +986,6 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
         });
     });
 
-    // Start a new prepare task
     let mut handle_prepare = move |tag: String| {
         if tag.is_empty() || preparing() {
             return;
@@ -1050,18 +1048,7 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                         list_runtime_images().await
                     };
                     if let Ok(imgs) = imgs {
-                        if rt_rm == "docker" {
-                            let prefix = format!("{}:", COLMAP_IMAGE);
-                            let filtered: Vec<_> = imgs
-                                .into_iter()
-                                .filter(|img| {
-                                    img.tag.starts_with(&prefix) || img.tag == COLMAP_IMAGE
-                                })
-                                .collect();
-                            ready_tags.set(filtered);
-                        } else {
-                            ready_tags.set(imgs);
-                        }
+                        ready_tags.set(imgs);
                     }
                 }
                 Err(e) => error.set(format!("Failed to remove: {}", e)),
@@ -1108,11 +1095,24 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
         });
     };
 
+    // Pre-compute search filters outside rsx! so let-bindings are valid
+    let ready_query = ready_search().to_lowercase();
+    let ready_filtered: Vec<_> = ready_tags()
+        .into_iter()
+        .filter(|img| ready_query.is_empty() || img.tag.to_lowercase().contains(&ready_query))
+        .collect();
+    let avail_query = available_search().to_lowercase();
+    let avail_filtered: Vec<_> = available_tags()
+        .into_iter()
+        .filter(|tag_info| {
+            avail_query.is_empty() || tag_info.name.to_lowercase().contains(&avail_query)
+        })
+        .collect();
+
     rsx! {
         Banner { message: error(), banner_type: BannerType::Error, on_close: move |_| error.set(String::new()) }
         Banner { message: success(), banner_type: BannerType::Info, on_close: move |_| success.set(String::new()) }
 
-        // In-progress indicator
         if !prepare_status().is_empty() {
             div { class: "images-header",
                 p { class: "prepare-progress", "⟳ Preparing '{preparing_tag}': {prepare_status}" }
@@ -1123,31 +1123,45 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
         div { class: "tags-container",
             h2 { class: "section-title", "Ready" }
 
+            input {
+                r#type: "text",
+                placeholder: "Search ready images…",
+                class: "image-search-input",
+                value: "{ready_search}",
+                oninput: move |e| ready_search.set(e.value()),
+            }
+
             if loading() {
                 p { class: "loading", "Loading…" }
             } else if ready_tags().is_empty() {
                 p { class: "empty", "No images ready. Pull one from the Available list below." }
+            } else if ready_filtered.is_empty() {
+                p { class: "empty", "No ready images match your search." }
             } else {
                 ul { class: "tags-list",
-                    {ready_tags().into_iter().map(|image| {
+                    {ready_filtered.into_iter().map(|image| {
                         let tag = image.tag.clone();
                         let tag2 = image.tag.clone();
-                        // For Docker, remove by tag; for PRoot, remove by hash (which equals tag)
                         let remove_id = image.hash.clone();
                         let build_date = image.build_date.clone();
                         let size_readable = image.size_readable.clone();
                         let size = image.size;
                         let is_default = tag == default_image_tag();
-                        let display_name = tag.rsplit_once(':').map(|(_, t)| t).unwrap_or(&tag);
+                        let official = is_official(&tag);
+                        let label = display_label(&tag);
+                        let item_class = if official { "tags-item tag-official" } else { "tags-item" };
                         rsx! {
-                            li { key: "{remove_id}", class: "tags-item",
+                            li { key: "{remove_id}", class: "{item_class}",
                                 div { class: "tags-item-top",
-                                    span { class: "tag-name", title: "{tag}", "{display_name}" }
+                                    span { class: "tag-name", title: "{tag}", "{label}" }
+                                    if official {
+                                        span { class: "tag-official-badge", "official" }
+                                    }
                                     div { class: "tag-actions",
                                         if is_default {
                                             Button {
                                                 variant: ButtonVariant::Primary,
-                                                title: "Currently the default image — click to unset",
+                                                title: "Currently the default image - click to unset",
                                                 onclick: handle_unset_default,
                                                 "✓ Default"
                                             }
@@ -1182,13 +1196,20 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
         div { class: "tags-container",
             h2 { class: "section-title", "Available" }
 
+            input {
+                r#type: "text",
+                placeholder: "Search available tags…",
+                class: "image-search-input",
+                value: "{available_search}",
+                oninput: move |e| available_search.set(e.value()),
+            }
+
             if tags_loading() {
                 p { class: "loading", "Loading…" }
             } else if available_tags().is_empty() && custom_tag().is_empty() {
                 p { class: "empty", "There are no available images to pull." }
             } else {
                 ul { class: "tags-list",
-                    // ── Custom image entry — always shown at the top ──────
                     li { key: "__custom__", class: "tags-item",
                         div { class: "tags-item-top",
                             input {
@@ -1212,7 +1233,7 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                         }
                     }
 
-                    {available_tags().into_iter().map(|tag_info| {
+                    {avail_filtered.into_iter().map(|tag_info| {
                         let name = tag_info.name.clone();
                         let name2 = tag_info.name.clone();
                         let build_date = tag_info.build_date.clone();

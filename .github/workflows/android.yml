@@ -112,27 +112,13 @@ jobs:
             librsvg2-dev \
             lld
 
-      - uses: actions/setup-java@v4
-        with:
-          java-version: "17"
-          distribution: "temurin"
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: "platform-tools cmdline-tools;latest build-tools;36.1.0 cmake;4.1.2 platforms;android-34"
-
-      - shell: bash
-        run: |
-          rustup target add aarch64-linux-android x86_64-linux-android
-
       - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
 
       - shell: bash
         run: |
-          dx bundle --android --package-types aab --features server --target x86_64-linux-android 2>&1
-          dx bundle --android --package-types aab --features server --target aarch64-linux-android 2>&1 || echo "WARNING: aarch64 build failed, but x86_64 succeeded"
+          dx bundle --android --package-types aab --features server --target x86_64-linux-android
+          dx bundle --android --package-types aab --features server --target aarch64-linux-android
         env:
           CARGO_TERM_VERBOSE: true
           CARGO_TERM_COLOR: always
