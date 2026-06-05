@@ -144,13 +144,16 @@ jobs:
       - shell: bash
         run: curl -sSL https://dioxus.dev/install.sh | bash
 
-      - shell: bash
+      - name: Check NDK sysroot
+        shell: bash
         run: |
-          cargo build --target x86_64-linux-android --features server --release --color always 2>&1
-
-      - shell: bash
-        run: |
-          cargo build --target aarch64-linux-android --features server --release --color always 2>&1
+          NDK_SYSROOT="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          echo "NDK_SYSROOT=$NDK_SYSROOT"
+          ls -la "$NDK_SYSROOT/usr/lib/x86_64-linux-android/" 2>/dev/null | head -20 || echo "no x86_64 libs in sysroot/usr/lib"
+          ls -la "$NDK_SYSROOT/usr/lib/x86_64-linux-android/"*/liblog.so 2>/dev/null | head -5 || echo "no liblog in x86_64-linux-android subdirs"
+          find "$NDK_SYSROOT" -name "liblog.so" 2>/dev/null | head -10 || echo "no liblog found anywhere"
+          find "$NDK_SYSROOT" -name "libunwind*" 2>/dev/null | head -10 || echo "no libunwind"
+          ls -la "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/" 2>/dev/null | head -5
 
       - shell: bash
         run: |
