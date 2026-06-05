@@ -51,6 +51,10 @@ pub fn App() -> Element {
     // On other platforms the server returns `None` and we leave the `data-theme`
     // attribute untouched so the CSS media query continues to work normally.
     use_effect(move || {
+        // Redirect to the startup page on first load so that Android
+        // rootfs validation & repair run automatically after reinstall.
+        use_navigator().push("/startup");
+
         spawn(async move {
             match crate::server::get_dark_mode().await {
                 Ok(Some(is_dark)) => {

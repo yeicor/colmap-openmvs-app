@@ -360,14 +360,17 @@ fn find_latest_tag() -> Option<String> {
 
 /// Customise the generated Android project:
 ///
-/// 1. **Icon** — Resizes `assets/icon.png` into each density-specific
-///    `mipmap-*dpi/ic_launcher.webp` and removes the adaptive-icon XML so the
-///    custom icon is shown on all API levels.  (Dioxus CLI issue #3685 — the
-///    generated project always uses placeholder icons regardless of
-///    `Dioxus.toml`'s `[bundle] icon` setting.)
-///
-/// 2. **App name** — Overrides `res/values/strings.xml` with the canonical
+/// 1. **App name** — Overrides `res/values/strings.xml` with the canonical
 ///    Play Store display name.
+///
+/// 2. **Icon** — Resizes `assets/icon.png` into each density-specific
+///    `mipmap-*dpi/ic_launcher.webp` and generates a properly padded
+///    `ic_launcher_foreground.webp` for adaptive icons (API 26+).  Rewrites
+///    `mipmap-anydpi-v26/ic_launcher.xml` to use our foreground so the icon
+///    respects squircle / circle / rounded-square masks on modern Android.
+///
+///    (Dioxus CLI issue #3685 — the generated project always uses placeholder
+///    icons regardless of `Dioxus.toml`'s `[bundle] icon` setting.)
 fn embed_android_icon(manifest_dir: &Path) {
     let profile = std::env::var("PROFILE").unwrap_or_default();
 
@@ -433,6 +436,10 @@ fn embed_android_icon(manifest_dir: &Path) {
 
     println!("cargo:rerun-if-changed={}", icon_src.display());
 
+    // Density bucket → pixel size at that bucket (launcher icon).
+    // Adaptive-icon viewport = 108dp, safe-zone (inner 72dp) = 2/3 of viewport.
+    // Foreground content should occupy the inner 2/3 of the canvas so it is
+    // never clipped by the mask (squircle, circle, rounded-square).
     const DENSITIES: &[(&str, u32)] = &[
         ("mdpi", 48),
         ("hdpi", 72),
@@ -456,12 +463,22 @@ fn embed_android_icon(manifest_dir: &Path) {
             continue;
         }
 
-        let resized = img.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
-        let dest = mipmap_dir.join("ic_launcher.webp");
-        if let Err(e) = resized.save(&dest) {
-            eprintln!("cargo:warning=Failed to write {}: {e}", dest.display());
+        // ── Flat (non-adaptive) icon — used as fallback on pre-API-26 ──
+        let flat = img.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
+        if let Err(e) = flat.save(&mipmap_dir.join("ic_launcher.webp")) {
+            eprintln!("cargo:warning=Failed to write ic_launcher.webp (mipmap-{density}): {e}");
         } else {
             any_written = true;
+        }
+
+        // ── Adaptive-icon foreground — full-bleed, same as flat icon ─────
+        // The user prefers the icon as large as possible and accepts that the
+        // device mask (squircle, circle, etc.) may clip edges.
+        if let Err(e) = flat.save(&mipmap_dir.join("ic_launcher_foreground.webp")) {
+            eprintln!(
+                "cargo:warning=Failed to write ic_launcher_foreground.webp (mipmap-{density}): {e}"
+            );
+        } else {
             eprintln!("cargo:warning=Updated Android launcher icon  mipmap-{density}");
         }
     }
@@ -470,24 +487,41 @@ fn embed_android_icon(manifest_dir: &Path) {
         return;
     }
 
-    // ── Remove the adaptive-icon XML ──────────────────────────────────────
-    // When `mipmap-anydpi-v26/ic_launcher.xml` is present and targets API 26+,
-    // Android uses the adaptive foreground/background drawables instead of the
-    // density-specific ic_launcher.webp files.  We delete it so that our icon
-    // is used on every API level.
-    let anydpi_xml = android_res
-        .join("mipmap-anydpi-v26")
-        .join("ic_launcher.xml");
-    if anydpi_xml.is_file() {
-        match std::fs::remove_file(&anydpi_xml) {
-            Ok(_) => eprintln!(
-                "cargo:warning=Removed adaptive-icon XML so custom icon is used on API 26+"
-            ),
-            Err(e) => eprintln!(
-                "cargo:warning=Failed to remove {}: {e}",
+    // ── Repurpose the adaptive-icon XML ───────────────────────────────────
+    // The generated project includes `mipmap-anydpi-v26/ic_launcher.xml` which
+    // references the default Dioxus vector drawables.  We rewrite it to point
+    // at our foreground bitmap so the icon respects the device's mask shape.
+    // The existing `@drawable/ic_launcher_background` (solid green grid) is
+    // kept as-is — it provides a neutral backing behind the masked icon.
+    let anydpi_dir = android_res.join("mipmap-anydpi-v26");
+    let anydpi_xml = anydpi_dir.join("ic_launcher.xml");
+    let adaptive_icon_xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>
+"#;
+    // Also write a round-icon variant so round launchers (Pixel, etc.) also
+    // show our icon properly.
+    let round_xml = anydpi_dir.join("ic_launcher_round.xml");
+    let round_icon_xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>
+"#;
+
+    if fs::create_dir_all(&anydpi_dir).is_ok() {
+        if let Err(e) = fs::write(&anydpi_xml, adaptive_icon_xml) {
+            eprintln!(
+                "cargo:warning=Failed to write {}: {e}",
                 anydpi_xml.display()
-            ),
+            );
         }
+        if let Err(e) = fs::write(&round_xml, round_icon_xml) {
+            eprintln!("cargo:warning=Failed to write {}: {e}", round_xml.display());
+        }
+        eprintln!("cargo:warning=Adaptive-icon XML updated — icon now respects mask shapes");
     }
 }
 

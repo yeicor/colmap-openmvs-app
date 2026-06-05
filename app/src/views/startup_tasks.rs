@@ -67,9 +67,20 @@ pub fn StartupTasks() -> Element {
         is_completed.set(false);
     };
 
-    let on_continue = move |_: Event<MouseData>| {
-        use_navigator().push("/");
-    };
+    // Auto-navigate to the main view when the task completes (or fails).
+    // The user should not need to manually click anything — if the rootfs
+    // setup is already valid the repair finishes near-instantly.
+    use_effect(move || {
+        if completed || is_failed {
+            // Small delay so the user can briefly see the outcome in the logs.
+            spawn(async move {
+                sleep_poll().await;
+                sleep_poll().await;
+                sleep_poll().await;
+                use_navigator().push("/");
+            });
+        }
+    });
 
     rsx! {
         div {
@@ -90,21 +101,13 @@ pub fn StartupTasks() -> Element {
             div {
                 class: "startup-buttons",
                 if completed {
-                    button {
-                        class: "action-btn action-btn-primary",
-                        onclick: on_continue,
-                        "Continue"
-                    }
+                    // Auto-redirect is triggered by the use_effect above.
+                    span { class: "startup-done", "✓ Setup complete — redirecting..." }
                 } else if is_failed {
                     button {
                         class: "action-btn",
                         onclick: on_retry,
                         "Retry"
-                    }
-                    button {
-                        class: "action-btn action-btn-primary",
-                        onclick: on_continue,
-                        "Skip"
                     }
                 } else if is_running {
                     div {

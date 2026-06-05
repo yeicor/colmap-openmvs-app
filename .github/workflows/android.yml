@@ -122,6 +122,38 @@ jobs:
         env:
           CARGO_TERM_VERBOSE: true
           CARGO_TERM_COLOR: always
+
+      - name: Sign AABs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          : "${ANDROID_KEYSTORE_B64:?Missing ANDROID_KEYSTORE_B64}"
+          : "${ANDROID_KEY_ALIAS:?Missing ANDROID_KEY_ALIAS}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?Missing ANDROID_KEYSTORE_PASSWORD}"
+          : "${ANDROID_KEY_PASSWORD:?Missing ANDROID_KEY_PASSWORD}"
+
+          echo "🔐 Decoding keystore from ANDROID_KEYSTORE_B64"
+          KEYSTORE_FILE="$(mktemp)"
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > "$KEYSTORE_FILE"
+          trap 'rm -f "$KEYSTORE_FILE"' EXIT
+
+          # jarsigner is pre-installed on ubuntu-24.04 runners (comes with the JDK)
+          command -v jarsigner >/dev/null || sudo apt-get install -y default-jdk-headless
+
+          find target -type f -path '*/release/android/*/bundle/*.aab' | while read -r aab; do
+            echo "🔐 Signing AAB: $aab"
+            jarsigner \
+              -sigalg SHA256withRSA \
+              -digestalg SHA-256 \
+              -keystore "$KEYSTORE_FILE" \
+              -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+              -keypass "$ANDROID_KEY_PASSWORD" \
+              "$aab" \
+              "$ANDROID_KEY_ALIAS"
+            echo "✔ Signed: $aab"
+          done
+        env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
