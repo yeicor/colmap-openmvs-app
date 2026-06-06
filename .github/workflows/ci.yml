@@ -39,11 +39,11 @@ jobs:
           - os: ubuntu-24.04
             build-type: android-apk
             target: x86_64-linux-android
-            artifact-find: "-path '*/outputs/apk/debug/*.apk'"
+            artifact-find: "-path '*/outputs/apk/debug/*.apk'" # Even on release, the APK is still named debug
           - os: ubuntu-24.04
             build-type: android-apk
             target: aarch64-linux-android
-            artifact-find: "-path '*/outputs/apk/debug/*.apk'"
+            artifact-find: "-path '*/outputs/apk/debug/*.apk'" # Even on release, the APK is still named debug
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -92,12 +92,17 @@ jobs:
           $HOME/.dx/bin/dx bundle --android --package-types apk --release --features server --target "${{ matrix.target }}" --verbose
           find target -type f ${{ matrix.artifact-find }} | while read -r apk; do
             dir="$(dirname "$apk")"
-            mv "$apk" "$dir/app-debug-${{ matrix.target }}.apk"
+            mv "$apk" "$dir/app-release-${{ matrix.target }}.apk"
           done
+          ZIPALIGN=$(command -v zipalign) || [ -n "${ANDROID_SDK_ROOT:-}" ] && ZIPALIGN=$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -name zipalign -type f 2>/dev/null | sort -V | tail -1)
+          : "${ZIPALIGN:?zipalign not found}"
+          find target -type f ${{ matrix.artifact-find }} -exec sh -c '"$0" -p -f -v 4 "$1" "$1.tmp" && mv "$1.tmp" "$1"' "$ZIPALIGN" {} \;
           base64 -d<<<"$ANDROID_KEYSTORE_B64">ks.jks
+          APKSIGNER=$(command -v apksigner) || [ -n "${ANDROID_SDK_ROOT:-}" ] && APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -name apksigner -type f 2>/dev/null | sort -V | tail -1)
+          : "${APKSIGNER:?apksigner not found}"
           find target -type f ${{ matrix.artifact-find }} -exec \
-            jarsigner -sigalg SHA256withRSA -digestalg SHA-256 -keystore ks.jks \
-              -storepass "$ANDROID_KEYSTORE_PASSWORD" -keypass "$ANDROID_KEY_PASSWORD" {} "$ANDROID_KEY_ALIAS" \;
+            "$APKSIGNER" sign --ks ks.jks --ks-key-alias "$ANDROID_KEY_ALIAS" \
+              --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD {} \;
 
       - shell: bash
         run: |
