@@ -12,7 +12,9 @@ use dioxus_primitives::merge_attributes;
 use dioxus_primitives::use_controlled;
 
 // constants
-const SIDEBAR_WIDTH: &str = "16rem";
+// Responsive width: larger on big screens so project labels aren't truncated.
+// With 22vw the sidebar grows with the viewport, capped at 26rem.
+const SIDEBAR_WIDTH: &str = "clamp(18rem, 22vw, 26rem)";
 const SIDEBAR_WIDTH_MOBILE: &str = "18rem";
 const SIDEBAR_WIDTH_ICON: &str = "3rem";
 const SIDEBAR_KEYBOARD_SHORTCUT: &str = "b";

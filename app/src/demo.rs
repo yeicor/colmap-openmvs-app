@@ -54,10 +54,6 @@ pub fn read_only_error<T>() -> Result<T> {
     ))
 }
 
-pub async fn on_backend_started() -> Result<()> {
-    Ok(())
-}
-
 pub async fn get_projects() -> Result<Vec<Project>> {
     Ok(get_manifest().projects)
 }
@@ -134,6 +130,10 @@ pub async fn poll_task_events(task_id: String, cursor: usize) -> Result<TaskEven
         "demo-download-task" => get_download_events(),
         "demo-pipeline-task" => get_pipeline_events(),
         "demo-pipeline-dry-run" => get_pipeline_events(),
+        "demo-startup-task" => &vec![
+            TaskEvent::Log("No platform-specific startup steps needed (demo).".to_string()),
+            TaskEvent::Completed,
+        ],
         _ => {
             return Ok(TaskEventBatch {
                 events: vec![],
@@ -236,8 +236,8 @@ pub async fn prepare_runtime_image(_image: String) -> Result<String> {
 pub async fn remove_runtime_image(_image_tag: String) -> Result<()> {
     read_only_error()
 }
-pub async fn repair_android_settings() -> Result<String> {
-    read_only_error()
+pub async fn startup() -> Result<String> {
+    Ok("demo-startup-task".to_string())
 }
 pub async fn save_project_config(
     _project_name: String,

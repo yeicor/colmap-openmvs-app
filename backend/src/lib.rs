@@ -28,7 +28,7 @@ mod outputs;
 pub use outputs::write_project_output;
 
 mod init;
-pub use init::{on_backend_started, on_frontend_started};
+pub use init::startup;
 
 mod projects;
 pub use projects::{create_project, delete_project, get_projects, rename_project};

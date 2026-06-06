@@ -3,6 +3,7 @@
 //! This package contains all client-side UI components, views, and the main application entry point.
 //! It imports from the server package for types and function calls.
 
+use colmap_openmvs_api::{TaskEvent, TaskState};
 use dioxus::prelude::*;
 use tracing::info;
 pub mod backend_url;
@@ -39,11 +40,80 @@ pub enum Route {
 #[component]
 pub fn App() -> Element {
     use crate::mycomponents::ToastContainer;
-    use crate::task_manager::{TasksCtx, TasksState};
+    use crate::task_manager::{StartupCtx, TasksCtx, TasksState};
     use_context_provider(|| Signal::new(TasksState::default()) as TasksCtx);
 
     // Global toast notification system (single container for all floating toasts).
     mycomponents::use_toast_provider();
+
+    // Shared startup task state — kick off the server startup immediately so it can
+    // finish within the 1-second grace window without ever showing the startup
+    // page.  Components inside the router tree (ProjectsSidebar, StartupTasks)
+    // consume this context to decide whether / where to redirect.
+    let startup = StartupCtx::new();
+    use_context_provider(|| startup);
+
+    {
+        // Start the startup task in background as early as possible.
+        let mut task_id = startup.task_id;
+        let mut is_completed = startup.is_completed;
+        let mut task_state = startup.task_state;
+        spawn(async move {
+            match crate::server::startup().await {
+                Ok(id) => {
+                    task_id.set(Some(id.clone()));
+                    let mut cursor = 0usize;
+                    loop {
+                        match crate::server::poll_task_events(id.clone(), cursor).await {
+                            Ok(batch) => {
+                                if !batch.task_found {
+                                    is_completed.set(true);
+                                    task_state.set(Some(TaskState::Completed));
+                                    return;
+                                }
+                                cursor = batch.cursor;
+                                if batch.is_terminal {
+                                    let mut found_terminal = false;
+                                    for event in batch.events {
+                                        if matches!(event, TaskEvent::Completed) {
+                                            is_completed.set(true);
+                                            task_state.set(Some(TaskState::Completed));
+                                            found_terminal = true;
+                                        } else if let TaskEvent::Failed(msg) = event {
+                                            is_completed.set(true);
+                                            task_state.set(Some(TaskState::Failed(msg)));
+                                            found_terminal = true;
+                                        }
+                                    }
+                                    if !found_terminal {
+                                        // Terminal batch with no explicit event =
+                                        // treat as completed.
+                                        is_completed.set(true);
+                                        task_state.set(Some(TaskState::Completed));
+                                    }
+                                    return;
+                                }
+                            }
+                            Err(e) => {
+                                // Non-fatal; keep polling on transient failures.
+                                tracing::warn!(
+                                    error = %e,
+                                    "Startup task poll failed; retrying"
+                                );
+                            }
+                        }
+                        // Re-use task_manager's sleep helper.
+                        crate::task_manager::sleep_poll().await;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to start startup task");
+                    is_completed.set(true);
+                    task_state.set(Some(TaskState::Failed(e.to_string())));
+                }
+            }
+        });
+    }
 
     // Fetch the server-side color-scheme preference once on startup.
     // On Android the WebView may not propagate `prefers-color-scheme` CSS media
@@ -51,10 +121,6 @@ pub fn App() -> Element {
     // On other platforms the server returns `None` and we leave the `data-theme`
     // attribute untouched so the CSS media query continues to work normally.
     use_effect(move || {
-        // Redirect to the startup page on first load so that Android
-        // rootfs validation & repair run automatically after reinstall.
-        use_navigator().push("/startup");
-
         spawn(async move {
             match crate::server::get_dark_mode().await {
                 Ok(Some(is_dark)) => {
@@ -78,6 +144,7 @@ pub fn App() -> Element {
         document::Link { rel: "stylesheet", href: asset!("/assets/mycomponents.css", AssetOptions::css().with_preload(true)) }
         document::Link { rel: "stylesheet", href: asset!("/assets/tasks-panel.css", AssetOptions::css().with_preload(true)) }
         // ── View stylesheets (preloaded to avoid FOUC) ───────────────────
+        document::Link { rel: "stylesheet", href: asset!("/assets/views/startup.css", AssetOptions::css().with_preload(true)) }
         document::Link { rel: "stylesheet", href: asset!("/assets/views/projects.css", AssetOptions::css().with_preload(true)) }
         document::Link { rel: "stylesheet", href: asset!("/assets/views/settings.css", AssetOptions::css().with_preload(true)) }
         document::Link { rel: "stylesheet", href: asset!("/assets/views/project.css", AssetOptions::css().with_preload(true)) }
@@ -94,7 +161,6 @@ pub fn App() -> Element {
         document::Link { rel: "stylesheet", href: asset!("./components/sidebar/style.css", AssetOptions::css().with_preload(true)) }
         document::Link { rel: "stylesheet", href: asset!("./components/tabs/style.css", AssetOptions::css().with_preload(true)) }
         document::Link { rel: "stylesheet", href: asset!("./components/tooltip/style.css", AssetOptions::css().with_preload(true)) }
-        document::Title { "Photos to 3D Model Offline" }
         Router::<Route> {}
         ToastContainer {}
     }
@@ -171,14 +237,18 @@ fn main() {
 
     init_backend_url();
 
-    #[cfg(feature = "server")]
-    tokio::runtime::Runtime::new()
-        .expect("Failed to create Tokio runtime")
-        .block_on(async {
-            if let Err(e) = server::on_backend_started().await {
-                tracing::error!(error = %e, "Failed to start backend server");
-            }
-        });
-
-    dioxus::launch(App);
+    // Use hash-based routing on web so it works on static hosting without
+    // a server that rewrites all routes to index.html.
+    dioxus::LaunchBuilder::new()
+        .with_cfg(web! {
+            dioxus::web::Config::new()
+                .history(std::rc::Rc::new(dioxus::web::HashHistory::new(false)))
+        })
+        .with_cfg(desktop! {
+           dioxus::desktop::Config::new().with_window(
+               dioxus::desktop::WindowBuilder::new()
+                   .with_title("Photos to 3D Model Offline")
+           )
+        })
+        .launch(App);
 }

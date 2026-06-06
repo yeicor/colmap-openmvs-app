@@ -932,7 +932,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                 }
                                                             },
                                                             Icon { icon: BsDownload }
-                                                            span { class: "btn-label", " Download" }
+                                                            span { class: "btn-label", " Backup" }
                                                         }
 
                                                         // Folder restore (non-virtual dirs only)
@@ -1013,7 +1013,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                  });
                                                             },
                                                             Icon { icon: BsDownload }
-                                                            span { class: "btn-label", " Download" }
+                                                            span { class: "btn-label", " Backup" }
                                                         }
                                                     }
 

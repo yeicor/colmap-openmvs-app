@@ -19,6 +19,7 @@ use dioxus_free_icons::icons::bs_icons::{
 };
 use dioxus_free_icons::Icon;
 use dioxus_primitives::ContentSide;
+use std::sync::OnceLock;
 use tracing::{debug, error, info, warn};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -37,6 +38,39 @@ pub fn ProjectsSidebar() -> Element {
     if *route_state.peek() != cur_route {
         route_state.set(cur_route.clone());
     }
+
+    // ── Startup-orchestration: save origin, delay, maybe redirect ────
+    //
+    // The startup task was already kicked off by `App`.  If it completes within
+    // ~1 s the user never sees the startup page.  Otherwise we redirect so the
+    // user can watch progress / retry.
+    //
+    // Guarded with OnceLock so this only runs once per boot (sidebar may
+    // remount on route changes).
+    let mut startup = use_context::<crate::task_manager::StartupCtx>();
+    let navigator = use_navigator();
+    let origin_route = cur_route.to_string();
+    static STARTUP_ORCHESTRATED: OnceLock<()> = OnceLock::new();
+    use_effect(move || {
+        // Remember where the user was heading so we can return there.
+        if startup.is_origin_empty() {
+            startup.origin.set(origin_route.clone());
+        }
+        if STARTUP_ORCHESTRATED.set(()).is_err() {
+            return;
+        }
+        let navigator = navigator;
+        let is_completed = startup.is_completed;
+        spawn(async move {
+            // Wait ~1 second (3 poll intervals = 900 ms, close enough).
+            crate::task_manager::sleep_poll().await;
+            crate::task_manager::sleep_poll().await;
+            crate::task_manager::sleep_poll().await;
+            if !is_completed() {
+                navigator.push("/startup");
+            }
+        });
+    });
 
     use_effect(move || {
         sidebar_open.set(if matches!(route_state(), Route::Projects {}) {
@@ -208,7 +242,7 @@ pub fn Projects(
         div {
             id: "projects",
             PageHeader {
-                title: "Project list".to_string(),
+                title: "Projects".to_string(),
                 no_left_margin: !is_sidebar,
                 PageHeaderButton {
                     icon: rsx! { Icon { icon: BsPlusCircle } },

@@ -30,7 +30,7 @@ use dioxus::prelude::*;
 const POLL_INTERVAL_MS: u64 = 300;
 
 /// Cross-platform async sleep.
-async fn sleep_poll() {
+pub async fn sleep_poll() {
     #[cfg(not(target_arch = "wasm32"))]
     tokio::time::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
     #[cfg(target_arch = "wasm32")]
@@ -439,4 +439,54 @@ pub fn drive_task<F: FnMut(TaskEvent) + 'static>(
             sleep_poll().await;
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Startup task context (shared across components during boot)
+// ---------------------------------------------------------------------------
+
+/// Shared state for the one-time server startup task.
+///
+/// Provided at `App` level so the task can be kicked off immediately without
+/// waiting for `StartupTasks` to mount.  `StartupTasks` picks up the running
+/// task from here when it renders.
+#[derive(Clone, Copy, Default)]
+pub struct StartupCtx {
+    /// The URL the user originally navigated to (stored before redirect).
+    pub origin: Signal<String>,
+    /// The server task ID, once started.
+    pub task_id: Signal<Option<String>>,
+    /// Whether the startup cycle has reached a terminal state.
+    pub is_completed: Signal<bool>,
+    /// Terminal state of the startup task (None while running).
+    pub task_state: Signal<Option<TaskState>>,
+}
+
+impl StartupCtx {
+    pub fn new() -> Self {
+        Self {
+            origin: use_signal(String::new),
+            task_id: use_signal(|| None),
+            is_completed: use_signal(|| false),
+            task_state: use_signal(|| None),
+        }
+    }
+
+    // ── Convenience accessors ────────────────────────────────────────────
+
+    pub fn get_origin(&self) -> String {
+        self.origin.read().clone()
+    }
+
+    pub fn is_origin_empty(&self) -> bool {
+        self.origin.read().is_empty()
+    }
+
+    pub fn is_startup_completed(&self) -> bool {
+        *self.is_completed.read()
+    }
+
+    pub fn get_startup_task_state(&self) -> Option<TaskState> {
+        self.task_state.read().clone()
+    }
 }

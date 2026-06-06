@@ -16,9 +16,9 @@ use colmap_openmvs_backend as backend;
 #[cfg(feature = "demo")]
 use crate::demo as backend;
 
-#[cfg_attr(not(feature = "demo"), get("/api/startup"))]
-pub async fn on_backend_started() -> Result<()> {
-    backend::on_backend_started().await
+#[cfg_attr(not(feature = "demo"), post("/api/startup"))]
+pub async fn startup() -> Result<String> {
+    backend::startup().await
 }
 
 #[cfg_attr(not(feature = "demo"), get("/api/projects"))]
@@ -163,11 +163,6 @@ pub async fn list_available_image_tags() -> Result<Vec<ImageTagInfo>> {
 #[cfg_attr(not(feature = "demo"), get("/api/runtimes/proot/images/embedded-tag"))]
 pub async fn get_embedded_image_tag() -> Result<Option<String>> {
     backend::get_embedded_image_tag().await
-}
-
-#[cfg_attr(not(feature = "demo"), post("/api/repair-android-settings"))]
-pub async fn repair_android_settings() -> Result<String> {
-    backend::repair_android_settings().await
 }
 
 // ---------------------------------------------------------------------------

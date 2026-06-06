@@ -1,0 +1,195 @@
+/* =========================================================
+   System Startup View
+   ========================================================= */
+
+.startup-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100svh;
+    padding: 1rem;
+    box-sizing: border-box;
+    animation: startup-fade-in 0.35s ease-out both;
+}
+
+@keyframes startup-fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.startup-card {
+    width: min(520px, 100%);
+    border: 1px solid var(--primary-color-6);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--primary-color-3);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+.startup-card--running {
+    border-left: 4px solid var(--secondary-info-color);
+}
+
+.startup-card--done {
+    border-left: 4px solid var(--secondary-success-color);
+}
+
+.startup-card--failed {
+    border-left: 4px solid var(--secondary-error-color);
+}
+
+.startup-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--primary-color-6);
+}
+
+.startup-icon {
+    font-size: 1.3rem;
+    flex-shrink: 0;
+    width: 1.3rem;
+    text-align: center;
+}
+
+.startup-card--running .startup-icon {
+    color: var(--secondary-info-color);
+    animation: spin-slow 1.4s linear infinite;
+}
+
+.startup-card--done .startup-icon {
+    color: var(--secondary-success-color);
+}
+
+.startup-card--failed .startup-icon {
+    color: var(--secondary-error-color);
+}
+
+.startup-title-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex: 1;
+    min-width: 0;
+}
+
+.startup-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--secondary-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.startup-subtitle {
+    margin: 0;
+    font-size: 0.72rem;
+    color: var(--secondary-color-5);
+    font-weight: 400;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ── Log area ───────────────────────────────────────────── */
+
+.startup-logs {
+    max-height: 220px;
+    overflow-y: auto;
+    padding: 0.6rem 0.75rem;
+    background: var(--primary-color-4);
+    border-bottom: 1px solid var(--primary-color-6);
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.startup-log-line {
+    font-family: "Courier New", Courier, monospace;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    color: var(--secondary-color-2);
+    white-space: pre-wrap;
+    word-break: break-all;
+    flex-shrink: 0;
+}
+
+.startup-logs-empty {
+    font-size: 0.75rem;
+    color: var(--primary-color-7);
+    text-align: center;
+    padding: 1rem 0;
+}
+
+/* ── Footer / actions ───────────────────────────────────── */
+
+.startup-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0.75rem 1.25rem;
+    min-height: 2.5rem;
+}
+
+.startup-status-text {
+    font-size: 0.8rem;
+    color: var(--secondary-color-5);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex: 1;
+}
+
+.startup-status-text--done {
+    color: var(--secondary-success-color);
+    font-weight: 500;
+}
+
+.startup-status-text--failed {
+    color: var(--secondary-error-color);
+    font-weight: 500;
+}
+
+/* Reuse the spin keyframe from tasks-panel */
+@keyframes spin-slow {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ── Retry button matching app style ────────────────────── */
+
+.startup-retry-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.45rem 0.9rem;
+    border: 1px solid var(--primary-color-6);
+    border-radius: 6px;
+    background: var(--light, var(--primary-color)) var(--dark, var(--primary-color-3));
+    color: var(--secondary-color-4);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition:
+        background 0.15s,
+        border-color 0.15s;
+}
+
+.startup-retry-btn:hover {
+    background: var(--primary-color-4);
+    border-color: var(--primary-color-5);
+}

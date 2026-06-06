@@ -249,6 +249,8 @@ pub enum TaskKind {
     RunPipeline,
     DryRunPipeline,
     AndroidSettingsRepair,
+    /// Generic system startup — runs all registered startup steps.
+    Startup,
 }
 
 /// Status of a pipeline stage as reported by the `::group` marker
