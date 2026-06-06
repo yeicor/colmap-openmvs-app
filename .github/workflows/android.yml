@@ -154,11 +154,14 @@ jobs:
           for mapping in $(find target -type f -path '*/release/android/*/mapping.txt'); do
             cp "$mapping" "android-output/mapping-${{ matrix.target }}.txt"
           done
-          # Copy debug symbols keyed by ABI subdirectory
+          # Copy debug symbols keyed by ABI subdirectory (strip intermediate Gradle folders)
           for symbols_dir in $(find target -type d -path '*/release/android/*/merged_jni_libs/release/*/out'); do
-            abi="$(basename "$(dirname "$symbols_dir")")"
-            mkdir -p "android-output/debug-symbols/${abi}"
-            cp -r "$symbols_dir/." "android-output/debug-symbols/${abi}/"
+            for abi_dir in "$symbols_dir"/*/; do
+              [ -d "$abi_dir" ] || continue
+              abi="$(basename "$abi_dir")"
+              mkdir -p "android-output/debug-symbols/${abi}"
+              cp -r "$abi_dir/." "android-output/debug-symbols/${abi}/"
+            done
           done
           echo "📦 Artifact contents:"
           find android-output -type f
