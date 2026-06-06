@@ -1,5 +1,6 @@
 use crate::mycomponents::{add_toast, use_toast_ctx, PageHeaderButton, TasksPanel, ToastType};
 use crate::server::{create_project, delete_project, get_projects, rename_project};
+use crate::views::project::{PipelineCommandCtx, PipelineIsRunningCtx, PipelineProgressCtx};
 use crate::{backend_url, Route};
 use crate::{
     components::{
@@ -81,6 +82,15 @@ pub fn ProjectsSidebar() -> Element {
     });
 
     let is_projects_route = matches!(cur_route, Route::Projects {});
+
+    // Pipeline contexts — created here so they persist across project sub-route
+    // changes (Images → Config → Logs → Outputs).  ProjectPage consumes them.
+    let pipeline_progress: PipelineProgressCtx = use_signal(|| None);
+    use_context_provider(|| pipeline_progress);
+    let pipeline_is_running: PipelineIsRunningCtx = use_signal(|| false);
+    use_context_provider(|| pipeline_is_running);
+    let pipeline_command: PipelineCommandCtx = use_signal(|| None);
+    use_context_provider(|| pipeline_command);
 
     rsx! {
         SidebarProvider {

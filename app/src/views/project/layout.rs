@@ -40,15 +40,10 @@ pub fn ProjectPage() -> Element {
         }
     };
 
-    // ── Shared pipeline signal contexts ───────────────────────────────
-    let pipeline_progress: PipelineProgressCtx = use_signal(|| None);
-    use_context_provider(|| pipeline_progress);
-
-    let pipeline_is_running: PipelineIsRunningCtx = use_signal(|| false);
-    use_context_provider(|| pipeline_is_running);
-
-    let mut pipeline_command: PipelineCommandCtx = use_signal(|| None);
-    use_context_provider(|| pipeline_command);
+    // ── Shared pipeline signal contexts (provided by ProjectsSidebar) ──
+    let pipeline_progress = use_context::<PipelineProgressCtx>();
+    let pipeline_is_running = use_context::<PipelineIsRunningCtx>();
+    let mut pipeline_command = use_context::<PipelineCommandCtx>();
 
     let progress_value: Option<f64> = pipeline_progress().map(|p| p as f64);
 
