@@ -257,12 +257,16 @@ fn main() {
 
     info!("Launching Dioxus application...");
 
-    // Use hash-based routing on web so it works on static hosting without
-    // a server that rewrites all routes to index.html.
+    // Use hash-based routing on static web builds (no server to rewrite routes).
+    // With fullstack, hydrate via default WebHistory so SSR works correctly.
     dioxus::LaunchBuilder::new()
         .with_cfg(web! {
-            dioxus::web::Config::new()
-                .history(std::rc::Rc::new(dioxus::web::HashHistory::new(false)))
+            let mut cfg = dioxus::web::Config::new();
+            #[cfg(not(feature = "fullstack"))]
+            {
+                cfg = cfg.history(std::rc::Rc::new(dioxus::web::HashHistory::new(false)));
+            }
+            cfg
         })
         .with_cfg(desktop! {
            dioxus::desktop::Config::new().with_window(

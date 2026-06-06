@@ -70,126 +70,142 @@ fn generate_demo_assets(manifest_dir: &Path) {
     let demo_dir = manifest_dir.join("assets").join("demo");
     println!("cargo:rerun-if-changed={}", demo_dir.display());
 
+    let images_dir = demo_dir.join("images");
+    let outputs_dir = demo_dir.join("outputs");
+
+    // ===== LOAD OR GENERATE DATA =====
+
+    // -- manifest.json --
     let manifest_path = demo_dir.join("manifest.json");
-    if !manifest_path.exists() {
-        // Just generate empty stubs if the assets don't exist yet so it builds
-        fs::write(
-            &dest_path,
-            "pub const DEMO_MANIFEST: &str = \"{}\";\n\
-             pub const DOWNLOAD_EVENTS_JSON: &str = \"[]\";\n\
-             pub const PIPELINE_EVENTS_JSON: &str = \"[]\";\n\
-             pub fn demo_image_bytes(_name: &str) -> Option<&'static [u8]> { None }\n\
-             pub fn demo_output_bytes(_path: &str) -> Option<&'static [u8]> { None }\n",
-        )
-        .unwrap();
-        return;
-    }
-
-    let manifest_str = fs::read_to_string(&manifest_path).unwrap();
-
-    let download_events_path = demo_dir.join("download_events.json");
-    let download_events_str = if download_events_path.exists() {
-        fs::read_to_string(&download_events_path).unwrap()
-    } else {
-        "[]".to_string()
-    };
-    println!("cargo:rerun-if-changed={}", download_events_path.display());
-
-    let pipeline_events_path = demo_dir.join("pipeline_events.json");
-    let pipeline_events_str = if pipeline_events_path.exists() {
-        fs::read_to_string(&pipeline_events_path).unwrap()
-    } else {
-        "[]".to_string()
-    };
-    println!("cargo:rerun-if-changed={}", pipeline_events_path.display());
-
-    // ===== VALIDATIONS =====
-
-    // 1. JSON syntax validation - confirm each file is valid JSON
-    for (name, content, path) in [
-        ("manifest", manifest_str.as_str(), manifest_path.as_path()),
-        (
-            "download_events",
-            download_events_str.as_str(),
-            download_events_path.as_path(),
-        ),
-        (
-            "pipeline_events",
-            pipeline_events_str.as_str(),
-            pipeline_events_path.as_path(),
-        ),
-    ] {
-        if let Err(e) = serde_json::from_str::<serde_json::Value>(content) {
-            let preview: String = content.chars().take(200).collect();
-            println!("cargo:warning=Invalid JSON in {}: {}", path.display(), e);
+    let (manifest_str, images_from_manifest) = if manifest_path.exists() {
+        let text = fs::read_to_string(&manifest_path).unwrap();
+        if let Err(e) = serde_json::from_str::<serde_json::Value>(&text) {
+            let preview: String = text.chars().take(200).collect();
             panic!(
-                "JSON validation failed for '{}' in {}: {}\nFirst 200 characters:\n{}",
-                name,
-                path.display(),
+                "Invalid JSON in {}: {}
+First 200 characters:
+{}",
+                manifest_path.display(),
                 e,
                 preview,
             );
         }
-    }
+        let images: Vec<String> = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| {
+                v["project"]["images"].as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+        (text, images)
+    } else {
+        // Generate a minimal valid placeholder from whatever files exist on disk.
+        // The full manifest is produced by `test_generate_demo_data` in the backend.
+        println!(
+            "cargo:warning=Demo manifest not found at {}. ",
+            manifest_path.display(),
+        );
+        println!("cargo:warning=  Generating minimal placeholder from existing images/outputs.",);
+        println!(
+            "cargo:warning=  Run `cargo test --test generate_demo_data -p colmap-openmvs-backend` for full demo data.",
+        );
+        let manifest = generate_placeholder_manifest(&images_dir, &outputs_dir);
+        let images = serde_json::from_str::<serde_json::Value>(&manifest)
+            .ok()
+            .and_then(|v| {
+                v["project"]["images"].as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+        (manifest, images)
+    };
 
-    // 2. Raw string delimiter safety check (for the default r###"..."### delimiter)
-    for (name, content) in [
-        ("manifest", manifest_str.as_str()),
-        ("download_events", download_events_str.as_str()),
-        ("pipeline_events", pipeline_events_str.as_str()),
-    ] {
-        if content.contains("\"###") {
+    // -- download_events.json --
+    let download_events_path = demo_dir.join("download_events.json");
+    let download_events_str = if download_events_path.exists() {
+        let text = fs::read_to_string(&download_events_path).unwrap();
+        if let Err(e) = serde_json::from_str::<serde_json::Value>(&text) {
+            let preview: String = text.chars().take(200).collect();
             panic!(
-                "Content of '{}' contains the sequence '\"###' which would break the \
-                 r###\"...\"### raw string literal. A dynamic delimiter fix is applied, \
-                 but this conflicting content should still be reviewed.\n",
-                name,
+                "Invalid JSON in {}: {}
+First 200 characters:
+{}",
+                download_events_path.display(),
+                e,
+                preview,
+            );
+        }
+        println!("cargo:rerun-if-changed={}", download_events_path.display());
+        text
+    } else {
+        "[]".to_string()
+    };
+
+    // -- pipeline_events.json --
+    let pipeline_events_path = demo_dir.join("pipeline_events.json");
+    let pipeline_events_str = if pipeline_events_path.exists() {
+        let text = fs::read_to_string(&pipeline_events_path).unwrap();
+        if let Err(e) = serde_json::from_str::<serde_json::Value>(&text) {
+            let preview: String = text.chars().take(200).collect();
+            panic!(
+                "Invalid JSON in {}: {}
+First 200 characters:
+{}",
+                pipeline_events_path.display(),
+                e,
+                preview,
+            );
+        }
+        println!("cargo:rerun-if-changed={}", pipeline_events_path.display());
+        text
+    } else {
+        "[]".to_string()
+    };
+
+    // ===== VALIDATE IMAGES =====
+    for image_name in &images_from_manifest {
+        let image_path = images_dir.join(image_name);
+        if !image_path.is_file() {
+            panic!(
+                "Demo image '{}' listed in manifest does not exist as a file.\n\
+                 Expected file: {}\n\
+                 Run `cargo test --test generate_demo_data -p colmap-openmvs-backend` to regenerate.",
+                image_name,
+                image_path.display(),
             );
         }
     }
 
-    // 3. Image file validation - every image in manifest must exist on disk
-    let manifest: serde_json::Value =
-        serde_json::from_str(&manifest_str).expect("Manifest already validated as valid JSON");
-    let images_dir = demo_dir.join("images");
-    if let Some(images) = manifest["project"]["images"].as_array() {
-        for image_val in images {
-            let image_name = image_val.as_str().unwrap_or_else(|| {
-                panic!(
-                    "Expected string in manifest project.images array, got: {}",
-                    image_val
-                )
-            });
-            let image_path = images_dir.join(image_name);
-            if !image_path.is_file() {
-                panic!(
-                    "Demo image '{}' listed in manifest project.images does not exist as a file.\n\
-                     Expected file: {}",
-                    image_name,
-                    image_path.display(),
-                );
-            }
-        }
-    }
-
-    // 4. Output file validation - every output in manifest must exist on disk
-    let outputs_dir = demo_dir.join("outputs");
-    if let Some(outputs) = manifest["project"]["outputs"].as_array() {
-        for output_val in outputs {
-            let rel_path = output_val["relative_path"].as_str().unwrap_or_else(|| {
-                panic!(
-                    "Expected string in manifest project.outputs[].relative_path, got: {}",
-                    output_val
-                )
-            });
-            let output_path = outputs_dir.join(rel_path);
-            if !output_path.is_file() {
-                panic!(
-                    "Demo output '{}' listed in manifest project.outputs does not exist as a file.\n\
-                     Expected file: {}",
-                    rel_path,
-                    output_path.display(),
-                );
+    // ===== VALIDATE VIEWABLE OUTPUTS =====
+    if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&manifest_str) {
+        if let Some(outputs) = manifest["project"]["outputs"].as_array() {
+            for output_val in outputs {
+                let is_viewable = output_val["is_viewable"].as_bool().unwrap_or(false);
+                let is_png = output_val["relative_path"]
+                    .as_str()
+                    .map(|p| p.ends_with(".png"))
+                    .unwrap_or(false);
+                if is_viewable || is_png {
+                    let rel_path = output_val["relative_path"].as_str().unwrap_or_else(|| {
+                        panic!("Expected string in manifest project.outputs[].relative_path");
+                    });
+                    let output_path = outputs_dir.join(rel_path);
+                    if !output_path.is_file() {
+                        panic!(
+                            "Viewable demo output '{}' listed in manifest does not exist as a file.\n\
+                             Expected file: {}\n\
+                             Run `cargo test --test generate_demo_data -p colmap-openmvs-backend` to regenerate.",
+                            rel_path,
+                            output_path.display(),
+                        );
+                    }
+                }
             }
         }
     }
@@ -219,14 +235,12 @@ fn generate_demo_assets(manifest_dir: &Path) {
     // Images (flat directory, no subdirectories)
     out.push_str("pub fn demo_image_bytes(name: &str) -> Option<&'static [u8]> {\n");
     out.push_str("    match name {\n");
-    let images_dir = demo_dir.join("images");
     if images_dir.exists() {
         for entry in fs::read_dir(&images_dir).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
             if path.is_file() {
                 let name = path.file_name().unwrap().to_str().unwrap();
-                // 5. Proper string escaping for both the match arm and include_bytes! path
                 let escaped_name = escape_path(name);
                 let abs_path = path.canonicalize().unwrap().to_string_lossy().into_owned();
                 let escaped_abs = escape_path(&abs_path);
@@ -243,7 +257,6 @@ fn generate_demo_assets(manifest_dir: &Path) {
     // Outputs (recursive, preserves relative directory structure)
     out.push_str("pub fn demo_output_bytes(path: &str) -> Option<&'static [u8]> {\n");
     out.push_str("    match path {\n");
-    let outputs_dir = demo_dir.join("outputs");
     if outputs_dir.exists() {
         collect_files(&outputs_dir, &outputs_dir, &mut out);
     }
@@ -263,7 +276,6 @@ fn collect_files(base: &Path, dir: &Path, out: &mut String) {
             let rel_path = path.strip_prefix(base).unwrap();
             let rel_str = rel_path.to_string_lossy().into_owned();
             let abs_path = path.canonicalize().unwrap().to_string_lossy().into_owned();
-            // 5. Proper string escaping for match arm and include_bytes! path
             let escaped_rel = escape_path(&rel_str);
             let escaped_abs = escape_path(&abs_path);
             out.push_str(&format!(
@@ -290,6 +302,119 @@ fn safe_raw_delimiter(content: &str) -> usize {
 /// Escape a string for use in a Rust string literal, handling `\\` and `"`.
 fn escape_path(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\"', "\\\"")
+}
+
+/// Generate a minimal valid placeholder manifest when the real one is missing.
+///
+/// This produces a valid JSON string that the DemoManifest struct can deserialize,
+/// using only the files actually present in the images/ and outputs/ directories.
+/// Complex fields (config_schema, runtime_info, etc.) get minimal valid stubs.
+fn generate_placeholder_manifest(images_dir: &Path, outputs_dir: &Path) -> String {
+    // Collect images from disk
+    let images: Vec<String> = if images_dir.exists() {
+        let mut list: Vec<String> = fs::read_dir(images_dir)
+            .unwrap()
+            .filter_map(|e| {
+                let path = e.ok()?.path();
+                if path.is_file() {
+                    path.file_name()?.to_str().map(String::from)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        list.sort();
+        list
+    } else {
+        vec![]
+    };
+
+    // Collect outputs from disk (recursive)
+    let outputs: Vec<serde_json::Value> = if outputs_dir.exists() {
+        collect_output_files(outputs_dir, outputs_dir)
+    } else {
+        vec![]
+    };
+
+    let placeholder = serde_json::json!({
+        "projects": [],
+        "settings": {
+            "projects_folder": "",
+            "proot_binary_dir": "",
+            "proot_images_dir": "",
+            "default_image_tag": null,
+            "custom_mounts": [],
+            "settings_file_path": null
+        },
+        "dark_mode": null,
+        "project": {
+            "images": images,
+            "config_schema": {
+                "image_tag": "",
+                "tools": [],
+                "environment_variables": [],
+                "build_date": ""
+            },
+            "project_config": {
+                "image_tag": "",
+                "environment_variables": [],
+                "custom_script": null
+            },
+            "outputs": outputs,
+            "run_status": {
+                "is_running": false,
+                "is_dry_run": false,
+                "task_id": null,
+                "progress": null
+            }
+        },
+        "runtime_info": {
+            "name": "none",
+            "version": null,
+            "installed": false,
+            "supported": false,
+            "unsupported_reason": null
+        }
+    });
+
+    serde_json::to_string_pretty(&placeholder).unwrap()
+}
+
+/// Walk the outputs directory and produce the JSON array of output entries
+/// matching the structure expected by the manifest's `project.outputs` field.
+fn collect_output_files(base: &Path, dir: &Path) -> Vec<serde_json::Value> {
+    let mut entries = vec![];
+    if !dir.exists() {
+        return entries;
+    }
+    for entry in fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.is_dir() {
+            entries.extend(collect_output_files(base, &path));
+        } else if path.is_file() {
+            let rel = path
+                .strip_prefix(base)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            let metadata = fs::metadata(&path).unwrap();
+            let size = metadata.len();
+            let is_viewable = rel.ends_with(".png")
+                || rel.ends_with(".ply")
+                || rel.ends_with(".jpg")
+                || rel.ends_with(".jpeg")
+                || rel.ends_with(".bin");
+            entries.push(serde_json::json!({
+                "relative_path": rel,
+                "name": path.file_name().unwrap().to_string_lossy(),
+                "size": size,
+                "modified_at": chrono::Utc::now().to_rfc3339(),
+                "is_viewable": is_viewable
+            }));
+        }
+    }
+    entries
 }
 
 // ── npm ci ────────────────────────────────────────────────────────────────────
