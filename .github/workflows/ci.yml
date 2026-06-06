@@ -38,9 +38,11 @@ jobs:
             artifact-find: "-path '*/release/web/public/*'"
           - os: ubuntu-24.04
             build-type: android-debug
+            target: x86_64-linux-android
             artifact-find: "-path '*/outputs/apk/debug/*.apk'"
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-24.04
             build-type: android-debug
+            target: aarch64-linux-android
             artifact-find: "-path '*/outputs/apk/debug/*.apk'"
     steps:
       - uses: actions/checkout@v6
@@ -80,13 +82,11 @@ jobs:
           $HOME/.dx/bin/dx bundle --release --web --verbose ${{ matrix.build-type == 'web-demo' && '--no-default-features --features=demo' || '' }}
       - shell: bash
         if: matrix.build-type == 'android-debug'
-        env:
-          ANDROID_TARGET: ${{ runner.arch == 'ARM64' && 'aarch64-linux-android' || 'x86_64-linux-android' }}
         run: |
-          $HOME/.dx/bin/dx bundle --android --package-types apk --features server --target "$ANDROID_TARGET"
+          $HOME/.dx/bin/dx bundle --android --package-types apk --features server --target "${{ matrix.target }}" --verbose
           find target -type f -path '*/outputs/apk/debug/*.apk' | while read -r apk; do
             dir="$(dirname "$apk")"
-            mv "$apk" "$dir/app-debug-${ANDROID_TARGET}.apk"
+            mv "$apk" "$dir/app-debug-${{ matrix.target }}.apk"
           done
       - shell: bash
         run: |
@@ -144,7 +144,7 @@ jobs:
           ls -lah artifact_out/
       - uses: actions/upload-artifact@v7
         with:
-          name: build-${{ matrix.build-type }}-${{ matrix.os }}
+          name: build-${{ matrix.build-type }}-${{ matrix.target || matrix.os }}
           path: artifact_out/*
 
   deploy-docker:
