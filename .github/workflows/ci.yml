@@ -160,7 +160,7 @@ jobs:
             build_args: ""
           - name: cuda
             prefix: cuda-
-            build_args: |
+            build_args: | # Keep in sync with https://github.com/yeicor-docker/colmap-openmvs/blob/main/.github/workflows/main.yml#L64
               RUNTIME_IMAGE=nvidia/cuda:13.0.3-runtime-ubuntu24.04
     steps:
       - uses: actions/checkout@v6
