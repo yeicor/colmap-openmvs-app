@@ -185,7 +185,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: android-aab-${{ matrix.target }}
+          name: build-android-aab-${{ matrix.target }}
           path: android-output/
 
   deploy:
@@ -196,7 +196,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: android-aab-*
+          pattern: build-android-aab-*
           merge-multiple: true
           path: android-artifacts
 
