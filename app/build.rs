@@ -103,18 +103,117 @@ fn generate_demo_assets(manifest_dir: &Path) {
     };
     println!("cargo:rerun-if-changed={}", pipeline_events_path.display());
 
+    // ===== VALIDATIONS =====
+
+    // 1. JSON syntax validation - confirm each file is valid JSON
+    for (name, content, path) in [
+        ("manifest", manifest_str.as_str(), manifest_path.as_path()),
+        (
+            "download_events",
+            download_events_str.as_str(),
+            download_events_path.as_path(),
+        ),
+        (
+            "pipeline_events",
+            pipeline_events_str.as_str(),
+            pipeline_events_path.as_path(),
+        ),
+    ] {
+        if let Err(e) = serde_json::from_str::<serde_json::Value>(content) {
+            let preview: String = content.chars().take(200).collect();
+            println!("cargo:warning=Invalid JSON in {}: {}", path.display(), e);
+            panic!(
+                "JSON validation failed for '{}' in {}: {}\nFirst 200 characters:\n{}",
+                name,
+                path.display(),
+                e,
+                preview,
+            );
+        }
+    }
+
+    // 2. Raw string delimiter safety check (for the default r###"..."### delimiter)
+    for (name, content) in [
+        ("manifest", manifest_str.as_str()),
+        ("download_events", download_events_str.as_str()),
+        ("pipeline_events", pipeline_events_str.as_str()),
+    ] {
+        if content.contains("\"###") {
+            panic!(
+                "Content of '{}' contains the sequence '\"###' which would break the \
+                 r###\"...\"### raw string literal. A dynamic delimiter fix is applied, \
+                 but this conflicting content should still be reviewed.\n",
+                name,
+            );
+        }
+    }
+
+    // 3. Image file validation - every image in manifest must exist on disk
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_str).expect("Manifest already validated as valid JSON");
+    let images_dir = demo_dir.join("images");
+    if let Some(images) = manifest["project"]["images"].as_array() {
+        for image_val in images {
+            let image_name = image_val.as_str().unwrap_or_else(|| {
+                panic!(
+                    "Expected string in manifest project.images array, got: {}",
+                    image_val
+                )
+            });
+            let image_path = images_dir.join(image_name);
+            if !image_path.is_file() {
+                panic!(
+                    "Demo image '{}' listed in manifest project.images does not exist as a file.\n\
+                     Expected file: {}",
+                    image_name,
+                    image_path.display(),
+                );
+            }
+        }
+    }
+
+    // 4. Output file validation - every output in manifest must exist on disk
+    let outputs_dir = demo_dir.join("outputs");
+    if let Some(outputs) = manifest["project"]["outputs"].as_array() {
+        for output_val in outputs {
+            let rel_path = output_val["relative_path"].as_str().unwrap_or_else(|| {
+                panic!(
+                    "Expected string in manifest project.outputs[].relative_path, got: {}",
+                    output_val
+                )
+            });
+            let output_path = outputs_dir.join(rel_path);
+            if !output_path.is_file() {
+                panic!(
+                    "Demo output '{}' listed in manifest project.outputs does not exist as a file.\n\
+                     Expected file: {}",
+                    rel_path,
+                    output_path.display(),
+                );
+            }
+        }
+    }
+
+    // ===== GENERATE RUST SOURCE =====
+
     let mut out = String::new();
+
+    // 6. Dynamic raw string delimiter - pick a safe number of # that doesn't appear in content
+    let manifest_hashes = "#".repeat(safe_raw_delimiter(&manifest_str));
+    let download_events_hashes = "#".repeat(safe_raw_delimiter(&download_events_str));
+    let pipeline_events_hashes = "#".repeat(safe_raw_delimiter(&pipeline_events_str));
+
     out.push_str(&format!(
-        "pub const DEMO_MANIFEST: &str = r###\"{}\"###;\n\n",
-        manifest_str
+        "pub const DEMO_MANIFEST: &str = r{0}\"{1}\"{0};\n\n",
+        manifest_hashes, manifest_str
     ));
     out.push_str(&format!(
-        "pub const DOWNLOAD_EVENTS_JSON: &str = r###\"{}\"###;\n\n",
-        download_events_str
+        "pub const DOWNLOAD_EVENTS_JSON: &str = r{0}\"{1}\"{0};\n\n",
+        download_events_hashes, download_events_str
     ));
     out.push_str(&format!(
-        "pub const PIPELINE_EVENTS_JSON: &str = r###\"{}\"###;\n\n",
-        pipeline_events_str
+        "pub const PIPELINE_EVENTS_JSON: &str = r{0}\"{1}\"{0};\n\n",
+        pipeline_events_hashes, pipeline_events_str
     ));
 
     // Images (flat directory, no subdirectories)
@@ -127,11 +226,13 @@ fn generate_demo_assets(manifest_dir: &Path) {
             let path = entry.path();
             if path.is_file() {
                 let name = path.file_name().unwrap().to_str().unwrap();
+                // 5. Proper string escaping for both the match arm and include_bytes! path
+                let escaped_name = escape_path(name);
                 let abs_path = path.canonicalize().unwrap().to_string_lossy().into_owned();
-                let abs_path_escaped = abs_path.replace("\\", "\\\\");
+                let escaped_abs = escape_path(&abs_path);
                 out.push_str(&format!(
                     "        \"{}\" => Some(include_bytes!(\"{}\")),\n",
-                    name, abs_path_escaped
+                    escaped_name, escaped_abs
                 ));
             }
         }
@@ -162,13 +263,33 @@ fn collect_files(base: &Path, dir: &Path, out: &mut String) {
             let rel_path = path.strip_prefix(base).unwrap();
             let rel_str = rel_path.to_string_lossy().into_owned();
             let abs_path = path.canonicalize().unwrap().to_string_lossy().into_owned();
-            let abs_path_escaped = abs_path.replace("\\", "\\\\");
+            // 5. Proper string escaping for match arm and include_bytes! path
+            let escaped_rel = escape_path(&rel_str);
+            let escaped_abs = escape_path(&abs_path);
             out.push_str(&format!(
                 "        \"{}\" => Some(include_bytes!(\"{}\")),\n",
-                rel_str, abs_path_escaped
+                escaped_rel, escaped_abs
             ));
         }
     }
+}
+
+/// Determine the minimum number of `#` characters needed for a safe raw string
+/// delimiter `r#"..."#` so that the content does not contain the closing sequence.
+fn safe_raw_delimiter(content: &str) -> usize {
+    let mut n = 3;
+    loop {
+        let seq = format!("\"{}", "#".repeat(n));
+        if !content.contains(&seq) {
+            return n;
+        }
+        n += 1;
+    }
+}
+
+/// Escape a string for use in a Rust string literal, handling `\\` and `"`.
+fn escape_path(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\"', "\\\"")
 }
 
 // ── npm ci ────────────────────────────────────────────────────────────────────

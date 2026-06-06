@@ -15,6 +15,10 @@ include!(concat!(env!("OUT_DIR"), "/demo_assets.rs"));
 fn get_download_events() -> &'static Vec<TaskEvent> {
     static DOWNLOAD_EVENTS: OnceLock<Vec<TaskEvent>> = OnceLock::new();
     DOWNLOAD_EVENTS.get_or_init(|| {
+        tracing::info!(
+            "Parsing DOWNLOAD_EVENTS_JSON ({} chars)...",
+            DOWNLOAD_EVENTS_JSON.len()
+        );
         serde_json::from_str(DOWNLOAD_EVENTS_JSON).expect("Failed to parse DOWNLOAD_EVENTS_JSON")
     })
 }
@@ -22,6 +26,10 @@ fn get_download_events() -> &'static Vec<TaskEvent> {
 fn get_pipeline_events() -> &'static Vec<TaskEvent> {
     static PIPELINE_EVENTS: OnceLock<Vec<TaskEvent>> = OnceLock::new();
     PIPELINE_EVENTS.get_or_init(|| {
+        tracing::info!(
+            "Parsing PIPELINE_EVENTS_JSON ({} chars)...",
+            PIPELINE_EVENTS_JSON.len()
+        );
         serde_json::from_str(PIPELINE_EVENTS_JSON).expect("Failed to parse PIPELINE_EVENTS_JSON")
     })
 }
@@ -45,6 +53,10 @@ pub struct DemoProject {
 }
 
 fn get_manifest() -> DemoManifest {
+    tracing::info!(
+        "Parsing DEMO_MANIFEST ({len} chars)...",
+        len = DEMO_MANIFEST.len()
+    );
     serde_json::from_str(DEMO_MANIFEST).expect("Failed to parse DEMO_MANIFEST")
 }
 

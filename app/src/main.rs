@@ -52,6 +52,7 @@ pub enum Route {
 
 #[component]
 pub fn App() -> Element {
+    info!("App component: initializing...");
     use crate::mycomponents::ToastContainer;
     use crate::task_manager::{StartupCtx, TasksCtx, TasksState};
     use_context_provider(|| Signal::new(TasksState::default()) as TasksCtx);
@@ -63,11 +64,13 @@ pub fn App() -> Element {
     // finish within the 1-second grace window without ever showing the startup
     // page.  Components inside the router tree (ProjectsSidebar, StartupTasks)
     // consume this context to decide whether / where to redirect.
+    info!("App component: creating startup context...");
     let startup = StartupCtx::new();
     use_context_provider(|| startup);
 
     {
         // Start the startup task in background as early as possible.
+        info!("App component: spawning startup task...");
         let mut task_id = startup.task_id;
         let mut is_completed = startup.is_completed;
         let mut task_state = startup.task_state;
@@ -133,6 +136,7 @@ pub fn App() -> Element {
     // queries correctly, so the server returns an explicit override (`Some`).
     // On other platforms the server returns `None` and we leave the `data-theme`
     // attribute untouched so the CSS media query continues to work normally.
+    info!("App component: setting up color-scheme effect...");
     use_effect(move || {
         spawn(async move {
             match crate::server::get_dark_mode().await {
@@ -148,6 +152,7 @@ pub fn App() -> Element {
         });
     });
 
+    info!("App component: rendering UI...");
     rsx! {
         document::Link { rel: "icon", type: "image/png", href: asset!("/assets/icon.png") }
         // ── Global stylesheets (loaded eagerly, no flashing on route changes) ────────────────
@@ -249,6 +254,8 @@ fn main() {
     }
 
     init_backend_url();
+
+    info!("Launching Dioxus application...");
 
     // Use hash-based routing on web so it works on static hosting without
     // a server that rewrites all routes to index.html.
