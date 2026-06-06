@@ -37,11 +37,11 @@ jobs:
             build-type: web-demo
             artifact-find: "-path '*/release/web/public/*'"
           - os: ubuntu-24.04
-            build-type: android-debug
+            build-type: android
             target: x86_64-linux-android
             artifact-find: "-path '*/outputs/apk/debug/*.apk'"
           - os: ubuntu-24.04
-            build-type: android-debug
+            build-type: android
             target: aarch64-linux-android
             artifact-find: "-path '*/outputs/apk/debug/*.apk'"
     steps:
@@ -81,9 +81,9 @@ jobs:
           echo -e "\n\n[web.app]\nbase_path = \"/${{ github.event.repository.name }}\"" >> Dioxus.toml  # Ensure correct base path for GitHub Pages
           $HOME/.dx/bin/dx bundle --release --web --verbose ${{ matrix.build-type == 'web-demo' && '--no-default-features --features=demo' || '' }}
       - shell: bash
-        if: matrix.build-type == 'android-debug'
+        if: matrix.build-type == 'android'
         run: |
-          $HOME/.dx/bin/dx bundle --android --package-types apk --features server --target "${{ matrix.target }}" --verbose
+          $HOME/.dx/bin/dx bundle --android --package-types apk --features server --target "${{ matrix.target }}" --release --verbose
           find target -type f -path '*/outputs/apk/debug/*.apk' | while read -r apk; do
             dir="$(dirname "$apk")"
             mv "$apk" "$dir/app-debug-${{ matrix.target }}.apk"

@@ -88,10 +88,8 @@ jobs:
       matrix:
         include:
           - target: x86_64-linux-android
-            runner: ubuntu-24.04
           - target: aarch64-linux-android
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6

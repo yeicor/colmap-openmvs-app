@@ -82,7 +82,19 @@ pub fn initialize(settings: Settings) {
 /// so Dioxus picks them up when the server starts.
 pub fn initialize_from_env() -> CliConfig {
     // Parse CLI arguments (clap also reads env vars marked with `env = ...`).
+    //
+    // On Android the native library is loaded via System.loadLibrary() so the C
+    // runtime's argc/argv are never properly initialised.  `Parser::parse()`
+    // calls `std::env::args_os()` which reads the uninitialised globals – in
+    // debug builds the memory happens to be zeroed (null argv → argc = 0) but
+    // in release builds the stale pointer is non-null and argc is some huge
+    // value, causing `Vec::with_capacity(huge)` to panic with "capacity
+    // overflow".  Use `parse_from` with an explicit (empty) argument list so
+    // clap uses the defaults / env-vars for every field.
+    #[cfg(not(target_os = "android"))]
     let cli = CliConfig::parse();
+    #[cfg(target_os = "android")]
+    let cli = CliConfig::parse_from([""]);
 
     // Ensure Dioxus sees the correct IP / PORT.
     std::env::set_var("IP", &cli.ip);

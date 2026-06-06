@@ -15,6 +15,12 @@ pub fn init() {
     {
         use tracing_subscriber::EnvFilter;
 
+        // Default to full backtrace in debug or android builds if not overridden by the user
+        #[cfg(any(debug_assertions, target_os = "android"))]
+        if std::env::var("RUST_BACKTRACE").is_err() {
+            std::env::set_var("RUST_BACKTRACE", "full");
+        }
+
         // Default filter if none is set by the user / environment.
         let filter = if std::env::var("RUST_LOG").is_ok() {
             EnvFilter::from_default_env()
