@@ -279,6 +279,7 @@
     border-radius: 0.5rem;
     overflow: hidden;
     transition: border-color 0.15s;
+    scroll-margin: 40px; /* for auto-scroll to keep some of the surrounding context visible */
 }
 
 .logs-stage:hover {

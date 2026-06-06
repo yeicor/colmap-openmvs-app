@@ -161,7 +161,7 @@ jobs:
           - name: cuda
             prefix: cuda-
             build_args: |
-              RUNTIME_IMAGE=nvidia/cuda:13.2.1-runtime-ubuntu24.04
+              RUNTIME_IMAGE=nvidia/cuda:12.9.2-runtime-ubuntu24.04
     steps:
       - uses: actions/checkout@v6
       - uses: docker/setup-buildx-action@v4

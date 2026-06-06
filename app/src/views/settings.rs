@@ -78,9 +78,42 @@ fn DateBadge(date: String) -> Element {
 // Top-level view  (2 tabs: General | Runtime)
 // ---------------------------------------------------------------------------
 
+/// Shared page chrome for all settings routes.
+///
+/// Reads the current route to determine which tab is active and renders
+/// the full page (header + tab bar + both tab panels).  Both
+/// `SettingsGeneral` and `SettingsRuntime` delegate to this component.
 #[component]
-pub fn SettingsView() -> Element {
-    let mut active_tab = use_signal(|| Some("general".to_string()));
+fn SettingsPage() -> Element {
+    let route = use_route::<Route>();
+    let mut active_tab = use_signal(|| None);
+
+    // Derive active tab from the route.
+    use_effect(move || {
+        let route = use_route::<Route>();
+        let tab = match &route {
+            Route::SettingsRuntime { .. } => "runtime",
+            _ => "general",
+        };
+        active_tab.set(Some(tab.to_string()));
+    });
+    // Prime the signal immediately so the first render matches too.
+    let initial_tab = match &route {
+        Route::SettingsRuntime { .. } => "runtime",
+        _ => "general",
+    };
+    if active_tab.peek().is_none() {
+        active_tab.set(Some(initial_tab.to_string()));
+    }
+
+    // Tab-change handler — navigate to the matching route.
+    let on_tab_change = move |tab: String| {
+        let r = match tab.as_str() {
+            "runtime" => Route::SettingsRuntime {},
+            _ => Route::SettingsGeneral {},
+        };
+        navigator().push(r);
+    };
 
     rsx! {
         div {
@@ -89,46 +122,54 @@ pub fn SettingsView() -> Element {
             PageHeader {
                 title: "Settings".to_string(),
                 BackButton {
-                    onclick: move |_| { dioxus::prelude::navigator().push(Route::Projects {}); }
+                    onclick: move |_| { navigator().push(Route::Projects {}); }
                 }
             }
 
             div {
                 class: "main-content",
                 Tabs {
-                value: active_tab,
-                default_value: "general".to_string(),
-                on_value_change: move |tab| active_tab.set(Some(tab)),
+                    value: active_tab,
+                    default_value: "general".to_string(),
+                    on_value_change: on_tab_change,
 
-                TabList {
-                    TabTrigger {
-                        value: "general".to_string(),
-                        index: 0usize,
-                        Icon { icon: BsGear }
-                        span { class: "tab-label", " General" }
+                    TabList {
+                        TabTrigger {
+                            value: "general".to_string(),
+                            index: 0usize,
+                            Icon { icon: BsGear }
+                            span { class: "tab-label", " General" }
+                        }
+                        TabTrigger {
+                            value: "runtime".to_string(),
+                            index: 1usize,
+                            Icon { icon: BsTerminal }
+                            span { class: "tab-label", " Runtime" }
+                        }
                     }
-                    TabTrigger {
-                        value: "runtime".to_string(),
-                        index: 1usize,
-                        Icon { icon: BsTerminal }
-                        span { class: "tab-label", " Runtime" }
-                    }
-                }
 
-                if active_tab() == Some("general".to_string()) {
                     TabContent { value: "general".to_string(), index: 0usize,
                         GeneralTab {}
                     }
-                }
-                if active_tab() == Some("runtime".to_string()) {
                     TabContent { value: "runtime".to_string(), index: 1usize,
                         RuntimeTab {}
                     }
                 }
             }
-            }
         }
     }
+}
+
+/// Route component: `/settings` — general settings.
+#[component]
+pub fn SettingsGeneral() -> Element {
+    rsx! { SettingsPage {} }
+}
+
+/// Route component: `/settings/runtime` — runtime settings.
+#[component]
+pub fn SettingsRuntime() -> Element {
+    rsx! { SettingsPage {} }
 }
 
 // ---------------------------------------------------------------------------

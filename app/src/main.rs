@@ -21,7 +21,10 @@ pub mod views;
 pub mod demo;
 
 use logging::init as init_logging;
-pub use views::{Project, Projects, ProjectsSidebar, SettingsView, StartupTasks};
+pub use views::{
+    ProjectConfig, ProjectImages, ProjectLogs, ProjectOutputs, ProjectOverview, Projects,
+    ProjectsSidebar, SettingsGeneral, SettingsRuntime, StartupTasks,
+};
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -30,9 +33,19 @@ pub enum Route {
         #[route("/")]
         Projects {},
         #[route("/settings")]
-        SettingsView {},
+        SettingsGeneral {},
+        #[route("/settings/runtime")]
+        SettingsRuntime {},
         #[route("/project/:name")]
-        Project { name: String },
+        ProjectOverview { name: String },
+        #[route("/project/:name/images")]
+        ProjectImages { name: String },
+        #[route("/project/:name/config")]
+        ProjectConfig { name: String },
+        #[route("/project/:name/logs")]
+        ProjectLogs { name: String },
+        #[route("/project/:name/outputs")]
+        ProjectOutputs { name: String },
     #[route("/startup")]
     StartupTasks {},
 }

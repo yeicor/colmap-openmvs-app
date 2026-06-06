@@ -90,7 +90,7 @@ pub fn ProjectsSidebar() -> Element {
             }
             BaseSidebar {
                 SidebarTrigger {}
-                Projects { is_sidebar: true, selected: if let Route::Project { name } = cur_route { Some(name.clone()) } else { None } }
+                Projects { is_sidebar: true, selected: match &cur_route { Route::ProjectOverview { name } | Route::ProjectImages { name } | Route::ProjectConfig { name } | Route::ProjectLogs { name } | Route::ProjectOutputs { name } => Some(name.clone()), _ => None, } }
             }
         }
         Outlet::<Route> {}
@@ -260,7 +260,7 @@ pub fn Projects(
                     extra: rsx! { "Settings" },
                     onclick: move |_| {
                         debug!("Navigating to settings view");
-                        dioxus::prelude::navigator().push(Route::SettingsView {});
+                        dioxus::prelude::navigator().push(Route::SettingsGeneral {});
                         eval("if (window.innerWidth <= 768) { document.querySelector('.dx-sidebar-trigger').click(); }");
                     },
                 }
@@ -309,8 +309,8 @@ pub fn Projects(
                                 onclick: move |_| {
                                     if dialog_type().is_none() { // Ignore clicks from the action buttons
                                         if let Some(proj) = projects().get(idx) {
-                                            debug!(project_name = %proj.name, "Navigating to project");
-                                            dioxus::prelude::navigator().push(Route::Project { name: proj.name.clone() });
+                                            debug!(project_name = %proj.name, route = ?Route::ProjectImages { name: proj.name.clone() }, "Navigating to project");
+                                            dioxus::prelude::navigator().push(Route::ProjectImages { name: proj.name.clone() });
                                             eval("if (window.innerWidth <= 768) { document.querySelector('.dx-sidebar-trigger').click(); }");
                                         }
                                     }
