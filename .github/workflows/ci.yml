@@ -80,14 +80,25 @@ jobs:
         run: |
           echo -e "\n\n[web.app]\nbase_path = \"/${{ github.event.repository.name }}\"" >> Dioxus.toml  # Ensure correct base path for GitHub Pages
           $HOME/.dx/bin/dx bundle --web --release --verbose ${{ matrix.build-type == 'web-demo' && '--no-default-features --features=demo' || '' }}
-      - shell: bash
-        if: matrix.build-type == 'android'
+      - if: matrix.build-type == 'android-apk'
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          $HOME/.dx/bin/dx bundle --android --package-types apk --features server --target "${{ matrix.target }}" --release --verbose
-          find target -type f -path '*/outputs/apk/debug/*.apk' | while read -r apk; do
+          set -euo pipefail
+          $HOME/.dx/bin/dx bundle --android --package-types apk --release --features server --target "${{ matrix.target }}" --verbose
+          find target -type f ${{ matrix.artifact-find }} | while read -r apk; do
             dir="$(dirname "$apk")"
             mv "$apk" "$dir/app-debug-${{ matrix.target }}.apk"
           done
+          base64 -d<<<"$ANDROID_KEYSTORE_B64">ks.jks
+          find target -type f ${{ matrix.artifact-find }} -exec \
+            jarsigner -sigalg SHA256withRSA -digestalg SHA-256 -keystore ks.jks \
+              -storepass "$ANDROID_KEYSTORE_PASSWORD" -keypass "$ANDROID_KEY_PASSWORD" {} "$ANDROID_KEY_ALIAS" \;
+
       - shell: bash
         run: |
           set -euo pipefail
