@@ -38,12 +38,10 @@ jobs:
             artifact-find: "-path '*/release/web/public/*'"
           - os: ubuntu-24.04
             build-type: android-debug
-            android-target: x86_64-linux-android # TODO: derive from runner and parallelize deployment too
-            artifact-find: "-path '*/debug/android/*/bundle/*-x86_64-linux-android.apk'"
+            artifact-find: "-path '*/outputs/apk/debug/*.apk'"
           - os: ubuntu-24.04-arm
             build-type: android-debug
-            android-target: aarch64-linux-android
-            artifact-find: "-path '*/debug/android/*/bundle/*-aarch64-linux-android.apk'"
+            artifact-find: "-path '*/outputs/apk/debug/*.apk'"
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -82,11 +80,13 @@ jobs:
           $HOME/.dx/bin/dx bundle --release --web --verbose ${{ matrix.build-type == 'web-demo' && '--no-default-features --features=demo' || '' }}
       - shell: bash
         if: matrix.build-type == 'android-debug'
+        env:
+          ANDROID_TARGET: ${{ runner.arch == 'ARM64' && 'aarch64-linux-android' || 'x86_64-linux-android' }}
         run: |
-          $HOME/.dx/bin/dx bundle --android --package-types apk --features server --target "${{ matrix.android-target }}"
-          find target -type f -path '*/debug/android/*/bundle/*.apk' | while read -r apk; do
+          $HOME/.dx/bin/dx bundle --android --package-types apk --features server --target "$ANDROID_TARGET"
+          find target -type f -path '*/outputs/apk/debug/*.apk' | while read -r apk; do
             dir="$(dirname "$apk")"
-            mv "$apk" "$dir/app-debug-${{ matrix.android-target }}.apk"
+            mv "$apk" "$dir/app-debug-${ANDROID_TARGET}.apk"
           done
       - shell: bash
         run: |

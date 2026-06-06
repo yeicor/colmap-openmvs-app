@@ -80,10 +80,18 @@ jobs:
             echo "should-build=false" >> "$GITHUB_OUTPUT"
           fi
 
-  build-and-deploy:
+  build:
     needs: check-image-updates
     if: needs.check-image-updates.outputs.should-build == 'true'
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux-android
+            runner: ubuntu-24.04
+          - target: aarch64-linux-android
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v6
@@ -117,13 +125,9 @@ jobs:
 
       - shell: bash
         run: |
-          dx bundle --android --package-types aab --features server --target x86_64-linux-android --release
-          dx bundle --android --package-types aab --features server --target aarch64-linux-android --release
-        env:
-          CARGO_TERM_VERBOSE: true
-          CARGO_TERM_COLOR: always
+          dx bundle --android --package-types aab --features server --target ${{ matrix.target }} --release
 
-      - name: Sign AABs
+      - name: Sign AAB
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -159,9 +163,63 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p android-output
+          # Copy AAB with target-specific name to avoid conflicts when merging
+          for aab in $(find target -type f -path '*/release/android/*/bundle/*.aab'); do
+            cp "$aab" "android-output/app-release-${{ matrix.target }}.aab"
+          done
+          # Copy mapping file with target-specific name
+          for mapping in $(find target -type f -path '*/release/android/*/mapping.txt'); do
+            cp "$mapping" "android-output/mapping-${{ matrix.target }}.txt"
+          done
+          # Copy debug symbols keyed by ABI subdirectory
+          for symbols_dir in $(find target -type d -path '*/release/android/*/merged_jni_libs/release/*/out'); do
+            abi="$(basename "$(dirname "$symbols_dir")")"
+            mkdir -p "android-output/debug-symbols/${abi}"
+            cp -r "$symbols_dir/." "android-output/debug-symbols/${abi}/"
+          done
+          echo "📦 Artifact contents:"
+          find android-output -type f
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-aab-${{ matrix.target }}
+          path: android-output/
+
+  deploy:
+    needs: [check-image-updates, build]
+    if: needs.check-image-updates.outputs.should-build == 'true'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: android-aab-*
+          merge-multiple: true
+          path: android-artifacts
+
       - id: upload-info
         shell: bash
         run: |
+          # Comma-separated list of AABs for upload
+          echo "release-files=$(find android-artifacts -type f -name '*.aab' | sort | tr '\n' ',')" >> "$GITHUB_OUTPUT"
+
+          # Merge debug symbols from all architectures into one directory
+          if [ -d android-artifacts/debug-symbols ]; then
+            echo "debug-symbols-folder=$(pwd)/android-artifacts/debug-symbols" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Use the first mapping file found (one per architecture)
+          first_mapping=$(find android-artifacts -type f -name 'mapping-*.txt' | head -1)
+          if [ -n "$first_mapping" ]; then
+            echo "mapping-file=$first_mapping" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Determine which tracks to publish to
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "tracks=production,beta,internal" >> "$GITHUB_OUTPUT"
           elif [[ "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
@@ -169,9 +227,6 @@ jobs:
           else
             echo "tracks=internal" >> "$GITHUB_OUTPUT"
           fi
-          echo "release-files=$(find target -type f -path '*/release/android/*/bundle/*.aab' | tr '\n' ',')" >> "$GITHUB_OUTPUT"
-          echo "debug-symbols-folder=$(find target -type d -path '*/release/android/*/merged_jni_libs/release/*/out')" >> "$GITHUB_OUTPUT"
-          echo "mapping-file=$(find target -type f -path '*/release/android/*/mapping.txt')" >> "$GITHUB_OUTPUT"
 
       - uses: r0adkll/upload-google-play@v1
         with:
@@ -179,16 +234,15 @@ jobs:
           packageName: com.github.yeicor.colmap_openmvs_app
           releaseFiles: ${{ steps.upload-info.outputs.release-files }}
           tracks: ${{ steps.upload-info.outputs.tracks }}
-          debugSymbols: ${{ steps.upload-info.outputs.debug-symbols-folder }}
-          mappingFile: ${{ steps.upload-info.outputs.mapping-file }}
+          debugSymbols: ${{ steps.upload-info.outputs.debug-symbols-folder || '' }}
+          mappingFile: ${{ steps.upload-info.outputs.mapping-file || '' }}
           # status: draft # Defaults to "completed", set to "draft" to create a draft release instead
 
       - name: Save source digest
         run: |
           echo '${{ needs.check-image-updates.outputs.digest }}' > digest.txt
 
-      - name: Upload digest artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: source-image-digest
           path: digest.txt
