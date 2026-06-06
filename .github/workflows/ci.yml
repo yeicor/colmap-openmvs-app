@@ -29,13 +29,13 @@ jobs:
             artifact-find: "-path '*/bundle/*/*-setup.exe'"
           - os: ubuntu-24.04
             build-type: web
-            artifact-find: "-path '*/release/web/*' -not -name '.manifest.json'"
+            artifact-find: "-path '*/debug/web/*' -not -name '.manifest.json'"
           - os: ubuntu-24.04-arm # Architecture matters for the server binary
             build-type: web
-            artifact-find: "-path '*/release/web/*' -not -name '.manifest.json'"
+            artifact-find: "-path '*/debug/web/*' -not -name '.manifest.json'"
           - os: ubuntu-24.04
             build-type: web-demo
-            artifact-find: "-path '*/release/web/public/*'"
+            artifact-find: "-path '*/debug/web/public/*'"
           - os: ubuntu-24.04
             build-type: android
             target: x86_64-linux-android
