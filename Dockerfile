@@ -1,7 +1,7 @@
-ARG RUNTIME_IMAGE=debian:bookworm-slim
+ARG RUNTIME_IMAGE=debian:trixie-slim
 ARG BUILD_TYPE=debug
 
-FROM rust:1 AS chef
+FROM rust:1-slim-trixie AS chef
 RUN cargo install cargo-chef
 WORKDIR /app
 
@@ -13,7 +13,7 @@ FROM chef AS builder
 ARG BUILD_TYPE
 
 RUN apt-get update && apt-get install -y \
-    curl nodejs npm pkg-config libwayland-dev \
+    curl unzip nodejs npm pkg-config libwayland-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -L --proto '=https' --tlsv1.2 -sSf \
@@ -21,19 +21,12 @@ RUN curl -L --proto '=https' --tlsv1.2 -sSf \
 
 COPY --from=planner /app/recipe.json recipe.json
 
-RUN if [ "$BUILD_TYPE" = "debug" ]; then \
-    cargo chef cook --recipe-path recipe.json; \
-    else \
-    cargo chef cook --release --recipe-path recipe.json; \
-    fi
+RUN if [ "$BUILD_TYPE" = "debug" ]; then cargo chef cook --recipe-path recipe.json; \
+    else cargo chef cook --release --recipe-path recipe.json; fi
 
 COPY . .
 
-RUN if [ "$BUILD_TYPE" = "debug" ]; then \
-    /usr/local/cargo/bin/dx bundle --web; \
-    else \
-    /usr/local/cargo/bin/dx bundle --web --release; \
-    fi
+RUN if [ "$BUILD_TYPE" = "debug" ]; then dx bundle --web; else dx bundle --web --release; fi
 
 
 # ---------------------------

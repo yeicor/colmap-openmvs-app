@@ -12,12 +12,43 @@ const SHELL: &str = "bash";
 #[cfg(not(target_family = "windows"))]
 const SHELL_ARG: &str = "-c";
 
+fn read_app_name_from_dioxus_toml() -> String {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("..").join("Dioxus.toml");
+    let content = fs::read_to_string(&path).expect("Failed to read Dioxus.toml");
+
+    // Find the [application] section
+    let app_section_start = content
+        .find("[application]")
+        .expect("Missing [application] section in Dioxus.toml");
+    let rest = &content[app_section_start..];
+
+    // Find the name field within the application section
+    let name_prefix = "name = \"";
+    if let Some(name_start) = rest.find(name_prefix) {
+        let value_start = name_start + name_prefix.len();
+        if let Some(value_end) = rest[value_start..].find('"') {
+            return rest[value_start..value_start + value_end].to_string();
+        }
+    }
+
+    panic!("Could not find application name in Dioxus.toml");
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
         .join("..")
         .canonicalize()
         .expect("Failed to resolve workspace root");
+
+    // ── App name from the single source of truth (Dioxus.toml) ───────────────
+    println!(
+        "cargo:rerun-if-changed={}",
+        workspace_root.join("Dioxus.toml").display()
+    );
+    let app_name = read_app_name_from_dioxus_toml();
+    println!("cargo:rustc-env=APP_NAME={app_name}");
 
     // ── Rebuild triggers ─────────────────────────────────────────────────────
     let pkg_json_path = workspace_root.join("package.json");
@@ -53,7 +84,7 @@ fn main() {
     extract_build_metadata();
 
     // ── 5. Copy icon into the Android project (if building for Android) ──────
-    embed_android_icon(&manifest_dir);
+    embed_android_icon_and_app_name(&manifest_dir, &app_name);
 
     // ── 6. Generate demo assets if the demo feature is enabled ─────────────────
     if std::env::var("CARGO_FEATURE_DEMO").is_ok() {
@@ -463,7 +494,7 @@ fn find_latest_tag() -> Option<String> {
 ///
 ///    (Dioxus CLI issue #3685 — the generated project always uses placeholder
 ///    icons regardless of `Dioxus.toml`'s `[bundle] icon` setting.)
-fn embed_android_icon(manifest_dir: &Path) {
+fn embed_android_icon_and_app_name(manifest_dir: &Path, app_name: &str) {
     let profile = std::env::var("PROFILE").unwrap_or_default();
 
     // Compute the Android project's resource root WITHOUT canonicalize (which
@@ -495,9 +526,8 @@ fn embed_android_icon(manifest_dir: &Path) {
             let after_open = start + desired.len();
             if let Some(end) = content[after_open..].find("</string>") {
                 let current = &content[after_open..after_open + end];
-                let new_name = "Photos to 3D Model Offline";
-                if current != new_name {
-                    let patched = format!("{desired}{new_name}</string>");
+                if current != app_name {
+                    let patched = format!("{desired}{app_name}</string>");
                     // Skip past the old </string> closing tag so we don't end up
                     // with a duplicate (patched already contains it).
                     let close_tag_len = "</string>".len();
@@ -508,7 +538,7 @@ fn embed_android_icon(manifest_dir: &Path) {
                         &content[after_open + end + close_tag_len..]
                     );
                     if fs::write(&strings_xml, &new_content).is_ok() {
-                        eprintln!("cargo:warning=Set Android app name to \"{new_name}\"");
+                        eprintln!("cargo:warning=Set Android app name to \"{app_name}\"");
                     }
                 }
             }

@@ -1,4 +1,5 @@
 [application]
+name = "Photos to 3D Model Offline"
 sub_package = "colmap-openmvs-app"
 
 [bundle]

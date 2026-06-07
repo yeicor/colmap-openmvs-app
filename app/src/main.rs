@@ -154,6 +154,7 @@ pub fn App() -> Element {
 
     info!("App component: rendering UI...");
     rsx! {
+        document::Title { { env!("APP_NAME") } }
         document::Link { rel: "icon", type: "image/png", href: asset!("/assets/icon.png") }
         // ── Global stylesheets (loaded eagerly, no flashing on route changes) ────────────────
         document::Link { rel: "stylesheet", href: asset!("/assets/main.css", AssetOptions::css().with_preload(true)) }
@@ -224,6 +225,7 @@ fn init_backend_url() {
 pub fn log_build_info() {
     info!(
         event = "build_info",
+        app.name = env!("APP_NAME"),
         package.name = env!("CARGO_PKG_NAME"),
         package.version = env!("CARGO_PKG_VERSION"),
         build.date = env!("BUILD_DATE"),
@@ -261,18 +263,13 @@ fn main() {
     // With fullstack, hydrate via default WebHistory so SSR works correctly.
     dioxus::LaunchBuilder::new()
         .with_cfg(web! {
+            #[allow(unused_mut)]
             let mut cfg = dioxus::web::Config::new();
             #[cfg(not(feature = "fullstack"))]
             {
                 cfg = cfg.history(std::rc::Rc::new(dioxus::web::HashHistory::new(false)));
             }
             cfg
-        })
-        .with_cfg(desktop! {
-           dioxus::desktop::Config::new().with_window(
-               dioxus::desktop::WindowBuilder::new()
-                   .with_title("Photos to 3D Model Offline")
-           )
         })
         .launch(App);
 }
