@@ -135,11 +135,9 @@ jobs:
         run: |
           set -euo pipefail
           base64 -d<<<"$ANDROID_KEYSTORE_B64">ks.jks
-          APKSIGNER=$(command -v apksigner) || [ -n "${ANDROID_SDK_ROOT:-}" ] && APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -name apksigner -type f 2>/dev/null | sort -V | tail -1)
-          : "${APKSIGNER:?apksigner not found}"
           find target -type f -path '*/release/android/*/bundle/*.aab' -exec \
-            "$APKSIGNER" sign --ks ks.jks --ks-key-alias "$ANDROID_KEY_ALIAS" \
-              --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD {} \;
+            jarsigner -keystore ks.jks -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+              -keypass "$ANDROID_KEY_PASSWORD" -signedjar {} {} "$ANDROID_KEY_ALIAS" \;
 
       - name: Prepare artifact
         shell: bash
