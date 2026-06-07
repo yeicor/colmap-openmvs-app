@@ -1,8 +1,8 @@
 mod projects;
-pub use projects::{Projects, ProjectsSidebar};
+pub use projects::{AppShell, Projects, ProjectsSidebar};
 
 mod settings;
-pub use settings::{SettingsGeneral, SettingsRuntime};
+pub use settings::{SettingsGeneral, SettingsPageLayout, SettingsRuntime};
 
 mod project;
 pub use project::{

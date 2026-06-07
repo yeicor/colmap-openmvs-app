@@ -22,8 +22,8 @@ pub mod demo;
 
 use logging::init as init_logging;
 pub use views::{
-    ProjectConfig, ProjectImages, ProjectLogs, ProjectOutputs, ProjectOverview, Projects,
-    ProjectsSidebar, SettingsGeneral, SettingsRuntime, StartupTasks,
+    ProjectConfig, ProjectImages, ProjectLogs, ProjectOutputs, ProjectOverview, ProjectPage,
+    Projects, ProjectsSidebar, SettingsGeneral, SettingsPageLayout, SettingsRuntime, StartupTasks,
 };
 
 #[derive(Debug, Clone, Routable, PartialEq)]

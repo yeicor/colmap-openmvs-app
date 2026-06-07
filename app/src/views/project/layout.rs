@@ -1,8 +1,9 @@
 use crate::components::{
     progress::{Progress, ProgressIndicator},
-    tabs::{TabContent, TabList, TabTrigger, Tabs},
+    tabs::{TabList, TabTrigger, Tabs},
 };
 use crate::mycomponents::{BackButton, PageHeader, PageHeaderButton};
+use crate::views::AppShell;
 use crate::Route;
 use dioxus::prelude::*;
 use tracing::{debug, info};
@@ -10,18 +11,16 @@ use tracing::{debug, info};
 use dioxus_free_icons::icons::bs_icons::{BsBoxSeam, BsFileText, BsGear, BsImages};
 use dioxus_free_icons::Icon;
 
-use super::config::ConfigTab;
-use super::images::ImagesTab;
-use super::logs::LogsTab;
-use super::outputs::OutputsTab;
 use super::{PipelineCommandCtx, PipelineIsRunningCtx, PipelineProgressCtx};
 
-/// Shared page chrome for all `/project/:name/*` routes.
+/// Shared layout for all `/project/:name/*` routes.
 ///
-/// Each project route component (`ProjectImages`, `ProjectConfig`, …) renders
-/// this component so the header, tab bar, pipeline contexts, and tab panels
-/// are shared without relying on Dioxus `#[layout]` (which doesn't support
-/// sibling layouts correctly).
+/// Because this is a `#[layout]` component, it stays mounted when the user
+/// navigates between project sub-routes (Images, Config, Logs, Outputs).
+/// The page-header (with its CSS `fade-slide-in` animation) therefore stays
+/// in the DOM and does NOT re-animate on every tab switch.
+///
+/// Each child route component only provides its own tab content via `Outlet`.
 #[component]
 pub fn ProjectPage() -> Element {
     info!("Initializing project page");
@@ -40,7 +39,7 @@ pub fn ProjectPage() -> Element {
         }
     };
 
-    // ── Shared pipeline signal contexts (provided by ProjectsSidebar) ──
+    // ── Shared pipeline signal contexts (provided by AppShell) ─────────
     let pipeline_progress = use_context::<PipelineProgressCtx>();
     let pipeline_is_running = use_context::<PipelineIsRunningCtx>();
     let mut pipeline_command = use_context::<PipelineCommandCtx>();
@@ -103,6 +102,7 @@ pub fn ProjectPage() -> Element {
     };
 
     rsx! {
+        AppShell {}
         div {
             id: "project",
             PageHeader {
@@ -158,19 +158,8 @@ pub fn ProjectPage() -> Element {
                             span { class: "tab-label", "Outputs" }
                         }
                     }
-                    TabContent { value: "images".to_string(), index: 0usize,
-                        ImagesTab { project_name: name.clone() }
-                    }
-                    TabContent { value: "config".to_string(), index: 1usize,
-                        ConfigTab { project_name: name.clone() }
-                    }
-                    TabContent { value: "logs".to_string(), index: 2usize,
-                        LogsTab { project_name: name.clone() }
-                    }
-                    TabContent { value: "outputs".to_string(), index: 3usize,
-                        OutputsTab { project_name: name.clone() }
-                    }
                 }
+                Outlet::<Route> {}
             }
         }
     }

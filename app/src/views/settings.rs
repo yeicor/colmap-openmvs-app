@@ -1,9 +1,8 @@
 use crate::components::{
     button::{Button, ButtonVariant},
-    tabs::{TabContent, TabList, TabTrigger, Tabs},
+    tabs::{TabList, TabTrigger, Tabs},
 };
-use crate::mycomponents::BackButton;
-use crate::mycomponents::{Banner, BannerType, PageHeader};
+use crate::mycomponents::{BackButton, Banner, BannerType, PageHeader};
 use crate::server::{
     delete_runtime_binary, download_runtime_version, get_available_runtime_versions,
     get_docker_runtime_info, get_runtime_info, get_settings, get_task_info,
@@ -12,6 +11,7 @@ use crate::server::{
     update_settings,
 };
 use crate::task_manager::{drive_task, start_task, TasksCtx};
+use crate::views::AppShell;
 use crate::{backend_url, Route};
 use chrono::{DateTime, Duration, Utc};
 use colmap_openmvs_api::{
@@ -78,13 +78,16 @@ fn DateBadge(date: String) -> Element {
 // Top-level view  (2 tabs: General | Runtime)
 // ---------------------------------------------------------------------------
 
-/// Shared page chrome for all settings routes.
+/// Shared layout for all settings routes.
 ///
-/// Reads the current route to determine which tab is active and renders
-/// the full page (header + tab bar + both tab panels).  Both
-/// `SettingsGeneral` and `SettingsRuntime` delegate to this component.
+/// Because this is a `#[layout]` component, it stays mounted when the user
+/// switches between the General and Runtime tabs.  The page-header (with
+/// its CSS `fade-slide-in` animation) therefore stays in the DOM and does
+/// NOT re-animate on every tab switch.
+///
+/// Each child route component only provides its own tab content via `Outlet`.
 #[component]
-fn SettingsPage() -> Element {
+pub fn SettingsPageLayout() -> Element {
     let route = use_route::<Route>();
     let mut active_tab = use_signal(|| None);
 
@@ -116,6 +119,7 @@ fn SettingsPage() -> Element {
     };
 
     rsx! {
+        AppShell {}
         div {
             id: "settings",
 
@@ -147,14 +151,8 @@ fn SettingsPage() -> Element {
                             span { class: "tab-label", " Runtime" }
                         }
                     }
-
-                    TabContent { value: "general".to_string(), index: 0usize,
-                        GeneralTab {}
-                    }
-                    TabContent { value: "runtime".to_string(), index: 1usize,
-                        RuntimeTab {}
-                    }
                 }
+                Outlet::<Route> {}
             }
         }
     }
@@ -163,13 +161,21 @@ fn SettingsPage() -> Element {
 /// Route component: `/settings` — general settings.
 #[component]
 pub fn SettingsGeneral() -> Element {
-    rsx! { SettingsPage {} }
+    rsx! {
+        div { class: "dx-tabs-content dx-tabs-content-themed",
+            GeneralTab {}
+        }
+    }
 }
 
 /// Route component: `/settings/runtime` — runtime settings.
 #[component]
 pub fn SettingsRuntime() -> Element {
-    rsx! { SettingsPage {} }
+    rsx! {
+        div { class: "dx-tabs-content dx-tabs-content-themed",
+            RuntimeTab {}
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

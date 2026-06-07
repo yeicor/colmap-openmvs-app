@@ -11,34 +11,52 @@ pub mod overview;
 pub use overview::ProjectOverview;
 
 // ── Route components ──────────────────────────────────────────────────
-// Each renders the shared ProjectPage which provides the chrome + tabs.
+// These are now rendered inside `#[layout(ProjectPage)]`, so each one
+// returns only its own tab content — the shared chrome (header, tabs bar)
+// comes from ProjectPage which stays mounted across sub-route changes.
 
-/// Route component for `/project/:name/images`.
+/// Tab content for `/project/:name/images` (and overview redirects here).
 #[allow(unused_variables)]
 #[component]
 pub fn ProjectImages(name: String) -> Element {
-    rsx! { ProjectPage {} }
+    rsx! {
+        div { class: "dx-tabs-content dx-tabs-content-themed",
+            images::ImagesTab { project_name: name.clone() }
+        }
+    }
 }
 
-/// Route component for `/project/:name/config`.
+/// Tab content for `/project/:name/config`.
 #[allow(unused_variables)]
 #[component]
 pub fn ProjectConfig(name: String) -> Element {
-    rsx! { ProjectPage {} }
+    rsx! {
+        div { class: "dx-tabs-content dx-tabs-content-themed",
+            config::ConfigTab { project_name: name.clone() }
+        }
+    }
 }
 
-/// Route component for `/project/:name/logs`.
+/// Tab content for `/project/:name/logs`.
 #[allow(unused_variables)]
 #[component]
 pub fn ProjectLogs(name: String) -> Element {
-    rsx! { ProjectPage {} }
+    rsx! {
+        div { class: "dx-tabs-content dx-tabs-content-themed",
+            logs::LogsTab { project_name: name.clone() }
+        }
+    }
 }
 
-/// Route component for `/project/:name/outputs`.
+/// Tab content for `/project/:name/outputs`.
 #[allow(unused_variables)]
 #[component]
 pub fn ProjectOutputs(name: String) -> Element {
-    rsx! { ProjectPage {} }
+    rsx! {
+        div { class: "dx-tabs-content dx-tabs-content-themed",
+            outputs::OutputsTab { project_name: name.clone() }
+        }
+    }
 }
 
 /// Shared pipeline progress context provided by the ProjectPage and

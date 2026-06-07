@@ -394,7 +394,7 @@
 /* ── Log output area ──────────────────────────────────────────────────────── */
 
 .logs-output {
-    max-height: 24rem;
+    max-height: max(calc(100vh - 200px), 150px);
     overflow-y: auto;
     background: var(--primary-color-1);
     border-top: 1px solid var(--primary-color-6);

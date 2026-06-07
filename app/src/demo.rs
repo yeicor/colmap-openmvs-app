@@ -52,12 +52,12 @@ pub struct DemoProject {
     pub run_status: ProjectRunStatus,
 }
 
-fn get_manifest() -> DemoManifest {
+fn get_manifest() -> Result<DemoManifest> {
     tracing::info!(
         "Parsing DEMO_MANIFEST ({len} chars)...",
         len = DEMO_MANIFEST.len()
     );
-    serde_json::from_str(DEMO_MANIFEST).expect("Failed to parse DEMO_MANIFEST")
+    Ok(serde_json::from_str(DEMO_MANIFEST)?)
 }
 
 pub fn read_only_error<T>() -> Result<T> {
@@ -67,15 +67,15 @@ pub fn read_only_error<T>() -> Result<T> {
 }
 
 pub async fn get_projects() -> Result<Vec<Project>> {
-    Ok(get_manifest().projects)
+    Ok(get_manifest()?.projects)
 }
 
 pub async fn get_settings() -> Result<Settings> {
-    Ok(get_manifest().settings)
+    Ok(get_manifest()?.settings)
 }
 
 pub async fn get_project_images(_project_name: String) -> Result<Vec<String>> {
-    Ok(get_manifest().project.images)
+    Ok(get_manifest()?.project.images)
 }
 
 pub async fn get_project_image_bytes(
@@ -91,11 +91,11 @@ pub async fn get_project_image_bytes(
 }
 
 pub async fn get_runtime_info() -> Result<RuntimeInfo> {
-    Ok(get_manifest().runtime_info.clone())
+    Ok(get_manifest()?.runtime_info.clone())
 }
 
 pub async fn get_docker_runtime_info() -> Result<RuntimeInfo> {
-    Ok(get_manifest().runtime_info)
+    Ok(get_manifest()?.runtime_info)
 }
 
 pub async fn get_available_runtime_versions() -> Result<Vec<String>> {
@@ -119,11 +119,11 @@ pub async fn get_embedded_image_tag() -> Result<Option<String>> {
 }
 
 pub async fn get_image_config(_image_tag: String) -> Result<ConfigSchema> {
-    Ok(get_manifest().project.config_schema)
+    Ok(get_manifest()?.project.config_schema)
 }
 
 pub async fn load_project_config(_project_name: String) -> Result<LoadedProjectConfig> {
-    Ok(get_manifest().project.project_config)
+    Ok(get_manifest()?.project.project_config)
 }
 
 pub async fn list_tasks(
@@ -182,11 +182,11 @@ pub async fn poll_task_events(task_id: String, cursor: usize) -> Result<TaskEven
 }
 
 pub async fn get_project_run_status(_project_name: String) -> Result<ProjectRunStatus> {
-    Ok(get_manifest().project.run_status)
+    Ok(get_manifest()?.project.run_status)
 }
 
 pub async fn list_project_outputs(_project_name: String) -> Result<Vec<OutputFile>> {
-    Ok(get_manifest().project.outputs)
+    Ok(get_manifest()?.project.outputs)
 }
 
 pub async fn get_project_output_bytes(
@@ -202,7 +202,7 @@ pub async fn get_project_output_bytes(
 }
 
 pub async fn get_dark_mode() -> Result<Option<bool>> {
-    Ok(get_manifest().dark_mode)
+    Ok(get_manifest()?.dark_mode)
 }
 
 pub async fn create_project(_name: String) -> Result<Project> {

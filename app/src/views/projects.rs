@@ -30,8 +30,14 @@ enum DialogType {
     Delete(usize),
 }
 
+/// Shared app shell — sidebar, tasks panel, pipeline contexts, startup orchestration.
+///
+/// Rendered by `ProjectsSidebar` (the single top-level layout).  The layout stays
+/// mounted across all route changes inside it, and the `if` branches in
+/// `ProjectsSidebar` keep the same branch across tab switches, so the chrome
+/// (page-header, tab bar) stays in the DOM and its CSS animation doesn't replay.
 #[component]
-pub fn ProjectsSidebar() -> Element {
+pub fn AppShell(children: Element) -> Element {
     let cur_route = use_route::<crate::Route>();
     let mut route_state = use_signal(|| cur_route.clone());
     let mut sidebar_open: Signal<Option<bool>> = use_signal(|| None);
@@ -40,20 +46,12 @@ pub fn ProjectsSidebar() -> Element {
         route_state.set(cur_route.clone());
     }
 
-    // ── Startup-orchestration: save origin, delay, maybe redirect ────
-    //
-    // The startup task was already kicked off by `App`.  If it completes within
-    // ~1 s the user never sees the startup page.  Otherwise we redirect so the
-    // user can watch progress / retry.
-    //
-    // Guarded with OnceLock so this only runs once per boot (sidebar may
-    // remount on route changes).
+    // ── Startup-orchestration ─────────────────────────────────────────
     let mut startup = use_context::<crate::task_manager::StartupCtx>();
     let navigator = use_navigator();
     let origin_route = cur_route.to_string();
     static STARTUP_ORCHESTRATED: OnceLock<()> = OnceLock::new();
     use_effect(move || {
-        // Remember where the user was heading so we can return there.
         if startup.is_origin_empty() {
             startup.origin.set(origin_route.clone());
         }
@@ -63,7 +61,6 @@ pub fn ProjectsSidebar() -> Element {
         let navigator = navigator;
         let is_completed = startup.is_completed;
         spawn(async move {
-            // Wait ~1 second (3 poll intervals = 900 ms, close enough).
             crate::task_manager::sleep_poll().await;
             crate::task_manager::sleep_poll().await;
             crate::task_manager::sleep_poll().await;
@@ -83,8 +80,7 @@ pub fn ProjectsSidebar() -> Element {
 
     let is_projects_route = matches!(cur_route, Route::Projects {});
 
-    // Pipeline contexts — created here so they persist across project sub-route
-    // changes (Images → Config → Logs → Outputs).  ProjectPage consumes them.
+    // Pipeline contexts — available to all content rendered as children.
     let pipeline_progress: PipelineProgressCtx = use_signal(|| None);
     use_context_provider(|| pipeline_progress);
     let pipeline_is_running: PipelineIsRunningCtx = use_signal(|| false);
@@ -103,8 +99,45 @@ pub fn ProjectsSidebar() -> Element {
                 Projects { is_sidebar: true, selected: match &cur_route { Route::ProjectOverview { name } | Route::ProjectImages { name } | Route::ProjectConfig { name } | Route::ProjectLogs { name } | Route::ProjectOutputs { name } => Some(name.clone()), _ => None, } }
             }
         }
-        Outlet::<Route> {}
+        {children}
         TasksPanel {}
+    }
+}
+
+/// Single top-level layout for all main app routes.
+///
+/// `ProjectsSidebar` stays mounted while the user navigates between the
+/// projects list page, project tabs, and settings tabs.  Conditional `if`
+/// branches keep the same chrome subtree alive across tab switches inside
+/// a project or inside settings, so the `.page-header` CSS animation does
+/// NOT re-trigger.
+#[component]
+pub fn ProjectsSidebar() -> Element {
+    let cur_route = use_route::<crate::Route>();
+
+    let is_project_page = matches!(
+        cur_route,
+        Route::ProjectOverview { .. }
+            | Route::ProjectImages { .. }
+            | Route::ProjectConfig { .. }
+            | Route::ProjectLogs { .. }
+            | Route::ProjectOutputs { .. }
+    );
+    let is_settings_page = matches!(
+        cur_route,
+        Route::SettingsGeneral { .. } | Route::SettingsRuntime { .. }
+    );
+
+    rsx! {
+        AppShell {
+            if is_project_page {
+                crate::views::project::layout::ProjectPage {}
+            } else if is_settings_page {
+                crate::views::settings::SettingsPageLayout {}
+            } else {
+                Outlet::<Route> {}
+            }
+        }
     }
 }
 
@@ -284,8 +317,6 @@ pub fn Projects(
                     button {
                         class: "inline-notice-close",
                         onclick: move |_| {
-                            // Hide this notice by clearing the backend URL
-                            // (next page load will re-read from storage if present).
                             let _ = backend_url::BACKEND_URL.set(String::new());
                         },
                         "×"
@@ -317,7 +348,7 @@ pub fn Projects(
                             key: "{project.name}",
                             div {
                                 onclick: move |_| {
-                                    if dialog_type().is_none() { // Ignore clicks from the action buttons
+                                    if dialog_type().is_none() {
                                         if let Some(proj) = projects().get(idx) {
                                             debug!(project_name = %proj.name, route = ?Route::ProjectImages { name: proj.name.clone() }, "Navigating to project");
                                             dioxus::prelude::navigator().push(Route::ProjectImages { name: proj.name.clone() });
@@ -508,7 +539,7 @@ impl dioxus_free_icons::IconShape for BsSupportBlobP {
 
     fn child_elements(&self) -> Element {
         rsx! {
-            // stylized “P”
+            // stylized "P"
             path {
                 d: "M436 143c-.084-60.778-47.57-110.591-103.285-128.565C263.528-7.884 172.279-4.649 106.214 26.424 26.142 64.089.988 146.596.051 228.883c-.77 67.653 6.004 245.841 106.83 247.11 74.917.948 86.072-95.279 120.737-141.623 24.662-32.972 56.417-42.285 95.507-51.929C390.309 265.865 436.097 213.011 436 143Z",
             }
