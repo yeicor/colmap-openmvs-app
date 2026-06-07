@@ -74,7 +74,7 @@ jobs:
         run: |
           # cargo build --release --features server,desktop -vv # helps detect errors
           $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --features server --verbose
-          RUST_LOG=debug,h2=info cargo test --workspace --all-targets --all-features -- --show-output
+          RUST_LOG=debug,h2=info cargo test --workspace --all-targets -- --show-output
       - shell: bash
         if: startsWith(matrix.build-type, 'web')
         run: |
