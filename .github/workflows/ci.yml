@@ -223,6 +223,7 @@ jobs:
     permissions:
       pages: write
       id-token: write
+    if: github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -234,8 +235,7 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web-artifact
-      - if: github.event_name != 'pull_request'
-        uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@v4
 
   deploy-android:
     needs: build-and-test
