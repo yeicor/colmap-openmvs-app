@@ -29,7 +29,7 @@ pub struct Settings {
     /// Example: "/usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1"
     #[serde(default)]
     pub custom_mounts: Vec<String>,
-    /// Path to the settings.json file. Can be overridden via COLMAP_SETTINGS_PATH environment variable.
+    /// Path to the settings.json file. Can be overridden via COLMAPOPENMVSAPP_SETTINGS_PATH environment variable.
     /// Defaults to projects_folder/settings.json if not specified.
     #[serde(default)]
     pub settings_file_path: Option<String>,

@@ -292,7 +292,7 @@ fn GeneralTab() -> Element {
                 }
 
                 div { class: "form-group",
-                    label { title: "Override the settings.json path. Leave empty to use projects_folder/settings.json. Can also be set via COLMAP_SETTINGS_PATH env var.", "Settings File" }
+                    label { title: "Override the settings.json path. Leave empty to use projects_folder/settings.json. Can also be set via COLMAPOPENMVSAPP_SETTINGS_PATH env var.", "Settings File" }
                     div { class: "folder-row",
                         input {
                             r#type: "text",
@@ -935,11 +935,11 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
     let mut ready_search = use_signal(String::new);
     let mut available_search = use_signal(String::new);
 
-    const COLMAP_IMAGE: &str = "mirror.gcr.io/yeicor/colmap-openmvs";
+    const COLMAPOPENMVS_IMAGE: &str = "mirror.gcr.io/yeicor/colmap-openmvs";
 
     /// Returns true if the tag uses the official COLMAP-OpenMVS image repo.
     fn is_official(tag: &str) -> bool {
-        tag.starts_with(COLMAP_IMAGE)
+        tag.starts_with(format!("{}:", COLMAPOPENMVS_IMAGE).as_str())
     }
 
     /// Shortened display name for official images (just tag part), full label otherwise.
@@ -1041,7 +1041,7 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
         error.set(String::new());
         success.set(String::new());
 
-        let full_image = format!("{}:{}", COLMAP_IMAGE, tag);
+        let full_image = format!("{}:{}", COLMAPOPENMVS_IMAGE, tag);
         let label = format!("Preparing {}", tag);
         let rt_spawn = rt_signal();
         spawn(async move {

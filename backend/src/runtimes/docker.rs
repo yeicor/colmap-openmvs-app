@@ -502,9 +502,22 @@ impl Runtime for Docker {
                 .get("CreatedAt")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            // Extract the unique image ID (sha256 digest).  Docker always
+            // includes this field; it uniquely identifies an image across
+            // tags and digests.
+            let image_id = json
+                .get("ID")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             // Skip dangling / intermediate images
             if repo == "<none>" && tag_str == "<none>" {
+                continue;
+            }
+            // Skip images that have no ID at all (should not happen, but be safe)
+            if image_id.is_empty() {
+                warn!("docker images: skipping entry with no ID: {}", line);
                 continue;
             }
 
@@ -517,10 +530,12 @@ impl Runtime for Docker {
             let size = Self::parse_size(size_str);
             let build_date = created_at_str.as_deref().and_then(Self::parse_created_at);
 
-            // Use the full tag string as the hash so that `docker rmi <hash>` works.
+            // Use the unique image ID (sha256 digest) as the hash so that
+            // duplicate tag names (different digests, same repo:tag) each
+            // get a unique entry — and docker rmi <hash> still works.
             images.push(PreparedImage::with_build_date(
                 ImageTag::from_string(full_tag.clone()),
-                ImageHash::new(full_tag),
+                ImageHash::new(image_id),
                 size,
                 build_date,
             ));

@@ -36,14 +36,6 @@ jobs:
           - os: ubuntu-24.04
             build-type: web-demo
             artifact-find: "-path '*/release/web/public/*'"
-          - os: ubuntu-24.04
-            build-type: android-apk
-            target: x86_64-linux-android
-            artifact-find: "-path '*/outputs/apk/debug/*.apk'" # Even on release, the APK is still named debug
-          - os: ubuntu-24.04
-            build-type: android-apk
-            target: aarch64-linux-android
-            artifact-find: "-path '*/outputs/apk/debug/*.apk'" # Even on release, the APK is still named debug
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -80,29 +72,6 @@ jobs:
         run: |
           echo -e "\n\n[web.app]\nbase_path = \"/${{ github.event.repository.name }}\"" >> Dioxus.toml  # Ensure correct base path for GitHub Pages
           $HOME/.dx/bin/dx bundle --web --release --verbose ${{ matrix.build-type == 'web-demo' && '--no-default-features --features=demo' || '' }}
-      - if: matrix.build-type == 'android-apk'
-        shell: bash
-        env:
-          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          $HOME/.dx/bin/dx bundle --android --package-types apk --release --features server --target "${{ matrix.target }}" --verbose
-          find target -type f ${{ matrix.artifact-find }} | while read -r apk; do
-            dir="$(dirname "$apk")"
-            mv "$apk" "$dir/app-release-${{ matrix.target }}.apk"
-          done
-          ZIPALIGN=$(command -v zipalign) || [ -n "${ANDROID_SDK_ROOT:-}" ] && ZIPALIGN=$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -name zipalign -type f 2>/dev/null | sort -V | tail -1)
-          : "${ZIPALIGN:?zipalign not found}"
-          find target -type f ${{ matrix.artifact-find }} -exec sh -c '"$0" -p -f -v 4 "$1" "$1.tmp" && mv "$1.tmp" "$1"' "$ZIPALIGN" {} \;
-          base64 -d<<<"$ANDROID_KEYSTORE_B64">ks.jks
-          APKSIGNER=$(command -v apksigner) || [ -n "${ANDROID_SDK_ROOT:-}" ] && APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -name apksigner -type f 2>/dev/null | sort -V | tail -1)
-          : "${APKSIGNER:?apksigner not found}"
-          find target -type f ${{ matrix.artifact-find }} -exec \
-            "$APKSIGNER" sign --ks ks.jks --ks-key-alias "$ANDROID_KEY_ALIAS" \
-              --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD {} \;
 
       - shell: bash
         run: |
@@ -169,15 +138,14 @@ jobs:
       contents: read
       packages: write
     strategy:
+      fail-fast: false
       matrix:
         variant:
-          - name: cpu
-            prefix: cpu-
-            build_args: ""
-          - name: cuda
-            prefix: cuda-
-            build_args: | # Keep in sync with https://github.com/yeicor-docker/colmap-openmvs/blob/main/.github/workflows/main.yml#L64
-              RUNTIME_IMAGE=nvidia/cuda:13.0.3-runtime-ubuntu24.04
+          - cpu
+          - cuda
+        build-type:
+          - release
+          - debug
     steps:
       - uses: actions/checkout@v6
       - uses: docker/setup-buildx-action@v4
@@ -198,18 +166,21 @@ jobs:
             ghcr.io/${{ github.repository }}
             docker.io/${{ github.repository }}
           tags: |
-            type=raw,value=nightly,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=nightly,enable=${{ github.ref == 'refs/heads/main' && matrix.build-type == 'release' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && matrix.build-type == 'release' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
           flavor: |
-            prefix=${{ matrix.variant.prefix }},onlatest=true
+            prefix=${{ matrix.variant }}-,onlatest=true
+            suffix=${{ matrix.build-type == 'debug' && '-debug' || '' }}
       - uses: docker/build-push-action@v7
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
-          build-args: ${{ matrix.variant.build_args }}
+          build-args: |
+            ${{ matrix.variant == 'cuda' && 'RUNTIME_IMAGE=nvidia/cuda:13.0.3-runtime-ubuntu24.04' || '' }}
+            BUILD_TYPE=${{ matrix.build-type }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
@@ -309,8 +280,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  success: # Meta job that always runs and serves as a simple success signal for the entire workflow
-    needs: [build-and-test, deploy-docker, deploy-pages, deploy-android, deploy-release]
+  # ─── Success gate ─────────────────────────────────────────────────────
+  success:
+    needs:
+      - build-and-test
+      - deploy-docker
+      - deploy-pages
+      - deploy-android
+      - deploy-release
     if: "!cancelled()"
     runs-on: ubuntu-24.04
     steps:

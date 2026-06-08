@@ -12,7 +12,7 @@ use tracing::{debug, error, info, warn};
 /// COLMAP + OpenMVS backend server.
 ///
 /// All settings can be configured via:
-///   • a JSON config file (see --config / COLMAP_CONFIG)
+///   • a JSON config file (see --config / COLMAPOPENMVSAPP_CONFIG)
 ///   • environment variables
 ///   • command-line flags (highest precedence)
 #[derive(Parser, Debug, Clone)]
@@ -23,34 +23,34 @@ pub struct CliConfig {
     /// When set, the server loads settings from this file instead of the
     /// default location (projects_folder/settings.json). Values in this
     /// file can still be overridden by individual CLI flags or env vars.
-    #[arg(short = 'c', long = "config", env = "COLMAP_CONFIG")]
+    #[arg(short = 'c', long = "config", env = "COLMAPOPENMVSAPP_CONFIG")]
     pub config: Option<String>,
 
     /// Root directory for all project data.
-    #[arg(long = "projects-folder", env = "COLMAP_PROJECTS_FOLDER")]
+    #[arg(long = "projects-folder", env = "COLMAPOPENMVSAPP_PROJECTS_FOLDER")]
     pub projects_folder: Option<String>,
 
     /// Directory containing the PRoot binary and supporting libraries.
-    #[arg(long = "proot-binary-dir", env = "COLMAP_PROOT_BINARY_DIR")]
+    #[arg(long = "proot-binary-dir", env = "COLMAPOPENMVSAPP_PROOT_BINARY_DIR")]
     pub proot_binary_dir: Option<String>,
 
     /// Directory for large PRoot runtime images.
-    #[arg(long = "proot-images-dir", env = "COLMAP_PROOT_IMAGES_DIR")]
+    #[arg(long = "proot-images-dir", env = "COLMAPOPENMVSAPP_PROOT_IMAGES_DIR")]
     pub proot_images_dir: Option<String>,
 
     /// Default container image tag (format: "proot:tag" or "docker:tag").
-    #[arg(long = "default-image-tag", env = "COLMAP_DEFAULT_IMAGE_TAG")]
+    #[arg(long = "default-image-tag", env = "COLMAPOPENMVSAPP_DEFAULT_IMAGE_TAG")]
     pub default_image_tag: Option<String>,
 
     /// Additional filesystem mount for the PRoot/Docker runtime
     /// (format: "/host/path:/container/path").
     /// Can be specified multiple times.
-    #[arg(long = "custom-mount", env = "COLMAP_CUSTOM_MOUNT")]
+    #[arg(long = "custom-mount", env = "COLMAPOPENMVSAPP_CUSTOM_MOUNT")]
     pub custom_mounts: Vec<String>,
 
     /// Override the settings.json path. Leave unset to use
     /// projects_folder/settings.json.
-    #[arg(long = "settings-path", env = "COLMAP_SETTINGS_PATH")]
+    #[arg(long = "settings-path", env = "COLMAPOPENMVSAPP_SETTINGS_PATH")]
     pub settings_file_path: Option<String>,
 
     /// Server bind address (IP). Also read by Dioxus as `IP`.
@@ -94,7 +94,7 @@ pub fn initialize_from_env() -> CliConfig {
     // 1. Start with platform-specific defaults.
     let mut settings = default_settings();
 
-    // 2. Load from the config file if explicitly provided (--config / COLMAP_CONFIG).
+    // 2. Load from the config file if explicitly provided (--config / COLMAPOPENMVSAPP_CONFIG).
     if let Some(ref config_path) = cli.config {
         debug!(path = %config_path, "Loading settings from --config file");
         match std::fs::read_to_string(config_path) {
@@ -204,9 +204,20 @@ pub(crate) fn default_projects_folder() -> String {
             Err(_) => "./projects".to_string(),
         }
     } else {
-        match std::env::var("HOME") {
-            Ok(home) => format!("{}/.local/share/colmap_openmvs/projects", home),
-            Err(_) => "./projects".to_string(),
+        // COLMAPOPENMVSAPP_DATA_DIR is the recommended way to set a single
+        // top-level data directory (e.g. /data when a volume is mounted).
+        // Per-path env vars (COLMAPOPENMVSAPP_PROJECTS_FOLDER) still take
+        // priority via apply_cli_overrides.
+        if let Ok(data_dir) = std::env::var("COLMAPOPENMVSAPP_DATA_DIR") {
+            format!("{}/projects", data_dir)
+        } else if let Ok(home) = std::env::var("HOME") {
+            if !home.is_empty() && home != "/" {
+                format!("{}/.local/share/colmap_openmvs/projects", home)
+            } else {
+                format!("{}/colmap-openmvs/projects", std::env::temp_dir().display())
+            }
+        } else {
+            format!("{}/colmap-openmvs/projects", std::env::temp_dir().display())
         }
     }
 }
@@ -402,9 +413,22 @@ pub fn default_proot_binary_dir() -> String {
                 Err(_) => "./bin/proot".to_string(),
             }
         } else {
-            match std::env::var("HOME") {
-                Ok(home) => format!("{}/.local/share/colmap_openmvs", home),
-                Err(_) => "./bin/proot".to_string(),
+            if let Ok(data_dir) = std::env::var("COLMAPOPENMVSAPP_DATA_DIR") {
+                format!("{}/proot-binaries", data_dir)
+            } else if let Ok(home) = std::env::var("HOME") {
+                if !home.is_empty() && home != "/" {
+                    format!("{}/.local/share/colmap_openmvs", home)
+                } else {
+                    format!(
+                        "{}/colmap-openmvs/proot-binaries",
+                        std::env::temp_dir().display()
+                    )
+                }
+            } else {
+                format!(
+                    "{}/colmap-openmvs/proot-binaries",
+                    std::env::temp_dir().display()
+                )
             }
         }
     }
@@ -432,9 +456,22 @@ pub fn default_proot_images_dir() -> String {
             Err(_) => "./proot-images".to_string(),
         }
     } else {
-        match std::env::var("HOME") {
-            Ok(home) => format!("{}/.local/share/colmap_openmvs/proot-images", home),
-            Err(_) => "./proot-images".to_string(),
+        if let Ok(data_dir) = std::env::var("COLMAPOPENMVSAPP_DATA_DIR") {
+            format!("{}/proot-images", data_dir)
+        } else if let Ok(home) = std::env::var("HOME") {
+            if !home.is_empty() && home != "/" {
+                format!("{}/.local/share/colmap_openmvs/proot-images", home)
+            } else {
+                format!(
+                    "{}/colmap-openmvs/proot-images",
+                    std::env::temp_dir().display()
+                )
+            }
+        } else {
+            format!(
+                "{}/colmap-openmvs/proot-images",
+                std::env::temp_dir().display()
+            )
         }
     }
 }
@@ -461,8 +498,8 @@ fn default_settings() -> Settings {
 /// Resolve the effective settings file path, checking environment variable first.
 pub fn get_effective_settings_path(settings: &Settings) -> PathBuf {
     // Check for environment variable override
-    if let Ok(env_path) = std::env::var("COLMAP_SETTINGS_PATH") {
-        debug!(env_path = %env_path, "Using COLMAP_SETTINGS_PATH environment variable");
+    if let Ok(env_path) = std::env::var("COLMAPOPENMVSAPP_SETTINGS_PATH") {
+        debug!(env_path = %env_path, "Using COLMAPOPENMVSAPP_SETTINGS_PATH environment variable");
         return PathBuf::from(env_path);
     }
 
@@ -480,7 +517,7 @@ pub fn get_effective_settings_path(settings: &Settings) -> PathBuf {
 
 pub fn settings_file_path(projects_folder: &str) -> PathBuf {
     // Check for environment variable override
-    if let Ok(env_path) = std::env::var("COLMAP_SETTINGS_PATH") {
+    if let Ok(env_path) = std::env::var("COLMAPOPENMVSAPP_SETTINGS_PATH") {
         return PathBuf::from(env_path);
     }
 

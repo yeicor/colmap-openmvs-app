@@ -42,7 +42,7 @@ RUN if [ "$ENABLE_DOCKER" = "true" ]; then \
 
 WORKDIR /usr/local/app
 
-# minimal deps for running binary (adjust if needed)
+# minimal deps for running binary
 RUN apt-get update && apt-get install -y \
     ca-certificates libwayland-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -51,65 +51,9 @@ COPY --from=builder \
     /app/target/dx/colmap-openmvs-app/${BUILD_TYPE}/web \
     /usr/local/app
 
-# ------------------------------------------------------------------
-# Server configuration — all settings are overridable at runtime
-# via environment variables (or CLI flags when using docker run).
-#
-# Persistent data volume (mount here for remote development):
-#   docker run -v /host/data:/data ...
-#
-# Override individual settings with -e:
-#   docker run -e COLMAP_PROJECTS_FOLDER=/data/projects ...
-# ------------------------------------------------------------------
-
-# Server address (Dioxus reads IP / PORT env vars internally).
-ENV IP=0.0.0.0
-ENV PORT=8080
-EXPOSE 8080
-
-# ── Core data directories ──────────────────────────────────────────────
-#
-# Mount a persistent volume at /data to keep projects and images across
-# container restarts:
-#
-#   docker run -v /my/storage:/data ...
-#
-# Or override individual paths via env vars / CLI flags:
-#
-#   --projects-folder  /data/projects    (COLMAP_PROJECTS_FOLDER)
-#   --proot-images-dir /data/proot-images (COLMAP_PROOT_IMAGES_DIR)
-# -----------------------------------------------------------------------
+ENV COLMAPOPENMVSAPP_DATA_DIR=/data
 VOLUME /data
-ENV COLMAP_PROJECTS_FOLDER=/data/projects
-ENV COLMAP_PROOT_IMAGES_DIR=/data/proot-images
 
-# ── PRoot binary directory ─────────────────────────────────────────────
-# Directory containing the PRoot binary and its supporting libraries.
-# Default inside the container — override if you distribute PRoot separately.
-#   --proot-binary-dir /tmp/  (COLMAP_PROOT_BINARY_DIR)
-# -----------------------------------------------------------------------
-ENV COLMAP_PROOT_BINARY_DIR=/tmp/
-
-# ── Config file ────────────────────────────────────────────────────────
-# Point to an alternative settings.json anywhere on the filesystem:
-#   --config /data/settings.json   (COLMAP_CONFIG)
-# -----------------------------------------------------------------------
-
-# ── Default image tag ──────────────────────────────────────────────────
-# Pre-configured container image for running COLMAP/OpenMVS pipelines.
-# Examples:
-#   "proot:mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest"
-#   "docker:mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest"
-# -----------------------------------------------------------------------
-
-# ── Custom mounts ──────────────────────────────────────────────────────
-# Additional filesystem mounts for PRoot/Docker runtime.
-# Can be specified multiple times (repeat --custom-mount or set
-# COLMAP_CUSTOM_MOUNT to a space-separated list).
-# Format: "/host/path:/container/path" or just "/host/path"
-#
-# Example (CUDA):
-#   --custom-mount /usr/lib/x86_64-linux-gnu/libcuda.so
-# -----------------------------------------------------------------------
+EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/app/server"]

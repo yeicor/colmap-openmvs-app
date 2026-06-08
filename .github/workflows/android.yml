@@ -1,3 +1,5 @@
+# This is not integrated with ci.yml since the whole docker image needs to be embedded into android builds (security limitation), so we want to regularly trigger only this workflow when the base image changes or when manually requested. Also called from ci.yml automatically on main branch.
+
 on:
   workflow_dispatch:
     inputs:
@@ -80,6 +82,9 @@ jobs:
             echo "should-build=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # ─── Build ──────────────────────────────────────────────────────────
+  # Parallelized across (target × package-type) — AAB and APK build
+  # simultaneously for both architectures.
   build:
     needs: check-image-updates
     if: needs.check-image-updates.outputs.should-build == 'true'
@@ -88,7 +93,13 @@ jobs:
       matrix:
         include:
           - target: x86_64-linux-android
+            package-type: aab
+          - target: x86_64-linux-android
+            package-type: apk
           - target: aarch64-linux-android
+            package-type: aab
+          - target: aarch64-linux-android
+            package-type: apk
     runs-on: ubuntu-24.04
 
     steps:
@@ -123,9 +134,10 @@ jobs:
 
       - shell: bash
         run: |
-          dx bundle --android --package-types aab --features server --target ${{ matrix.target }} --release
+          dx bundle --android --package-types ${{ matrix.package-type }} --features server --target ${{ matrix.target }} --release
 
-      - name: Sign AAB
+      - name: Sign Android packages (AAB)
+        if: matrix.package-type == 'aab'
         shell: bash
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
@@ -139,12 +151,35 @@ jobs:
             jarsigner -keystore ks.jks -storepass "$ANDROID_KEYSTORE_PASSWORD" \
               -keypass "$ANDROID_KEY_PASSWORD" -signedjar {} {} "$ANDROID_KEY_ALIAS" \;
 
-      - name: Prepare artifact
+      - name: Sign Android packages (APK)
+        if: matrix.package-type == 'apk'
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          base64 -d<<<"$ANDROID_KEYSTORE_B64">ks.jks
+          ZIPALIGN=$(command -v zipalign) || [ -n "${ANDROID_SDK_ROOT:-}" ] && ZIPALIGN=$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -name zipalign -type f 2>/dev/null | sort -V | tail -1)
+          APKSIGNER=$(command -v apksigner) || [ -n "${ANDROID_SDK_ROOT:-}" ] && APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -maxdepth 2 -name apksigner -type f 2>/dev/null | sort -V | tail -1)
+          if [ -n "${ZIPALIGN}" ] && [ -n "${APKSIGNER}" ]; then
+            find target -type f -path '*/outputs/apk/debug/*.apk' -exec sh -c '"$0" -p -f -v 4 "$1" "$1.tmp" && mv "$1.tmp" "$1"' "$ZIPALIGN" {} \;
+            find target -type f -path '*/outputs/apk/debug/*.apk' -exec \
+              "$APKSIGNER" sign --ks ks.jks --ks-key-alias "$ANDROID_KEY_ALIAS" \
+                --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD {} \;
+          else
+            echo "⚠️  zipalign/apksigner not found — skipping APK signing"
+          fi
+
+      - name: Prepare artifact (AAB)
+        if: matrix.package-type == 'aab'
         shell: bash
         run: |
           set -Eeuo pipefail
           mkdir -p android-output
-          # Copy AAB with target-specific name to avoid conflicts when merging
+          # Copy AAB with target-specific name
           for aab in $(find target -type f -path '*/release/android/*/bundle/*.aab'); do
             cp "$aab" "android-output/app-release-${{ matrix.target }}.aab"
           done
@@ -164,16 +199,38 @@ jobs:
           echo "📦 Artifact contents:"
           find android-output -type f
 
+      - name: Prepare artifact (APK)
+        if: matrix.package-type == 'apk'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p apk-collect
+          for apk in $(find target -type f -path '*/outputs/apk/debug/*.apk'); do
+            target_name="app-release-${{ matrix.target }}.apk"
+            cp "$apk" "apk-collect/$target_name"
+          done
+          echo "📦 Artifact contents:"
+          find apk-collect -type f
+
       - uses: actions/upload-artifact@v4
+        if: matrix.package-type == 'aab'
         with:
           name: build-android-aab-${{ matrix.target }}
           path: android-output/
 
-  deploy:
+      - uses: actions/upload-artifact@v4
+        if: matrix.package-type == 'apk'
+        with:
+          name: build-android-apk-${{ matrix.target }}
+          path: apk-collect/
+
+  # ─── Google Play Store ─────────────────────────────────────────────
+  # Publishes AABs to Google Play. On tag push (v*) deploys to
+  # production+beta+internal; on main branch deploys to beta+internal only.
+  deploy-googleplay:
     needs: [check-image-updates, build]
     if: needs.check-image-updates.outputs.should-build == 'true'
     runs-on: ubuntu-24.04
-
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -184,27 +241,18 @@ jobs:
       - id: upload-info
         shell: bash
         run: |
-          # Comma-separated list of AABs for upload
           echo "release-files=$(find android-artifacts -type f -name '*.aab' | sort | tr '\n' ',')" >> "$GITHUB_OUTPUT"
-
-          # Merge debug symbols from all architectures into one directory
           if [ -d android-artifacts/debug-symbols ]; then
             echo "debug-symbols-folder=$(pwd)/android-artifacts/debug-symbols" >> "$GITHUB_OUTPUT"
           fi
-
-          # Use the first mapping file found (one per architecture)
           first_mapping=$(find android-artifacts -type f -name 'mapping-*.txt' | head -1)
           if [ -n "$first_mapping" ]; then
             echo "mapping-file=$first_mapping" >> "$GITHUB_OUTPUT"
           fi
-
-          # Determine which tracks to publish to
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "tracks=production,beta,internal" >> "$GITHUB_OUTPUT"
-          elif [[ "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
-            echo "tracks=beta,internal" >> "$GITHUB_OUTPUT"
           else
-            echo "tracks=internal" >> "$GITHUB_OUTPUT"
+            echo "tracks=beta,internal" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: r0adkll/upload-google-play@v1
@@ -215,8 +263,14 @@ jobs:
           tracks: ${{ steps.upload-info.outputs.tracks }}
           debugSymbols: ${{ steps.upload-info.outputs.debug-symbols-folder || '' }}
           mappingFile: ${{ steps.upload-info.outputs.mapping-file || '' }}
-          # status: draft # Defaults to "completed", set to "draft" to create a draft release instead
 
+  # ─── Save source digest (runs after all deploy jobs complete) ──────
+  save-digest:
+    needs: [check-image-updates, build, deploy-googleplay]
+    if: needs.check-image-updates.outputs.should-build == 'true'
+    runs-on: ubuntu-24.04
+
+    steps:
       - name: Save source digest
         run: |
           echo '${{ needs.check-image-updates.outputs.digest }}' > digest.txt

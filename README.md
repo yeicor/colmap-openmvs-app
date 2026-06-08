@@ -18,4 +18,4 @@
 * **🐳 Docker-in-Docker support**: Run the app inside a container while transparently orchestrating reconstruction pipelines on the host system.
 * **🔒 Privacy-first**: All processing happens locally. Your photos and models never leave your device. The **[web demo](https://yeicor.github.io/colmap-openmvs-app/)** uses pre-reconstructed data and requires no uploads.
 * **🆓 Open source**: Released under the MIT License. Contributions are welcome.
-* **🏪 Available everywhere**: Search for **"Photos to 3D Model Offline"** in your favorite app stores and software distribution platforms. Or just download the [latest release](https://github.com/yeicor/colmap-openmvs-app/releases/latest) or the [nightly builds](https://github.com/yeicor/colmap-openmvs-app/actions/workflows/ci.yml).
+* **📄 Precompiled binaries for all platforms**: Just download the [latest release](https://github.com/yeicor/colmap-openmvs-app/releases/latest) or the [nightly builds](https://github.com/yeicor/colmap-openmvs-app/actions/workflows/ci.yml).
