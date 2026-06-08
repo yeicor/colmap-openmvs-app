@@ -41,7 +41,7 @@ tar = { version = "0.4" }
 once_cell = { version = "1.21.4" }
 
 # HTTP requests for downloading runtimes and demo data
-reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "json", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
 
 # File discovery
 which = { version = "5.0" }
