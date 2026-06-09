@@ -199,10 +199,25 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+          cache: "npm"
       - uses: actions/download-artifact@v8
         with:
           name: build-web-demo-ubuntu-24.04
           path: web-artifact
+
+      # ── Take phone-form-factor screenshots for the README ───────────
+      - name: Install Playwright
+        run: |
+          npm install --no-save --no-package-lock playwright
+          npx playwright install chromium
+      - name: Take screenshots
+        run: |
+          node .github/scripts/screenshots.mjs web-artifact web-artifact/screenshots /${{ github.event.repository.name }}
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web-artifact

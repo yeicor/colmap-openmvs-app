@@ -6,115 +6,35 @@ import { ArcballControls } from "three/examples/jsm/controls/ArcballControls.js"
 
 const STORAGE_KEY = "viewer3d.prefs";
 
-// ── URL fragment state helpers ─────────────────────────────────────────────
+// ── URL state helpers ──────────────────────────────────────────────────────
 //
-// Two URL layouts are supported depending on the Dioxus routing mode:
+// URL format: /viewer/:name/:file_encoded/:cfg
+//   :file_encoded  — URL-encoded output-file path
+//   :cfg           — base64 JSON blob: {cam:{position,target,up}, config:{…}}
 //
-//   Path-based routing (fullstack/desktop):
-//     /viewer/MyProject#file=...&cam=...&cfg=...
-//     The Dioxus router sees /viewer/MyProject; the fragment (#...) is
-//     invisible to the router so updates via replaceState never re-navigate.
-//
-//   Hash-based routing (static web without fullstack):
-//     /#/viewer/MyProject?file=...&cam=...&cfg=...
-//     Everything lives inside one hash fragment; the router parses the path
-//     before `?` and we only touch the query-string portion.
-
-/** Detect whether the app uses hash-based routing. */
-function isHashRouting() {
-  return /^#\//.test(window.location.hash);
-}
-
-/** Extract key=value pairs from the URL fragment regardless of layout. */
-function parseHashParams() {
-  const hash = window.location.hash || "";
-  const params = {};
-
-  // Determine where the key=value pairs live.
-  // - Hash routing: everything after `?` (path is before `?`)
-  // - Path routing: everything after `#` (no route path in the fragment)
-  const qIdx = hash.indexOf("?");
-  const search = qIdx >= 0 ? hash.slice(qIdx + 1) : hash.replace(/^#/, "");
-
-  for (const part of search.split("&")) {
-    const eq = part.indexOf("=");
-    if (eq < 0) continue;
-    const k = decodeURIComponent(part.slice(0, eq));
-    const v = decodeURIComponent(part.slice(eq + 1));
-    params[k] = v;
-  }
-  return params;
-}
+// Path-based:  /viewer/MyProject/colpak%2Ffile/eyJjYW0iO…9fQ==
+// Hash-based:  /#/viewer/MyProject/colpak%2Ffile/eyJjYW0iO…9fQ==
 
 /**
- * Update the fragment key=value pairs using replaceState (no history push).
- * The route path is preserved so the Dioxus router does not re-navigate.
+ * Update the URL with viewer state using replaceState (no history push).
+ *
+ * File paths use pipe separators (|) instead of / to avoid the router
+ * treating path components as separate segments.
  */
-function updateHashParams(updates) {
-  const hash = window.location.hash || "";
-  const qIdx = hash.indexOf("?");
-
-  // Split hash into path-portion and search-portion
-  let pathPart;
-  let search;
-  if (qIdx >= 0) {
-    // Hash routing: #/path?key=value  → pathPart = "#/path?", search = "key=value"
-    pathPart = hash.slice(0, qIdx + 1);
-    search = hash.slice(qIdx + 1);
-  } else if (hash.startsWith("#")) {
-    // Path routing: #key=value  → pathPart = "#", search = "key=value"
-    pathPart = "#";
-    search = hash.slice(1);
+function updateViewerUrl(projectName, filePath, cfgBlobB64) {
+  var pipePath = filePath.replace(/\//g, "|");
+  var encFile = encodeURIComponent(pipePath);
+  // cfgBlobB64 comes from btoa() which produces standard base64 (+ / =).
+  // Make it URL-safe for the route segment: + → -, / → _ while keeping
+  // padding so the Rust URL_SAFE decoder can parse it.
+  var safeCfg = cfgBlobB64 ? cfgBlobB64.replace(/\+/g, "-").replace(/\//g, "_") : "";
+  var url;
+  if (window.location.hash.startsWith("#/")) {
+    url = "#/viewer/" + encodeURIComponent(projectName) + "/" + encFile + "/" + safeCfg;
   } else {
-    pathPart = "";
-    search = "";
+    url = "/viewer/" + encodeURIComponent(projectName) + "/" + encFile + "/" + safeCfg;
   }
-
-  // Parse existing pairs (keep values as-encoded for round-trip safety)
-  const existing = {};
-  for (const part of search.split("&")) {
-    if (!part) continue;
-    const eq = part.indexOf("=");
-    if (eq < 0) continue;
-    existing[decodeURIComponent(part.slice(0, eq))] = part.slice(eq + 1);
-  }
-
-  // Apply updates; null/undefined removes the key
-  for (const [k, v] of Object.entries(updates)) {
-    if (v === null || v === undefined) {
-      delete existing[k];
-    } else {
-      existing[k] = encodeURIComponent(v);
-    }
-  }
-
-  const entries = Object.entries(existing);
-  const qs = entries.map(([k, v]) => `${encodeURIComponent(k)}=${v}`).join("&");
-
-  let newHash;
-  if (qIdx >= 0) {
-    // Hash routing: keep the path (including ?)
-    newHash = pathPart + qs;
-  } else {
-    // Path routing: just #key=value (or empty)
-    newHash = qs ? "#" + qs : "";
-  }
-
-  if (newHash !== hash) {
-    history.replaceState(null, "", newHash);
-  }
-}
-
-/// Return a single hash param (used by Rust via eval).
-window.__viewerReadHashParam = function (key) {
-  return parseHashParams()[key] || null;
-};
-
-function encodeViewerState(cam, cfg) {
-  const updates = {};
-  if (cam) updates.cam = btoa(JSON.stringify(cam));
-  if (cfg) updates.cfg = btoa(JSON.stringify(cfg));
-  return updates;
+  history.replaceState(null, "", url);
 }
 
 /** debounce helper */
@@ -125,8 +45,18 @@ function debounce(fn, ms) {
     timer = setTimeout(() => fn(...args), ms);
   };
 }
+/**
+ * Derive the default background colour from the app's data-theme attribute.
+ * Returns a dark colour when the data-theme is "dark" (or missing), and a
+ * light colour when the data-theme is "light".
+ */
+function getDefaultBackground() {
+  var theme = document.documentElement.getAttribute("data-theme");
+  return theme === "light" ? "#e8ecf0" : "#111318";
+}
+
 const DEFAULT_STATE = {
-  background: "#111318",
+  background: getDefaultBackground(),
   textures: true,
   wireframe: false,
   backfaces: false,
@@ -204,14 +134,14 @@ function injectViewerStyles() {
   box-shadow:0 10px 30px rgba(0,0,0,0.24);
 }
 .v3d-btn {
-  border:none;background:transparent;color:#f3f4f7;
+  border:none;background:rgba(255,255,255,0.07);color:#f3f4f7;
   display:flex;align-items:center;gap:8px;border-radius:10px;
   padding:9px 12px;cursor:pointer;font-size:13px;font-weight:500;
   transition:background 120ms,transform 120ms,opacity 120ms;
 }
-.v3d-btn:hover { background:rgba(255,255,255,0.09); }
+.v3d-btn:hover { background:rgba(255,255,255,0.16); }
 .v3d-btn:active { transform:scale(0.98); }
-.v3d-btn.active { background:rgba(78,132,255,0.22);color:#a8c4ff; }
+.v3d-btn.active { background:rgba(78,132,255,0.28);color:#a8c4ff; }
 .v3d-btn-icon { font-size:15px; }
 .v3d-panel {
   position:fixed;min-width:260px;max-width:340px;border-radius:16px;
@@ -378,7 +308,7 @@ export class Viewer3D {
     this.sections = { view: viewSec, render: renderSec, tools: toolsSec, info: infoSec };
 
     // ---- View ----
-    this._btnHome = this._addBtn(viewSec, "⌂", "Home", () => this.homeCamera(true));
+    this._btnHome = this._addBtn(viewSec, "🏠", "Home", () => this.homeCamera(true));
 
     // ---- Tools ----
     this._addBtn(toolsSec, "📏", "Measure", () => {
@@ -394,8 +324,8 @@ export class Viewer3D {
     this._btnPick = toolsSec.lastChild;
 
     // ---- Info ----
-    this._addBtn(infoSec, "ℹ", "Stats", (e) => this._togglePanel("stats", e.currentTarget));
-    this._addBtn(infoSec, "?", "Help", (e) => this._togglePanel("help", e.currentTarget));
+    this._addBtn(infoSec, "📊", "Stats", (e) => this._togglePanel("stats", e.currentTarget));
+    this._addBtn(infoSec, "❓", "Help", (e) => this._togglePanel("help", e.currentTarget));
   }
 
   _addBtn(section, icon, label, onClick) {
@@ -611,7 +541,7 @@ export class Viewer3D {
     this.sections.render.innerHTML = "";
 
     if (this.capabilities.mesh) {
-      const wireBtn = this._addBtn(this.sections.render, "◫", "Wireframe", () => {
+      const wireBtn = this._addBtn(this.sections.render, "🔲", "Wireframe", () => {
         this.state.wireframe = !this.state.wireframe;
         this.applyRenderMode();
         this._onConfigChange();
@@ -619,7 +549,7 @@ export class Viewer3D {
       });
       wireBtn.classList.toggle("active", this.state.wireframe);
 
-      const lightBtn = this._addBtn(this.sections.render, "☀", "Lighting", () => {
+      const lightBtn = this._addBtn(this.sections.render, "💡", "Lighting", () => {
         this.state.lighting = !this.state.lighting;
         this.applyRenderMode();
         this._onConfigChange();
@@ -627,7 +557,7 @@ export class Viewer3D {
       });
       lightBtn.classList.toggle("active", this.state.lighting);
 
-      const backBtn = this._addBtn(this.sections.render, "◐", "Backfaces", () => {
+      const backBtn = this._addBtn(this.sections.render, "🔁", "Backfaces", () => {
         this.state.backfaces = !this.state.backfaces;
         this.applyRenderMode();
         this._onConfigChange();
@@ -635,7 +565,7 @@ export class Viewer3D {
       });
       backBtn.classList.toggle("active", this.state.backfaces);
 
-      const loBtn = this._addBtn(this.sections.render, "↻", "Light Dir", this._createLightPanel());
+      const loBtn = this._addBtn(this.sections.render, "🔆", "Light Dir", this._createLightPanel());
       loBtn.setAttribute("data-lo-btn", "");
     }
 
@@ -650,7 +580,7 @@ export class Viewer3D {
     }
 
     if (this.capabilities.points) {
-      this._psBtn = this._addBtn(this.sections.render, "•", "Point Size", this._createPointsSlider());
+      this._psBtn = this._addBtn(this.sections.render, "🔵", "Point Size", this._createPointsSlider());
     }
   }
 
@@ -963,16 +893,15 @@ export class Viewer3D {
     if (state.far !== undefined) this.camera.far = state.far;
     this.camera.lookAt(tx, ty, tz);
     this.camera.updateProjectionMatrix();
-    // Sync the controls WITHOUT update() repositioning the camera.
-    // setCamera calls update() which recalculates camera position from
-    // the gizmo matrix, undoing our careful restoration.
-    // Disabling controls first makes update() a no-op while still
-    // allowing _computeArcballDimensions and _computeRotationInfo
-    // to set up the controls' internal state correctly.
-    this.controls.enabled = false;
+
+    // Sync controls via setCamera (the standard Three.js way for
+    // ArcballControls), but then explicitly re-assert target + lookAt
+    // so the pixel-precise saved target is preserved through saveState.
     this.controls.setCamera(this.camera);
-    this.controls.enabled = true;
+    this.controls.target.set(tx, ty, tz);
+    this.camera.lookAt(tx, ty, tz);
     this.controls.saveState();
+    // FIXME: Always looks at the target's center, even when the URL saved different target...
     return true;
   }
 
@@ -980,11 +909,10 @@ export class Viewer3D {
     if (!this._projectName || !this._filePath) return;
     const cam = this._getCameraState();
     const cfg = { ...this.state };
-    const updates = encodeViewerState(cam, cfg);
-    // Always include the file path so the URL remains shareable.
-    // Without this, only cam/cfg are written and file is lost on reload.
-    updates.file = this._filePath;
-    updateHashParams(updates);
+    // Combine into a single config blob: {cam: ..., config: ...}
+    const blob = { cam, config: cfg };
+    const b64 = btoa(JSON.stringify(blob));
+    updateViewerUrl(this._projectName, this._filePath, b64);
   }
 
   // ── Home camera ───────────────────────────────────────────────────────────

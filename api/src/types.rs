@@ -33,6 +33,17 @@ pub struct Settings {
     /// Defaults to projects_folder/settings.json if not specified.
     #[serde(default)]
     pub settings_file_path: Option<String>,
+
+    /// Force a specific color-scheme theme, overriding the system / server preference.
+    ///
+    /// * `None` / empty   — use the default (server-detected or CSS media query).
+    /// * `Some("light")`  — force light theme.
+    /// * `Some("dark")`   — force dark theme.
+    ///
+    /// Requires an app restart to take full effect on the server-side
+    /// (the frontend reads this at startup from `get_dark_mode`).
+    #[serde(default)]
+    pub theme_override: Option<String>,
 }
 
 impl Settings {

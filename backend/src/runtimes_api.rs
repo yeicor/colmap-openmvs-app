@@ -321,8 +321,16 @@ pub async fn cancel_task(task_id: String) -> Result<()> {
 
 /// Poll for new task events since `cursor`. Returns batched events.
 /// This is the universal replacement for the SSE-based subscribe_task_events.
-pub async fn poll_task_events(task_id: String, cursor: usize) -> Result<TaskEventBatch> {
-    match TASK_REGISTRY.poll_events(&task_id, cursor) {
+///
+/// `limit` controls the maximum number of events returned per poll.  Use
+/// `Some(500)` to paginate through large event logs gradually.  Pass `None`
+/// to get all remaining events in a single response.
+pub async fn poll_task_events(
+    task_id: String,
+    cursor: usize,
+    limit: Option<usize>,
+) -> Result<TaskEventBatch> {
+    match TASK_REGISTRY.poll_events(&task_id, cursor, limit) {
         Some(batch) => Ok(batch),
         None => Ok(TaskEventBatch {
             events: vec![],

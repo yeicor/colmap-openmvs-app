@@ -96,22 +96,42 @@ impl TaskRegistry {
         }
     }
 
+    /// Maximum number of events returned per poll when `max_events` is set.
+    pub const DEFAULT_POLL_LIMIT: usize = 500;
+
     /// Poll for new events since `cursor`. Returns `None` if task not found.
-    pub fn poll_events(&self, task_id: &str, cursor: usize) -> Option<TaskEventBatch> {
+    ///
+    /// If `max_events` is `Some(n)`, at most `n` events are returned, allowing
+    /// the client to paginate through large event logs without a single massive
+    /// response.  `is_terminal` is only set to `true` when we have reached the
+    /// *end* of the stored events *and* the last event is terminal.
+    pub fn poll_events(
+        &self,
+        task_id: &str,
+        cursor: usize,
+        max_events: Option<usize>,
+    ) -> Option<TaskEventBatch> {
         let entry = {
             let tasks = self.tasks.read().unwrap();
             tasks.get(task_id)?.clone()
         };
 
         let events = entry.events.lock().unwrap();
-        let start = cursor.min(events.len());
-        let new_events: Vec<TaskEvent> = events[start..].to_vec();
+        let total = events.len();
+        let start = cursor.min(total);
+        let end = match max_events {
+            Some(limit) => (start + limit).min(total),
+            None => total,
+        };
+        let new_events: Vec<TaskEvent> = events[start..end].to_vec();
         let new_cursor = cursor + new_events.len();
+        let reached_end = end >= total;
         drop(events);
 
-        let is_terminal = new_events
-            .iter()
-            .any(|e| matches!(e, TaskEvent::Completed | TaskEvent::Failed(_)));
+        let is_terminal = reached_end
+            && new_events
+                .iter()
+                .any(|e| matches!(e, TaskEvent::Completed | TaskEvent::Failed(_)));
 
         Some(TaskEventBatch {
             events: new_events,

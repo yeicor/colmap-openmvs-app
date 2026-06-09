@@ -11,7 +11,6 @@ use crate::server::{
     update_settings,
 };
 use crate::task_manager::{drive_task, start_task, TasksCtx};
-use crate::views::AppShell;
 use crate::{backend_url, Route};
 use chrono::{DateTime, Duration, Utc};
 use colmap_openmvs_api::{
@@ -119,7 +118,6 @@ pub fn SettingsPageLayout() -> Element {
     };
 
     rsx! {
-        AppShell {}
         div {
             id: "settings",
 
@@ -194,6 +192,8 @@ fn GeneralTab() -> Element {
     let mut success = use_signal(String::new);
     let mut has_changed = use_signal(|| false);
 
+    // Theme override — auto / light / dark.
+    let mut theme_override = use_signal(|| None::<String>);
     // Backend URL — configurable on all platforms.
     let current_backend_url = backend_url::BACKEND_URL.get().cloned().unwrap_or_default();
     let current_backend_url_for_memo = current_backend_url.clone();
@@ -212,6 +212,7 @@ fn GeneralTab() -> Element {
                     settings_file_path.set(s.settings_file_path.unwrap_or_default());
                     proot_images_dir.set(s.proot_images_dir);
                     custom_mounts.set(s.custom_mounts);
+                    theme_override.set(s.theme_override.clone());
                 }
                 Err(e) => error.set(format!("Failed to load settings: {}", e)),
             }
@@ -244,10 +245,26 @@ fn GeneralTab() -> Element {
                     settings.settings_file_path = settings_path;
                     settings.proot_images_dir = images_dir;
                     settings.custom_mounts.clone_from(&custom_mounts());
+                    let previous_theme = settings.theme_override.clone();
+                    settings.theme_override = theme_override().clone();
                     match update_settings(settings).await {
                         Ok(_) => {
                             success.set("Settings saved.".to_string());
                             has_changed.set(false);
+                            // Apply theme immediately for the current session,
+                            // while also showing a restart message for the
+                            // server-side detection.
+                            let new_theme = theme_override();
+                            if new_theme != previous_theme {
+                                let theme_val = match new_theme.as_deref() {
+                                    Some("light") => "light",
+                                    Some("dark") => "dark",
+                                    _ => "", // empty = remove attribute → CSS media query
+                                };
+                                _ = dioxus::document::eval(&format!(
+                                    "document.documentElement.setAttribute('data-theme', '{theme_val}');"
+                                ));
+                            }
                         }
                         Err(e) => error.set(format!("Failed to save: {}", e)),
                     }
@@ -264,6 +281,7 @@ fn GeneralTab() -> Element {
                 settings_file_path.set(s.settings_file_path.unwrap_or_default());
                 proot_images_dir.set(s.proot_images_dir);
                 custom_mounts.set(s.custom_mounts);
+                theme_override.set(s.theme_override.clone());
                 has_changed.set(false);
                 error.set(String::new());
             }
@@ -373,6 +391,63 @@ fn GeneralTab() -> Element {
                     div { class: "form-actions",
                         Button { variant: ButtonVariant::Primary, onclick: handle_save, "Save" }
                         Button { variant: ButtonVariant::Secondary, onclick: handle_cancel, "Cancel" }
+                    }
+                }
+
+                // ── Theme override ────────────────────────────────────────────
+                hr { class: "settings-divider" }
+                div { class: "form-group",
+                    label {
+                        title: "Override the color-scheme. 'Auto' lets the system or backend decide. \
+                                Requires a restart to take full effect.",
+                        "Theme"
+                    }
+                    div { class: "theme-selector",
+                        // Auto
+                        label { class: "theme-option",
+                            input {
+                                r#type: "radio",
+                                name: "theme_override",
+                                checked: theme_override().is_none(),
+                                oninput: move |_| {
+                                    theme_override.set(None);
+                                    has_changed.set(true);
+                                    error.set(String::new());
+                                    success.set(String::new());
+                                },
+                            }
+                            span { "System" }
+                        }
+                        // Light
+                        label { class: "theme-option",
+                            input {
+                                r#type: "radio",
+                                name: "theme_override",
+                                checked: theme_override() == Some("light".to_string()),
+                                oninput: move |_| {
+                                    theme_override.set(Some("light".to_string()));
+                                    has_changed.set(true);
+                                    error.set(String::new());
+                                    success.set(String::new());
+                                },
+                            }
+                            span { "Light" }
+                        }
+                        // Dark
+                        label { class: "theme-option",
+                            input {
+                                r#type: "radio",
+                                name: "theme_override",
+                                checked: theme_override() == Some("dark".to_string()),
+                                oninput: move |_| {
+                                    theme_override.set(Some("dark".to_string()));
+                                    has_changed.set(true);
+                                    error.set(String::new());
+                                    success.set(String::new());
+                                },
+                            }
+                            span { "Dark" }
+                        }
                     }
                 }
 

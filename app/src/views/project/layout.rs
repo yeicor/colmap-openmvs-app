@@ -3,7 +3,6 @@ use crate::components::{
     tabs::{TabList, TabTrigger, Tabs},
 };
 use crate::mycomponents::{BackButton, PageHeader, PageHeaderButton};
-use crate::views::AppShell;
 use crate::Route;
 use dioxus::prelude::*;
 use tracing::{debug, info};
@@ -102,7 +101,6 @@ pub fn ProjectPage() -> Element {
     };
 
     rsx! {
-        AppShell {}
         div {
             id: "project",
             PageHeader {

@@ -2,8 +2,8 @@
  * Full-page 3D viewer route.
  *
  * The viewer page takes over the entire viewport — no sidebar, no tabs.
- * The top bar is transparent with a blur effect, embedding the 3D viewer
- * toolbar buttons inline.
+ * The top bar is fully transparent (only blur + text-shadow) so the 3D
+ * render shows through.  Model details live in an "i" info overlay.
  */
 
 /* ============================================================================
@@ -13,63 +13,184 @@
 .viewer-page {
     position: fixed;
     inset: 0;
-    display: flex;
-    flex-direction: column;
     background: #111318;
     color: #eef2ff;
     z-index: 100;
     overflow: hidden;
 }
 
+html[data-theme="light"] .viewer-page {
+    background: #e8ecf0;
+    color: #1a1a2e;
+}
+
 /* ============================================================================
-   Top bar — transparent with backdrop blur
+   Top bar — fully transparent overlay with minimal blur + text-shadow
    ============================================================================ */
 
 .viewer-topbar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
     display: flex;
     align-items: center;
     gap: 0.5rem;
     padding: 0.4rem 0.75rem;
-    background: rgba(18, 20, 26, 0.35);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    flex-shrink: 0;
+    /* Fully transparent — the 3D canvas shows through */
+    background: transparent;
+    /* Minimal blur to slightly soften whatever is behind */
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    border-bottom: none;
     z-index: 10;
     -webkit-app-region: drag;
+    pointer-events: auto;
 }
 
-.viewer-back-btn {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+/* ── Shared button style ──────────────────────────────────────────────── */
+
+.viewer-back-btn,
+.viewer-info-btn {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     color: #eef2ff;
-    padding: 0.3rem 0.65rem;
-    border-radius: 0.35rem;
     cursor: pointer;
-    font-size: 0.78rem;
     font-weight: 500;
-    transition: background 0.12s ease;
-    flex-shrink: 0;
+    transition:
+        background 0.12s ease,
+        border-color 0.12s ease;
+    /* Text shadow keeps text readable over any canvas background */
+    text-shadow:
+        0 1px 6px rgba(0, 0, 0, 0.65),
+        0 1px 2px rgba(0, 0, 0, 0.4);
     -webkit-app-region: no-drag;
 }
 
-.viewer-back-btn:hover {
-    background: rgba(255, 255, 255, 0.15);
+.viewer-back-btn:hover,
+.viewer-info-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.15);
 }
 
-.viewer-back-btn:active {
-    transform: scale(0.98);
+.viewer-back-btn:active,
+.viewer-info-btn:active {
+    transform: scale(0.96);
 }
 
-.viewer-file-label {
-    font-size: 0.8rem;
+/* ── Back button ──────────────────────────────────────────────────────── */
+
+.viewer-back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.3rem 0.65rem;
+    border-radius: 0.35rem;
+    font-size: 0.78rem;
+    flex-shrink: 0;
+}
+
+.viewer-back-arrow {
+    font-size: 0.9rem;
+    line-height: 1;
+}
+
+/* ── Info button ("i") ────────────────────────────────────────────────── */
+
+.viewer-info-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+    padding: 0;
+    line-height: 1;
+}
+
+/* ── Info overlay ─────────────────────────────────────────────────────── */
+
+.viewer-info-overlay {
+    position: absolute;
+    top: calc(0.4rem + 28px + 0.4rem);
+    right: 0.75rem;
+    z-index: 20;
+    /* info-overlay is inside .viewer-page which is now positioned, so
+       ensure it appears above the topbar if needed */
+    background: rgba(18, 20, 26, 0.2);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    min-width: 200px;
+    max-width: 340px;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+    animation: viewer-info-fade 0.15s ease;
+}
+
+@keyframes viewer-info-fade {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.viewer-info-close {
+    position: absolute;
+    top: 0.3rem;
+    right: 0.4rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.5);
+    line-height: 1;
+    padding: 0.1rem 0.25rem;
+    border-radius: 0.25rem;
+    transition: color 0.12s;
+}
+
+.viewer-info-close:hover {
+    color: #eef2ff;
+}
+
+.viewer-info-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding: 0.3rem 0;
+}
+
+.viewer-info-row + .viewer-info-row {
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    margin-top: 0.1rem;
+    padding-top: 0.4rem;
+}
+
+.viewer-info-label {
+    font-size: 0.68rem;
     font-weight: 600;
-    color: rgba(255, 255, 255, 0.7);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex-shrink: 1;
-    min-width: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.viewer-info-value {
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.85);
+    word-break: break-all;
+}
+
+.viewer-info-path {
+    font-family: "Monaco", "Menlo", "Courier New", monospace;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
 }
 
 /* ============================================================================
@@ -129,6 +250,8 @@
     line-height: 1.3;
     display: inline-flex;
     align-items: center;
+    /* Keep toolbar text readable over canvas */
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
 }
 
 #viewer-toolbar .v3d-btn:hover {
@@ -151,11 +274,20 @@
 }
 
 @media (max-width: 600px) {
+    .viewer-back-label,
     #viewer-toolbar .v3d-btn-label {
         display: none;
     }
     #viewer-toolbar .v3d-btn {
         padding: 0.25rem 0.35rem;
+    }
+    .viewer-back-btn {
+        padding: 0.3rem 0.45rem;
+    }
+    .viewer-info-overlay {
+        right: 0.4rem;
+        left: 0.4rem;
+        max-width: none;
     }
 }
 
@@ -175,6 +307,7 @@
     z-index: 5;
     font-size: 0.92rem;
     color: rgba(255, 255, 255, 0.6);
+    /* Stack behind the topbar (z-index 10) */
 }
 
 .viewer-spinner {
@@ -261,14 +394,113 @@
 }
 
 /* ============================================================================
+   Light-theme overrides
+   ============================================================================ */
+
+html[data-theme="light"] .viewer-loading {
+    background: #e8ecf0;
+    color: rgba(0, 0, 0, 0.55);
+}
+
+html[data-theme="light"] .viewer-spinner {
+    border-color: rgba(0, 0, 0, 0.1);
+    border-top-color: #7c3aed;
+}
+
+html[data-theme="light"] .viewer-error,
+html[data-theme="light"] .viewer-empty {
+    background: #e8ecf0;
+}
+
+html[data-theme="light"] .viewer-error p,
+html[data-theme="light"] .viewer-empty p {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+html[data-theme="light"] .viewer-retry-btn {
+    background: rgba(0, 0, 0, 0.06);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    color: #1a1a2e;
+}
+
+html[data-theme="light"] .viewer-retry-btn:hover {
+    background: rgba(0, 0, 0, 0.12);
+}
+
+html[data-theme="light"] .viewer-back-btn,
+html[data-theme="light"] .viewer-info-btn {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.1);
+    color: #1a1a2e;
+    text-shadow: none;
+}
+
+html[data-theme="light"] .viewer-back-btn:hover,
+html[data-theme="light"] .viewer-info-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
+    border-color: rgba(0, 0, 0, 0.15);
+}
+
+html[data-theme="light"] #viewer-toolbar .v3d-btn {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.1);
+    color: #333;
+    text-shadow: none;
+}
+
+html[data-theme="light"] #viewer-toolbar .v3d-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
+    color: #111;
+}
+
+html[data-theme="light"] #viewer-toolbar .v3d-btn.active {
+    background: rgba(120, 80, 240, 0.12);
+    color: #5b21b6;
+    border-color: rgba(120, 80, 240, 0.25);
+}
+
+html[data-theme="light"] .viewer-info-overlay {
+    background: rgba(232, 236, 240, 0.9);
+    border-color: rgba(0, 0, 0, 0.1);
+    text-shadow: none;
+}
+
+html[data-theme="light"] .viewer-info-label {
+    color: rgba(0, 0, 0, 0.4);
+}
+
+html[data-theme="light"] .viewer-info-value {
+    color: rgba(0, 0, 0, 0.8);
+}
+
+html[data-theme="light"] .viewer-info-path {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+html[data-theme="light"] .viewer-info-close {
+    color: rgba(0, 0, 0, 0.4);
+}
+
+html[data-theme="light"] .viewer-info-close:hover {
+    color: rgba(0, 0, 0, 0.8);
+}
+
+html[data-theme="light"] .viewer-info-row + .viewer-info-row {
+    border-top-color: rgba(0, 0, 0, 0.06);
+}
+
+html[data-theme="light"] .viewer-empty code {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+/* ============================================================================
    3D canvas container — fills remaining space
    ============================================================================ */
 
 .viewer-canvas-container {
-    flex: 1;
-    position: relative;
+    position: absolute;
+    inset: 0;
     overflow: hidden;
-    min-height: 0;
 }
 
 .viewer-canvas-container canvas {

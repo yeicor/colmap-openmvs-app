@@ -157,6 +157,8 @@ fn apply_file_override(base: &mut Settings, file: Settings) {
     if file.settings_file_path.is_some() {
         base.settings_file_path = file.settings_file_path;
     }
+    // Theme override: always use the file value (None = no override).
+    base.theme_override = file.theme_override;
 }
 
 /// Overlay CLI/env values on top of the current settings (highest priority).
@@ -490,6 +492,7 @@ fn default_settings() -> Settings {
         default_image_tag,
         custom_mounts: Vec::new(),
         settings_file_path: None,
+        theme_override: None,
     }
 }
 

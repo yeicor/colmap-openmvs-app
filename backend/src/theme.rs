@@ -11,9 +11,35 @@
 //! reliably, so we detect the system UI mode via JNI.  Other platforms return
 //! `None` so the browser's own media-query handling is used.
 
+/// Check the global `Settings` for a user-configured theme override first.
+///
+/// * If `settings.theme_override` is `"light"` return `Some(false)`.
+/// * If `settings.theme_override` is `"dark"`  return `Some(true)`.
+/// * Otherwise fall through to the platform-specific detection (Android JNI)
+///   or `None` so the browser's CSS media query decides.
+async fn check_settings_override() -> Option<bool> {
+    match crate::settings::get_settings().await {
+        Ok(s) => match s.theme_override.as_deref() {
+            Some("light") => Some(false),
+            Some("dark") => Some(true),
+            _ => None,
+        },
+        Err(_) => None,
+    }
+}
+
 /// Returns the system dark-mode preference, if it can be determined
 /// server-side.  See module docs for the `None` / `Some` semantics.
+///
+/// A `theme_override` stored in the application settings takes precedence
+/// over platform detection.
 pub async fn get_dark_mode() -> dioxus::Result<Option<bool>> {
+    // 1. Check the user-configured override from settings.
+    if let Some(forced) = check_settings_override().await {
+        return Ok(Some(forced));
+    }
+
+    // 2. Platform-specific detection.
     #[cfg(target_os = "android")]
     {
         return Ok(Some(detect_android_dark_mode()?));

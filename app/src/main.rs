@@ -41,24 +41,32 @@ pub enum Route {
     #[layout(ProjectsSidebar)]
         #[route("/")]
         Projects {},
-        #[route("/settings")]
-        SettingsGeneral {},
-        #[route("/settings/runtime")]
-        SettingsRuntime {},
-        #[route("/project/:name")]
-        ProjectOverview { name: String },
-        #[route("/project/:name/images")]
-        ProjectImages { name: String },
-        #[route("/project/:name/config")]
-        ProjectConfig { name: String },
-        #[route("/project/:name/logs")]
-        ProjectLogs { name: String },
-        #[route("/project/:name/outputs")]
-        ProjectOutputs { name: String },
+
+        #[layout(SettingsPageLayout)]
+            #[route("/settings")]
+            SettingsGeneral {},
+            #[route("/settings/runtime")]
+            SettingsRuntime {},
+        #[end_layout]
+
+        #[layout(ProjectPage)]
+            #[route("/project/:name")]
+            ProjectOverview { name: String },
+            #[route("/project/:name/images")]
+            ProjectImages { name: String },
+            #[route("/project/:name/config")]
+            ProjectConfig { name: String },
+            #[route("/project/:name/logs")]
+            ProjectLogs { name: String },
+            #[route("/project/:name/outputs")]
+            ProjectOutputs { name: String },
+        #[end_layout]
+    #[end_layout]
+
     #[route("/startup")]
     StartupTasks {},
-    #[route("/viewer/:name")]
-    Viewer { name: String },
+    #[route("/viewer/:name/:file_encoded/:cfg")]
+    Viewer { name: String, file_encoded: String, cfg: String },
 }
 
 #[component]
@@ -94,7 +102,7 @@ pub fn App() -> Element {
                     task_id.set(Some(id.clone()));
                     let mut cursor = 0usize;
                     loop {
-                        match crate::server::poll_task_events(id.clone(), cursor).await {
+                        match crate::server::poll_task_events(id.clone(), cursor, None).await {
                             Ok(batch) => {
                                 if !batch.task_found {
                                     is_completed.set(true);
@@ -150,20 +158,19 @@ pub fn App() -> Element {
     // queries correctly, so the server returns an explicit override (`Some`).
     // On other platforms the server returns `None` and we leave the `data-theme`
     // attribute untouched so the CSS media query continues to work normally.
+    info!("App component: setting up color-scheme resource...");
+    let dark_mode =
+        use_resource(move || async move { crate::server::get_dark_mode().await.ok().flatten() });
+    // Apply the resolved theme. This effect runs on both server (during SSR,
+    // after `use_resource` is awaited) and client (hydration / WASM).
     info!("App component: setting up color-scheme effect...");
     use_effect(move || {
-        spawn(async move {
-            match crate::server::get_dark_mode().await {
-                Ok(Some(is_dark)) => {
-                    let theme = if is_dark { "dark" } else { "light" };
-                    let _ = dioxus::document::eval(&format!(
-                        "document.documentElement.setAttribute('data-theme', '{theme}');"
-                    ));
-                }
-                Ok(None) => {} // Let CSS media query handle it
-                Err(e) => tracing::warn!(error = %e, "Failed to fetch dark-mode preference"),
-            }
-        });
+        if let Some(Some(is_dark)) = dark_mode() {
+            let theme = if is_dark { "dark" } else { "light" };
+            let _ = dioxus::document::eval(&format!(
+                "document.documentElement.setAttribute('data-theme', '{theme}');"
+            ));
+        }
     });
 
     info!("App component: rendering UI...");

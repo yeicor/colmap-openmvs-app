@@ -1022,16 +1022,17 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                 let rp = rp_view.clone();
                                                                 debug!(file = %rp, "Navigating to viewer route");
 
-                                                                // Store file path in context — viewer reads it synchronously
-                                                                // on mount, bypassing the unreliable JS↔Rust eval bridge.
-                                                                let mut pending =
-                                                                    use_context::<Signal<Option<crate::ViewerPendingParams>>>();
-                                                                pending.set(Some(crate::ViewerPendingParams {
-                                                                    file: rp.clone(),
-                                                                }));
-
-                                                                // Dioxus navigation (works for path and hash routing)
-                                                                navigator().push(crate::Route::Viewer { name: pn });
+                                                                // Navigate to the viewer.  The file path is base64-url-safe
+                                                                // encoded so it does NOT contain `/` or `%` which would be
+                                                                // decoded by the Dioxus router before route matching and
+                                                                // break the path segments.
+                                                                let encoded = base64::engine::general_purpose::URL_SAFE
+                                                                    .encode(rp.as_bytes());
+                                                                navigator().push(crate::Route::Viewer {
+                                                                    name: pn,
+                                                                    file_encoded: encoded,
+                                                                    cfg: "-".to_string(),
+                                                                });
                                                             },
                                                             Icon { icon: BsEye }
                                                             span { class: "btn-label", " View 3D" }

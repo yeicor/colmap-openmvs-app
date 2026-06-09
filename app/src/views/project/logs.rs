@@ -227,6 +227,17 @@ async fn find_running_task(project_name: &str, dry_run: bool) -> Option<String> 
 // Pipeline stream driver
 // ---------------------------------------------------------------------------
 
+/// Batched update result from processing one poll batch.
+/// Holds all state locally so we can flush signals exactly once
+/// instead of after every individual event.
+struct BatchUpdate {
+    stages: Vec<StageData>,
+    pipeline_status: PipelineStatus,
+    expanded_stage: Option<u32>,
+    pipeline_progress: Option<f32>,
+    active_task_id: String,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_pipeline_stream(
     task_id: String,
@@ -239,12 +250,16 @@ fn spawn_pipeline_stream(
     mut error_msg: Signal<String>,
     is_dry_run: bool,
     mut tasks_ctx: TasksCtx,
+    mut recovering: Signal<bool>,
 ) {
     spawn(async move {
         let mut cursor = 0usize;
+        let mut is_first_batch = true;
 
         loop {
-            match poll_task_events(task_id.clone(), cursor).await {
+            // Use pagination so the initial recovery doesn't download
+            // & process tens of thousands of events in one response.
+            match poll_task_events(task_id.clone(), cursor, Some(500)).await {
                 Ok(batch) => {
                     if !batch.task_found {
                         // Task evicted from registry; treat as completion.
@@ -257,10 +272,23 @@ fn spawn_pipeline_stream(
                     let is_terminal = batch.is_terminal;
                     let mut local_pos = cursor;
 
+                    // ── Phase 1: process all events into local state ────
+                    // We snapshot the current signal values, process events
+                    // against the snapshots, then flush once at the end.
+                    // This avoids O(n) signal writes & re-renders per event.
+                    let mut update = BatchUpdate {
+                        stages: stages.peek().clone(),
+                        pipeline_status: pipeline_status.peek().clone(),
+                        expanded_stage: expanded_stage.peek().clone(),
+                        pipeline_progress: pipeline_progress_ctx.peek().clone(),
+                        active_task_id: active_task_id.peek().clone(),
+                    };
+                    let mut should_terminate = false;
+
                     for event in batch.events {
                         local_pos += 1;
 
-                        // Update global TasksCtx.
+                        // Update global TasksCtx (batched in one write).
                         {
                             let mut state = tasks_ctx.write();
                             if let Some(entry) = state.tasks.iter_mut().find(|t| t.id == task_id) {
@@ -271,10 +299,9 @@ fn spawn_pipeline_stream(
                         match event {
                             TaskEvent::PipelineRemainingGroups(names) => {
                                 let total = names.len() as u32;
-                                let mut s = stages.write();
-                                if s.is_empty() {
+                                if update.stages.is_empty() {
                                     for (i, name) in names.into_iter().enumerate() {
-                                        s.push(StageData {
+                                        update.stages.push(StageData {
                                             index: i as u32,
                                             name,
                                             total_stages: total,
@@ -296,39 +323,53 @@ fn spawn_pipeline_stream(
                                 stage_status,
                                 pipeline_stage_num,
                             } => {
-                                let mut s = stages.write();
-                                while s.len() <= stage_index as usize {
-                                    let idx = s.len() as u32;
-                                    s.push(StageData::new(idx, String::new(), total_stages));
+                                while update.stages.len() <= stage_index as usize {
+                                    let idx = update.stages.len() as u32;
+                                    update.stages.push(StageData::new(
+                                        idx,
+                                        String::new(),
+                                        total_stages,
+                                    ));
                                 }
                                 let cached = matches!(stage_status, PipelineStageStatus::Cached);
                                 let skipped = matches!(stage_status, PipelineStageStatus::Skipped);
                                 let actually_running = !cached && !skipped && !is_dry_run;
-                                let stage = &mut s[stage_index as usize];
-                                stage.name = stage_name.clone();
-                                if total_stages > 0 {
-                                    stage.total_stages = total_stages;
+                                {
+                                    let stage = &mut update.stages[stage_index as usize];
+                                    stage.name = stage_name.clone();
+                                    if total_stages > 0 {
+                                        stage.total_stages = total_stages;
+                                    }
+                                    stage.cached = cached;
+                                    stage.skipped = skipped;
+                                    stage.completed = cached || skipped;
+                                    stage.is_running = actually_running;
+                                    stage.pipeline_stage_num = pipeline_stage_num;
                                 }
-                                stage.cached = cached;
-                                stage.skipped = skipped;
-                                stage.completed = cached || skipped;
-                                stage.is_running = actually_running;
-                                stage.pipeline_stage_num = pipeline_stage_num;
-                                if actually_running && pipeline_stage_num.is_some() {
-                                    expanded_stage.set(Some(stage_index));
+                                // Only auto-expand stages during live updates
+                                // (after initial recovery), not during recovery.
+                                if actually_running
+                                    && pipeline_stage_num.is_some()
+                                    && !is_first_batch
+                                {
+                                    update.expanded_stage = Some(stage_index);
                                 }
                                 if cached || skipped {
-                                    let total_p =
-                                        s.iter().filter(|x| x.pipeline_stage_num.is_some()).count()
-                                            as f32;
-                                    let done_p = s
+                                    let total_p = update
+                                        .stages
+                                        .iter()
+                                        .filter(|x| x.pipeline_stage_num.is_some())
+                                        .count()
+                                        as f32;
+                                    let done_p = update
+                                        .stages
                                         .iter()
                                         .filter(|x| x.pipeline_stage_num.is_some() && x.completed)
                                         .count()
                                         as f32;
                                     if total_p > 0.0 {
-                                        pipeline_progress_ctx
-                                            .set(Some((done_p / total_p).clamp(0.0, 1.0)));
+                                        update.pipeline_progress =
+                                            Some((done_p / total_p).clamp(0.0, 1.0));
                                     }
                                 }
                             }
@@ -337,43 +378,47 @@ fn spawn_pipeline_stream(
                                 stage_name,
                                 line,
                             } => {
-                                let mut s = stages.write();
-                                while s.len() <= stage_index as usize {
-                                    let idx = s.len() as u32;
-                                    let total = s.last().map(|x| x.total_stages).unwrap_or(1);
-                                    s.push(StageData::new(idx, stage_name.clone(), total));
+                                while update.stages.len() <= stage_index as usize {
+                                    let idx = update.stages.len() as u32;
+                                    let total =
+                                        update.stages.last().map(|x| x.total_stages).unwrap_or(1);
+                                    update.stages.push(StageData::new(
+                                        idx,
+                                        stage_name.clone(),
+                                        total,
+                                    ));
                                 }
-                                s[stage_index as usize].add_log_line(line);
-                                drop(s);
+                                update.stages[stage_index as usize].add_log_line(line);
                                 // Auto-scroll is handled by a persistent watcher effect below.
                             }
                             TaskEvent::PipelineStageProgress {
                                 stage_index,
                                 progress,
                             } => {
-                                let mut s = stages.write();
-                                if let Some(stage) = s.get_mut(stage_index as usize) {
+                                if let Some(stage) = update.stages.get_mut(stage_index as usize) {
                                     if stage.pipeline_stage_num.is_some() {
                                         stage.progress = Some(progress);
                                     }
                                 }
-                                let total_p =
-                                    s.iter().filter(|x| x.pipeline_stage_num.is_some()).count()
-                                        as f32;
+                                let total_p = update
+                                    .stages
+                                    .iter()
+                                    .filter(|x| x.pipeline_stage_num.is_some())
+                                    .count() as f32;
                                 if total_p > 0.0 {
-                                    let done_p = s
+                                    let done_p = update
+                                        .stages
                                         .iter()
                                         .filter(|x| x.pipeline_stage_num.is_some() && x.completed)
                                         .count()
                                         as f32;
                                     let sub = progress / total_p;
-                                    pipeline_progress_ctx
-                                        .set(Some((done_p / total_p + sub).clamp(0.0, 1.0)));
+                                    update.pipeline_progress =
+                                        Some((done_p / total_p + sub).clamp(0.0, 1.0));
                                 }
                             }
                             TaskEvent::PipelineStageCompleted { stage_index, .. } => {
-                                let mut s = stages.write();
-                                if let Some(stage) = s.get_mut(stage_index as usize) {
+                                if let Some(stage) = update.stages.get_mut(stage_index as usize) {
                                     if !is_dry_run || stage.cached || stage.skipped {
                                         stage.completed = true;
                                         if stage.pipeline_stage_num.is_some() {
@@ -382,46 +427,65 @@ fn spawn_pipeline_stream(
                                     }
                                     stage.is_running = false;
                                 }
-                                let total_p =
-                                    s.iter().filter(|x| x.pipeline_stage_num.is_some()).count()
-                                        as f32;
+                                let total_p = update
+                                    .stages
+                                    .iter()
+                                    .filter(|x| x.pipeline_stage_num.is_some())
+                                    .count() as f32;
                                 if total_p > 0.0 {
-                                    let done_p = s
+                                    let done_p = update
+                                        .stages
                                         .iter()
                                         .filter(|x| x.pipeline_stage_num.is_some() && x.completed)
                                         .count()
                                         as f32;
-                                    pipeline_progress_ctx
-                                        .set(Some((done_p / total_p).clamp(0.0, 1.0)));
+                                    update.pipeline_progress =
+                                        Some((done_p / total_p).clamp(0.0, 1.0));
                                 }
                             }
                             TaskEvent::Completed => {
                                 if is_dry_run {
-                                    pipeline_status.set(PipelineStatus::Idle);
+                                    update.pipeline_status = PipelineStatus::Idle;
                                 } else {
-                                    pipeline_status.set(PipelineStatus::Completed);
-                                    pipeline_progress_ctx.set(Some(1.0));
+                                    update.pipeline_status = PipelineStatus::Completed;
+                                    update.pipeline_progress = Some(1.0);
                                 }
-                                active_task_id.set(String::new());
-                                break;
+                                update.active_task_id = String::new();
+                                should_terminate = true;
                             }
                             TaskEvent::Failed(msg) => {
                                 if is_dry_run {
-                                    pipeline_status.set(PipelineStatus::Idle);
+                                    update.pipeline_status = PipelineStatus::Idle;
                                 } else {
-                                    pipeline_status.set(PipelineStatus::Failed(msg));
+                                    update.pipeline_status = PipelineStatus::Failed(msg);
                                 }
-                                active_task_id.set(String::new());
-                                pipeline_progress_ctx.set(None);
-                                break;
+                                update.active_task_id = String::new();
+                                update.pipeline_progress = None;
+                                should_terminate = true;
                             }
                             _ => {}
                         }
                     }
 
+                    // ── Phase 2: flush all signals exactly once ──────────
+                    stages.set(update.stages);
+                    pipeline_status.set(update.pipeline_status);
+                    expanded_stage.set(update.expanded_stage);
+                    pipeline_progress_ctx.set(update.pipeline_progress);
+                    // Always flush active_task_id so Completed/Failed can
+                    // clear it.  Dioxus's PartialEq check skips unnecessary
+                    // re-renders when the value hasn't changed.
+                    active_task_id.set(update.active_task_id);
+
+                    // ── Clear recovery indicator after first batch ───────
+                    if is_first_batch {
+                        is_first_batch = false;
+                        recovering.set(false);
+                    }
+
                     cursor = new_cursor;
 
-                    if is_terminal {
+                    if should_terminate || is_terminal {
                         break;
                     }
                 }
@@ -449,6 +513,10 @@ pub fn LogsTab(project_name: String) -> Element {
     let mut expanded_stage = use_signal(|| Option::<u32>::None);
     let mut auto_scroll = use_signal(|| true);
     let mut is_current_dry_run = use_signal(|| false);
+    // `true` while the tab is reconnecting to a running pipeline and
+    // replaying its event log.  UI shows a spinner + message instead
+    // of an empty placeholder during this phase.
+    let mut recovering = use_signal(|| false);
 
     let mut pipeline_progress_ctx = use_context::<PipelineProgressCtx>();
     let mut pipeline_is_running = use_context::<PipelineIsRunningCtx>();
@@ -553,6 +621,7 @@ pub fn LogsTab(project_name: String) -> Element {
                     format!("Pipeline: {}", project_name),
                     TaskKind::RunPipeline,
                 );
+                recovering.set(true);
                 spawn_pipeline_stream(
                     task_id,
                     stages,
@@ -564,6 +633,7 @@ pub fn LogsTab(project_name: String) -> Element {
                     error_msg,
                     false,
                     tasks_ctx,
+                    recovering,
                 );
                 return;
             }
@@ -578,6 +648,7 @@ pub fn LogsTab(project_name: String) -> Element {
                     format!("Dry-run: {}", project_name),
                     TaskKind::DryRunPipeline,
                 );
+                recovering.set(true);
                 spawn_pipeline_stream(
                     task_id,
                     stages,
@@ -589,6 +660,7 @@ pub fn LogsTab(project_name: String) -> Element {
                     error_msg,
                     true,
                     tasks_ctx,
+                    recovering,
                 );
                 return;
             }
@@ -604,6 +676,7 @@ pub fn LogsTab(project_name: String) -> Element {
                         format!("Dry-run: {}", project_name),
                         TaskKind::DryRunPipeline,
                     );
+                    recovering.set(true);
                     spawn_pipeline_stream(
                         task_id,
                         stages,
@@ -615,6 +688,7 @@ pub fn LogsTab(project_name: String) -> Element {
                         error_msg,
                         true,
                         tasks_ctx,
+                        recovering,
                     );
                 }
                 Err(_) => {
@@ -679,6 +753,7 @@ pub fn LogsTab(project_name: String) -> Element {
                             error_msg,
                             false,
                             tasks_ctx,
+                            recovering,
                         );
                     }
                     Err(e) => {
@@ -702,6 +777,7 @@ pub fn LogsTab(project_name: String) -> Element {
     // ── Snapshot for render ───────────────────────────────────────────────
     let stages_snapshot = stages();
     let is_running = matches!(pipeline_status(), PipelineStatus::Running);
+    let is_recovering = recovering();
 
     rsx! {
         div {
@@ -758,8 +834,14 @@ pub fn LogsTab(project_name: String) -> Element {
                 }
             }
 
-            // ── Stage groups or placeholder ───────────────────────────────
-            if stages_snapshot.is_empty() {
+            // ── Recovery / placeholder / stages ────────────────────────────
+            if is_recovering {
+                div {
+                    class: "logs-recovering",
+                    div { class: "logs-recovering-spinner", "⟳" }
+                    span { "Reconnecting to pipeline…" }
+                }
+            } else if stages_snapshot.is_empty() {
                 div {
                     class: "logs-placeholder",
                     if is_running {

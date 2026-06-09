@@ -204,12 +204,13 @@ pub async fn get_task_info(task_id: String) -> Result<Option<TaskInfo>> {
     backend::get_task_info(task_id).await
 }
 
-#[cfg_attr(not(feature = "demo"), get("/api/tasks/{task_id}/poll?cursor"))]
+#[cfg_attr(not(feature = "demo"), get("/api/tasks/{task_id}/poll?cursor&limit"))]
 pub async fn poll_task_events(
     task_id: String,
     cursor: usize,
+    limit: Option<usize>,
 ) -> Result<colmap_openmvs_api::TaskEventBatch> {
-    backend::poll_task_events(task_id, cursor).await
+    backend::poll_task_events(task_id, cursor, limit).await
 }
 
 #[cfg_attr(not(feature = "demo"), delete("/api/tasks/{task_id}"))]

@@ -52,6 +52,7 @@ async fn test_generate_demo_data() {
         proot_images_dir: proot_images_dir.to_string_lossy().into_owned(),
         default_image_tag: Some("proot:mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest".to_string()),
         custom_mounts: vec![],
+        theme_override: None,
         settings_file_path: Some(
             temp_workspace
                 .path()
@@ -267,7 +268,7 @@ async fn poll_task_until_done(task_id: &str) -> Vec<TaskEvent> {
     let mut cursor = 0;
     let mut collected = Vec::new();
     loop {
-        if let Some(batch) = TASK_REGISTRY.poll_events(task_id, cursor) {
+        if let Some(batch) = TASK_REGISTRY.poll_events(task_id, cursor, None) {
             for e in &batch.events {
                 collected.push(e.clone());
             }

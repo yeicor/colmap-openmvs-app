@@ -640,6 +640,49 @@
 }
 
 /* =========================================================================
+   Theme selector
+   ========================================================================= */
+
+#settings .theme-selector {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+#settings .theme-option {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.85rem;
+    background: var(--primary-color-5);
+    border: 2px solid var(--primary-color-6);
+    border-radius: 0.5rem;
+    cursor: pointer;
+    transition:
+        border-color 0.15s,
+        background 0.15s;
+    font-size: 0.9rem;
+    color: var(--secondary-color);
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#settings .theme-option:hover {
+    border-color: var(--focused-border-color);
+    background: var(--primary-color-4);
+}
+
+#settings .theme-option:has(input:checked) {
+    border-color: var(--focused-border-color);
+    background: var(--primary-color-4);
+    box-shadow: 0 0 0 3px var(--primary-color-7);
+}
+
+#settings .theme-option input[type="radio"] {
+    accent-color: var(--focused-border-color);
+}
+
+/* =========================================================================
    Backend URL section responsiveness
    ========================================================================= */
 

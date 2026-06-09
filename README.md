@@ -19,3 +19,33 @@
 * **🔒 Privacy-first**: All processing happens locally. Your photos and models never leave your device. The **[web demo](https://yeicor.github.io/colmap-openmvs-app/)** uses pre-reconstructed data and requires no uploads.
 * **🆓 Open source**: Released under the MIT License. Contributions are welcome.
 * **📄 Precompiled binaries for all platforms**: Just download the [latest release](https://github.com/yeicor/colmap-openmvs-app/releases/latest) or the [nightly builds](https://github.com/yeicor/colmap-openmvs-app/actions/workflows/ci.yml).
+
+
+## Screenshots
+
+Project management:
+
+<p align="center">
+  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/projects-page.png" width="200" alt="Projects page" />
+  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-images.png" width="200" alt="Project images" />
+  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-logs.png" width="200" alt="Real-time logs" />
+  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-outputs.png" width="200" alt="Project outputs" />
+</p>
+
+3D viewer:
+
+<p align="center">
+  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-pointcloud.png" width="200" alt="Point cloud" />
+  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-wireframe.png" width="200" alt="Textured wireframe" />
+  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-mesh.png" width="200" alt="Textured mesh" />
+</p>
+
+Pipeline configuration and settings:
+
+<p align="center">
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-config.png" width="200" alt="Pipeline config" />
+  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-general.png" width="200" alt="Settings" />
+  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-runtime.png" width="200" alt="Runtime settings" />
+</p>
+
+Screenshots are automatically captured from the latest [web demo](https://yeicor.github.io/colmap-openmvs-app/), which is rebuilt on every push to the `main` branch.

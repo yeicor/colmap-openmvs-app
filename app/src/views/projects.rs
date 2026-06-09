@@ -33,9 +33,10 @@ enum DialogType {
 /// Shared app shell — sidebar, tasks panel, pipeline contexts, startup orchestration.
 ///
 /// Rendered by `ProjectsSidebar` (the single top-level layout).  The layout stays
-/// mounted across all route changes inside it, and the `if` branches in
-/// `ProjectsSidebar` keep the same branch across tab switches, so the chrome
-/// (page-header, tab bar) stays in the DOM and its CSS animation doesn't replay.
+/// mounted across all route changes inside it.  Sub-layouts (`ProjectPage`,
+/// `SettingsPageLayout`) are handled by the router via `#[layout]`/`#[end_layout]`,
+/// so this component's `children` (the `<Outlet/>`) is always the correct active
+/// route — no manual `if/else` branching needed.
 #[component]
 pub fn AppShell(children: Element) -> Element {
     let cur_route = use_route::<crate::Route>();
@@ -107,36 +108,15 @@ pub fn AppShell(children: Element) -> Element {
 /// Single top-level layout for all main app routes.
 ///
 /// `ProjectsSidebar` stays mounted while the user navigates between the
-/// projects list page, project tabs, and settings tabs.  Conditional `if`
-/// branches keep the same chrome subtree alive across tab switches inside
-/// a project or inside settings, so the `.page-header` CSS animation does
-/// NOT re-trigger.
+/// projects list page, project tabs, and settings tabs.  Sub-layouts
+/// (`ProjectPage`, `SettingsPageLayout`) are declared at the router level
+/// via `#[layout]`/`#[end_layout]` in the `Route` enum, so the router
+/// handles them automatically — no manual `if/else` branching needed.
 #[component]
 pub fn ProjectsSidebar() -> Element {
-    let cur_route = use_route::<crate::Route>();
-
-    let is_project_page = matches!(
-        cur_route,
-        Route::ProjectOverview { .. }
-            | Route::ProjectImages { .. }
-            | Route::ProjectConfig { .. }
-            | Route::ProjectLogs { .. }
-            | Route::ProjectOutputs { .. }
-    );
-    let is_settings_page = matches!(
-        cur_route,
-        Route::SettingsGeneral { .. } | Route::SettingsRuntime { .. }
-    );
-
     rsx! {
         AppShell {
-            if is_project_page {
-                crate::views::project::layout::ProjectPage {}
-            } else if is_settings_page {
-                crate::views::settings::SettingsPageLayout {}
-            } else {
-                Outlet::<Route> {}
-            }
+            Outlet::<Route> {}
         }
     }
 }

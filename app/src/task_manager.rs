@@ -395,7 +395,10 @@ pub fn drive_task<F: FnMut(TaskEvent) + 'static>(
         let mut cursor = 0usize;
 
         loop {
-            match poll_task_events(task_id.clone(), cursor).await {
+            // Use pagination (500 events max per poll) so that the initial
+            // recovery from a large event log doesn't download & process
+            // tens of thousands of events in a single HTTP response.
+            match poll_task_events(task_id.clone(), cursor, Some(500)).await {
                 Ok(batch) => {
                     if !batch.task_found {
                         // Task evicted or never existed — stop silently.
@@ -406,17 +409,24 @@ pub fn drive_task<F: FnMut(TaskEvent) + 'static>(
                     let is_terminal = batch.is_terminal;
                     let mut local_pos = cursor;
 
-                    for event in batch.events {
-                        local_pos += 1;
-
-                        // Update global context (log dedup via entry.logs_cursor).
-                        {
-                            let mut state = tasks.write();
-                            if let Some(entry) = state.tasks.iter_mut().find(|t| t.id == task_id) {
-                                apply_event_to_entry(entry, &event, local_pos);
+                    // ── Phase 1: batch ALL signal writes ────────────────
+                    // Instead of creating & dropping a Write guard for every
+                    // single event (which triggers an O(n) equality check and
+                    // dirtied-component propagation each time), we hold one
+                    // guard for the whole batch.
+                    {
+                        let mut state = tasks.write();
+                        if let Some(entry) = state.tasks.iter_mut().find(|t| t.id == task_id) {
+                            for event in &batch.events {
+                                local_pos += 1;
+                                apply_event_to_entry(entry, event, local_pos);
                             }
                         }
+                    }
 
+                    // ── Phase 2: fire callbacks (one per event) ─────────
+                    // The caller may still need every individual event.
+                    for event in batch.events {
                         on_event(event);
                     }
 

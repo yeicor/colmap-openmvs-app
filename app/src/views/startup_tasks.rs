@@ -56,7 +56,7 @@ pub fn StartupTasks() -> Element {
             }
             let mut cursor = 0usize;
             loop {
-                match poll_task_events(id.clone(), cursor).await {
+                match poll_task_events(id.clone(), cursor, None).await {
                     Ok(batch) => {
                         if !batch.task_found {
                             break;
@@ -137,7 +137,7 @@ pub fn StartupTasks() -> Element {
                     startup.task_id.set(Some(id.clone()));
                     let mut cursor = 0usize;
                     loop {
-                        match crate::server::poll_task_events(id.clone(), cursor).await {
+                        match crate::server::poll_task_events(id.clone(), cursor, None).await {
                             Ok(batch) => {
                                 if !batch.task_found {
                                     startup.is_completed.set(true);

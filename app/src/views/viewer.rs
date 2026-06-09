@@ -1,23 +1,13 @@
 //! Full-page 3D viewer route.
 //!
-//! Parameters (`file`, `cam`, `cfg`) come from two sources:
+//! Route: `/viewer/:name/:file_encoded/:cfg`
 //!
-//! 1. **Navigation from outputs tab** – written into a Dioxus context signal
-//!    (`ViewerPendingParams`) before `navigator().push()`, so the viewer can
-//!    read them synchronously without any JS↔Rust bridge.
-//!
-//! 2. **Direct URL access** (bookmark / link sharing) – on WASM the fragment
-//!    is parsed directly via `web_sys::window().location().hash()`.  On
-//!    non-WASM (desktop without web_sys) the empty-state hint is shown
-//!    because there is no reliable way to read the fragment without eval.
-//!
-//! Two URL layouts are supported in the fragment:
-//!
-//!   Path-based routing (fullstack / desktop):
-//!     `/viewer/MyProject#file=...&cam=...&cfg=...`
-//!
-//!   Hash-based routing (static web without fullstack):
-//!     `/#/viewer/MyProject?file=...&cam=...&cfg=...`
+//!   :file_encoded  — base64-url-safe-encoded output-file path
+//!                    (e.g. Y29sbWFwL2RlbnNlL3NwYXJzZS9wb2ludHMzRC5iaW4= for
+//!                     colmap/dense/sparse/points3D.bin)
+//!   :cfg           — optional base64-encoded JSON blob combining camera + config.
+//!                    Omit to use defaults.  The blob shape:
+//!                    {"cam":{"position":[...],"target":[...],"up":[...]},"config":{...}}
 
 use base64::Engine;
 use dioxus::prelude::*;
@@ -25,132 +15,66 @@ use tracing::{debug, error, info};
 
 use crate::server::get_project_output_bytes;
 use crate::viewer_conversion;
-use crate::ViewerPendingParams;
 
-// ── URL-fragment parser (WASM only – synchronous) ──────────────────────────
-
-/// Extract a URL fragment param by reading `window.location.hash` via
-/// `js_sys::eval` (synchronous, works in all WASM contexts).
-///
-/// Handles both fragment layouts:
-///   `/viewer/MyProject#file=...`  → hash = `#file=...`
-///   `/#/viewer/MyProject?file=...` → hash = `#/viewer/...?file=...`
-#[cfg(target_arch = "wasm32")]
-fn read_hash_param(key: &str) -> Option<String> {
-    let js = "window.location.hash || ''";
-    let hash = js_sys::eval(js).ok()?.as_string()?;
-    let hash = hash.trim_start_matches('#').to_string();
-    let search = if let Some(q) = hash.find('?') {
-        hash[q + 1..].to_string()
-    } else {
-        hash
-    };
-    for part in search.split('&') {
-        let mut kv = part.splitn(2, '=');
-        let k = kv.next()?;
-        let v = kv.next()?;
-        if k == key && !v.is_empty() {
-            let decoded = js_sys::decode_uri_component(v).ok()?;
-            return decoded.as_string();
+/// Parse the combined cfg blob (base64 JSON with cam + config).
+fn parse_cfg_blob(raw: &str) -> (Option<serde_json::Value>, Option<serde_json::Value>) {
+    if raw.is_empty() || raw == "-" {
+        return (None, None);
+    }
+    // Try standard base64 first (legacy), then URL-safe (newer scripts).
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(raw)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(raw));
+    if let Ok(bytes) = bytes {
+        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            let cam = val.get("cam").cloned();
+            let config = val.get("config").cloned();
+            return (cam, config);
         }
     }
-    None
-}
-
-/// Decode a base64-encoded JSON value (platform-independent).
-fn decode_b64_any(val: &str) -> Option<serde_json::Value> {
-    let bytes = base64::engine::general_purpose::STANDARD.decode(val).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    (None, None)
 }
 
 // ── Viewer page component ───────────────────────────────────────────────────
 
 #[component]
-pub fn Viewer(name: String) -> Element {
+pub fn Viewer(name: String, file_encoded: String, cfg: String) -> Element {
     info!(project_name = %name, "Viewer page mounted");
 
-    // ── Signals (initially empty, populated below) ──────────────────
-    let mut file_path: Signal<String> = use_signal(|| String::new());
-    let mut initial_camera: Signal<Option<serde_json::Value>> = use_signal(|| None);
-    let mut initial_config: Signal<Option<serde_json::Value>> = use_signal(|| None);
-    let mut params_loaded: Signal<bool> = use_signal(|| false);
-    let mut loading: Signal<bool> = use_signal(|| false);
+    // Decode the output-file path from the route segment.
+    //
+    // Two formats are supported:
+    //   1. Pipe-separated:  `colmap|sparse|0|points3D.bin`  (avoids / in URLs)
+    //   2. Base64 URL-safe: `Y29sbWFwL3NwYXJzZS8wL3BvaW50czNELmJpbg==`
+    //
+    // Format 1 is preferred for screenshot URLs because `/` in route parameters
+    // breaks routing — the browser / Dioxus may URL-decode %2F back to `/`,
+    // creating extra path segments.
+    let file_decoded = if file_encoded.contains('|') {
+        // Pipe-separated: translate | → /
+        file_encoded.replace('|', "/")
+    } else {
+        // Legacy: base64-URL-safe-encoded path
+        String::from_utf8(
+            base64::engine::general_purpose::URL_SAFE
+                .decode(file_encoded.as_bytes())
+                .unwrap_or_default(),
+        )
+        .unwrap_or_default()
+    };
+    let (initial_cam, initial_cfg) = parse_cfg_blob(&cfg);
+
+    let mut loading: Signal<bool> = use_signal(|| !file_decoded.is_empty());
     let mut error_msg: Signal<Option<String>> = use_signal(|| None);
 
     let container_id = format!("v3d-embedded-{}", name);
     let container_id_for_effect = container_id.clone();
     let name_for_effect = name.clone();
-
-    // ── Phase 1: read params from context or URL ───────────────────
-    //
-    // Path A (all targets): context signal set by outputs.rs before
-    //   navigation — synchronous, no DOM needed.
-    //
-    // Path B (all targets): read `window.location.hash` once the
-    //   component is mounted, via a use_effect.  On WASM we use
-    //   web_sys; on non-WASM (desktop) we read once through the
-    //   unreliable eval bridge.  If that fails, show the empty hint.
-    {
-        // Read context signal first (always available after component creation).
-        let mut pending = use_context::<Signal<Option<ViewerPendingParams>>>();
-        let context_file = pending.read().clone();
-        if let Some(p) = &context_file {
-            file_path.set(p.file.clone());
-            pending.set(None);
-            loading.set(true);
-            params_loaded.set(true);
-
-            // Write the file param into the URL fragment immediately so
-            // the address bar is correct for sharing/bookmarking, even
-            // before _persistUrlState is called by the JS viewer.
-            #[cfg(target_arch = "wasm32")]
-            {
-                let js = format!(
-                    r#"var qs = 'file=' + encodeURIComponent('{file}');
-                    if (window.location.hash.startsWith('#/')) {{
-                        history.replaceState(null, '', '#/viewer/' + encodeURIComponent('{pn}') + '?' + qs);
-                    }} else {{
-                        history.replaceState(null, '', '/viewer/' + encodeURIComponent('{pn}') + '#' + qs);
-                    }}"#,
-                    file = js_escape(&p.file),
-                    pn = js_escape(&name),
-                );
-                let _ = js_sys::eval(&js);
-            }
-        }
-    }
-
-    // Path B: deferred hash reading (only if context was empty).
-    let mut fp2 = file_path;
-    let mut ic2 = initial_camera;
-    let mut icfg2 = initial_config;
-    let mut pl2 = params_loaded;
-    let mut ld2 = loading;
-    use_effect(move || {
-        // Only run once, and only if the context signal was empty.
-        if pl2() || !fp2().is_empty() {
-            return;
-        }
-
-        // Try to read the hash via the best available mechanism.
-        #[cfg(target_arch = "wasm32")]
-        if let Some(f) = read_hash_param("file") {
-            fp2.set(f);
-            ld2.set(true);
-            if let Some(cam) = read_hash_param("cam").and_then(|s| decode_b64_any(&s)) {
-                ic2.set(Some(cam));
-            }
-            if let Some(cfg) = read_hash_param("cfg").and_then(|s| decode_b64_any(&s)) {
-                icfg2.set(Some(cfg));
-            }
-        }
-
-        pl2.set(true);
-    });
+    let file_for_effect = file_decoded.clone();
 
     // ── Fetch model & mount viewer ──────────────────────────────────
     use_effect(move || {
-        let fp = file_path();
+        let fp = file_for_effect.clone();
         if fp.is_empty() {
             return;
         }
@@ -163,8 +87,8 @@ pub fn Viewer(name: String) -> Element {
         let mut loading = loading.clone();
         let mut err = error_msg.clone();
         let container_id = container_id_for_effect.clone();
-        let ic_val = initial_camera();
-        let icfg_val = initial_config();
+        let ic_val = initial_cam.clone();
+        let icfg_val = initial_cfg.clone();
 
         spawn(async move {
             debug!(file = %fp_clone, "Fetching output file for viewer");
@@ -197,27 +121,27 @@ pub fn Viewer(name: String) -> Element {
                     )
                     .to_string();
 
-                    // Phase 2: create a <script> element directly (avoids the
-                    // unreliable dioxus::document::eval bridge entirely).
                     let js = format!(
-                        r#"import('{viewer_url}').then(async function(mod) {{
-                            try {{
-                                var container = document.getElementById('{container_id}');
-                                if (!container) {{ console.error('Viewer container not found'); return; }}
-                                var viewer = await mod.mountViewer3d(container, {{
-                                    projectName: '{project_name_esc}',
-                                    filePath: '{file_path_esc}',
-                                    glbBase64: '{b64_esc}',
-                                    initialCamera: {cam_json},
-                                    initialConfig: {cfg_json},
-                                }});
-                                window.__viewer3d_instance = viewer;
-                                var el = document.getElementById('{container_id}');
-                                if (el) el.dataset.ready = 'true';
-                            }} catch(err) {{
-                                console.error('[Viewer] mount error:', err.stack || err);
-                            }}
-                        }});"#
+                        r#"
+import('{viewer_url}').then(async function(mod) {{
+    try {{
+        var container = document.getElementById('{container_id}');
+        if (!container) {{ console.error('Viewer container not found'); return; }}
+        var viewer = await mod.mountViewer3d(container, {{
+            projectName: '{project_name_esc}',
+            filePath: '{file_path_esc}',
+            glbBase64: '{b64_esc}',
+            initialCamera: {cam_json},
+            initialConfig: {cfg_json},
+        }});
+        window.__viewer3d_instance = viewer;
+        var el = document.getElementById('{container_id}');
+        if (el) el.dataset.ready = 'true';
+    }} catch(err) {{
+        console.error('[Viewer] mount error:', err.stack || err);
+    }}
+}});
+"#
                     );
 
                     #[cfg(target_arch = "wasm32")]
@@ -252,14 +176,14 @@ pub fn Viewer(name: String) -> Element {
     });
 
     // ── Derived display values ──────────────────────────────────────
-    let file_display = file_path()
+    let file_display = file_decoded
         .rsplit('/')
         .next()
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_default();
 
-    let no_file = file_path().is_empty() && params_loaded();
+    let no_file = file_decoded.is_empty();
 
     let title = if file_display.is_empty() {
         format!("3D Viewer — {}", name)
@@ -269,6 +193,11 @@ pub fn Viewer(name: String) -> Element {
 
     let name_for_back = name.clone();
     let name_for_nav = name.clone();
+    let file_for_overlay = file_decoded.clone();
+    let file_display_for_overlay = file_display.clone();
+
+    // Info overlay toggle
+    let mut show_info = use_signal(|| false);
 
     rsx! {
         document::Title { "{title}" }
@@ -280,22 +209,52 @@ pub fn Viewer(name: String) -> Element {
             div {
                 class: "viewer-topbar",
 
+                div {
+                    id: "viewer-toolbar",
+                    class: "viewer-toolbar",
+                }
+
+                // Info toggle — shows model details in an overlay
+                button {
+                    class: "viewer-info-btn",
+                    title: "Model info",
+                    onclick: move |_| show_info.set(!show_info()),
+                    "ⓘ"
+                }
+
+                // Back to outputs — placed right-most, consistent with the
+                // rest of the app's navigation pattern
                 button {
                     class: "viewer-back-btn",
                     onclick: move |_| {
                         let _ = navigator().push(crate::Route::ProjectOutputs { name: name_for_back.clone() });
                     },
-                    "← Back to Outputs"
+                    span { class: "viewer-back-arrow", "←" }
+                    span { class: "viewer-back-label", "Back" }
                 }
+            }
 
-                span {
-                    class: "viewer-file-label",
-                    title: "{file_path()}",
-                    "{file_display}"
-                }
+            // ── Info overlay (file details) ───────────────────────────
+            if show_info() {
                 div {
-                    id: "viewer-toolbar",
-                    class: "viewer-toolbar",
+                    class: "viewer-info-overlay",
+                    div {
+                        class: "viewer-info-close",
+                        onclick: move |_| show_info.set(false),
+                        "✕"
+                    }
+                    div { class: "viewer-info-row",
+                        span { class: "viewer-info-label", "Project" }
+                        span { class: "viewer-info-value", "{name}" }
+                    }
+                    div { class: "viewer-info-row",
+                        span { class: "viewer-info-label", "File" }
+                        span { class: "viewer-info-value", "{file_display_for_overlay}" }
+                    }
+                    div { class: "viewer-info-row",
+                        span { class: "viewer-info-label", "Path" }
+                        span { class: "viewer-info-value viewer-info-path", "{file_for_overlay}" }
+                    }
                 }
             }
 
@@ -315,7 +274,7 @@ pub fn Viewer(name: String) -> Element {
                     button {
                         class: "viewer-retry-btn",
                         onclick: move |_| {
-                            let fp = file_path();
+                            let fp = &file_decoded;
                             if !fp.is_empty() {
                                 error_msg.set(None);
                                 loading.set(true);

@@ -137,7 +137,11 @@ pub async fn get_task_info(_task_id: String) -> Result<Option<TaskInfo>> {
     Ok(None)
 }
 
-pub async fn poll_task_events(task_id: String, cursor: usize) -> Result<TaskEventBatch> {
+pub async fn poll_task_events(
+    task_id: String,
+    cursor: usize,
+    _limit: Option<usize>,
+) -> Result<TaskEventBatch> {
     let events = match task_id.as_str() {
         "demo-download-task" => get_download_events(),
         "demo-pipeline-task" => get_pipeline_events(),
