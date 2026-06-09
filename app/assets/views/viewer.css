@@ -1,0 +1,278 @@
+/*
+ * Full-page 3D viewer route.
+ *
+ * The viewer page takes over the entire viewport — no sidebar, no tabs.
+ * The top bar is transparent with a blur effect, embedding the 3D viewer
+ * toolbar buttons inline.
+ */
+
+/* ============================================================================
+   Page root — fills the whole viewport
+   ============================================================================ */
+
+.viewer-page {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background: #111318;
+    color: #eef2ff;
+    z-index: 100;
+    overflow: hidden;
+}
+
+/* ============================================================================
+   Top bar — transparent with backdrop blur
+   ============================================================================ */
+
+.viewer-topbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.75rem;
+    background: rgba(18, 20, 26, 0.35);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
+    z-index: 10;
+    -webkit-app-region: drag;
+}
+
+.viewer-back-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #eef2ff;
+    padding: 0.3rem 0.65rem;
+    border-radius: 0.35rem;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 500;
+    transition: background 0.12s ease;
+    flex-shrink: 0;
+    -webkit-app-region: no-drag;
+}
+
+.viewer-back-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.viewer-back-btn:active {
+    transform: scale(0.98);
+}
+
+.viewer-file-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.7);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 1;
+    min-width: 0;
+}
+
+/* ============================================================================
+   3D viewer toolbar — embedded inline in the top bar
+   ============================================================================ */
+
+.viewer-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+.viewer-toolbar::-webkit-scrollbar {
+    display: none;
+}
+
+/* Override the floating-toolbar appearance when embedded in the top bar */
+#viewer-toolbar.v3d-toolbar,
+#viewer-toolbar .v3d-toolbar {
+    all: unset;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+#viewer-toolbar .v3d-toolbar-section {
+    display: flex;
+    align-items: center;
+    gap: 0.15rem;
+    padding: 0;
+    background: none;
+    border: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    pointer-events: auto;
+}
+
+#viewer-toolbar .v3d-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #d0d4e0;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.3rem;
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 500;
+    gap: 0.3rem;
+    transition:
+        background 0.1s,
+        color 0.1s;
+    white-space: nowrap;
+    line-height: 1.3;
+    display: inline-flex;
+    align-items: center;
+}
+
+#viewer-toolbar .v3d-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #f0f2f8;
+}
+
+#viewer-toolbar .v3d-btn:active {
+    transform: scale(0.96);
+}
+
+#viewer-toolbar .v3d-btn.active {
+    background: rgba(120, 80, 240, 0.25);
+    color: #c4b0ff;
+    border-color: rgba(120, 80, 240, 0.3);
+}
+
+#viewer-toolbar .v3d-btn-icon {
+    font-size: 0.85rem;
+}
+
+@media (max-width: 600px) {
+    #viewer-toolbar .v3d-btn-label {
+        display: none;
+    }
+    #viewer-toolbar .v3d-btn {
+        padding: 0.25rem 0.35rem;
+    }
+}
+
+/* ============================================================================
+   Loading overlay
+   ============================================================================ */
+
+.viewer-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    background: #111318;
+    z-index: 5;
+    font-size: 0.92rem;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.viewer-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(255, 255, 255, 0.08);
+    border-top-color: #a78bfa;
+    border-radius: 50%;
+    animation: viewer-spin 0.8s linear infinite;
+}
+
+@keyframes viewer-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ============================================================================
+   Error / empty states
+   ============================================================================ */
+
+.viewer-error,
+.viewer-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    background: #111318;
+    z-index: 5;
+    padding: 2rem;
+    text-align: center;
+}
+
+.viewer-error h3,
+.viewer-empty h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    color: #f87171;
+}
+
+.viewer-empty h3 {
+    color: #a78bfa;
+}
+
+.viewer-error p,
+.viewer-empty p {
+    margin: 0;
+    font-size: 0.88rem;
+    color: rgba(255, 255, 255, 0.55);
+    max-width: 32rem;
+    line-height: 1.5;
+}
+
+.viewer-empty a {
+    color: #a78bfa;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.viewer-empty code {
+    background: rgba(255, 255, 255, 0.08);
+    padding: 0.1rem 0.35rem;
+    border-radius: 0.25rem;
+    font-size: 0.82rem;
+}
+
+.viewer-retry-btn {
+    margin-top: 0.5rem;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #eef2ff;
+    padding: 0.4rem 1rem;
+    border-radius: 0.35rem;
+    cursor: pointer;
+    font-size: 0.82rem;
+    transition: background 0.12s ease;
+}
+
+.viewer-retry-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* ============================================================================
+   3D canvas container — fills remaining space
+   ============================================================================ */
+
+.viewer-canvas-container {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.viewer-canvas-container canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+}

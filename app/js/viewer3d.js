@@ -5,6 +5,126 @@ import { ArcballControls } from "three/examples/jsm/controls/ArcballControls.js"
 // ── State persistence ──────────────────────────────────────────────────────
 
 const STORAGE_KEY = "viewer3d.prefs";
+
+// ── URL fragment state helpers ─────────────────────────────────────────────
+//
+// Two URL layouts are supported depending on the Dioxus routing mode:
+//
+//   Path-based routing (fullstack/desktop):
+//     /viewer/MyProject#file=...&cam=...&cfg=...
+//     The Dioxus router sees /viewer/MyProject; the fragment (#...) is
+//     invisible to the router so updates via replaceState never re-navigate.
+//
+//   Hash-based routing (static web without fullstack):
+//     /#/viewer/MyProject?file=...&cam=...&cfg=...
+//     Everything lives inside one hash fragment; the router parses the path
+//     before `?` and we only touch the query-string portion.
+
+/** Detect whether the app uses hash-based routing. */
+function isHashRouting() {
+  return /^#\//.test(window.location.hash);
+}
+
+/** Extract key=value pairs from the URL fragment regardless of layout. */
+function parseHashParams() {
+  const hash = window.location.hash || "";
+  const params = {};
+
+  // Determine where the key=value pairs live.
+  // - Hash routing: everything after `?` (path is before `?`)
+  // - Path routing: everything after `#` (no route path in the fragment)
+  const qIdx = hash.indexOf("?");
+  const search = qIdx >= 0 ? hash.slice(qIdx + 1) : hash.replace(/^#/, "");
+
+  for (const part of search.split("&")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    const k = decodeURIComponent(part.slice(0, eq));
+    const v = decodeURIComponent(part.slice(eq + 1));
+    params[k] = v;
+  }
+  return params;
+}
+
+/**
+ * Update the fragment key=value pairs using replaceState (no history push).
+ * The route path is preserved so the Dioxus router does not re-navigate.
+ */
+function updateHashParams(updates) {
+  const hash = window.location.hash || "";
+  const qIdx = hash.indexOf("?");
+
+  // Split hash into path-portion and search-portion
+  let pathPart;
+  let search;
+  if (qIdx >= 0) {
+    // Hash routing: #/path?key=value  → pathPart = "#/path?", search = "key=value"
+    pathPart = hash.slice(0, qIdx + 1);
+    search = hash.slice(qIdx + 1);
+  } else if (hash.startsWith("#")) {
+    // Path routing: #key=value  → pathPart = "#", search = "key=value"
+    pathPart = "#";
+    search = hash.slice(1);
+  } else {
+    pathPart = "";
+    search = "";
+  }
+
+  // Parse existing pairs (keep values as-encoded for round-trip safety)
+  const existing = {};
+  for (const part of search.split("&")) {
+    if (!part) continue;
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    existing[decodeURIComponent(part.slice(0, eq))] = part.slice(eq + 1);
+  }
+
+  // Apply updates; null/undefined removes the key
+  for (const [k, v] of Object.entries(updates)) {
+    if (v === null || v === undefined) {
+      delete existing[k];
+    } else {
+      existing[k] = encodeURIComponent(v);
+    }
+  }
+
+  const entries = Object.entries(existing);
+  const qs = entries.map(([k, v]) => `${encodeURIComponent(k)}=${v}`).join("&");
+
+  let newHash;
+  if (qIdx >= 0) {
+    // Hash routing: keep the path (including ?)
+    newHash = pathPart + qs;
+  } else {
+    // Path routing: just #key=value (or empty)
+    newHash = qs ? "#" + qs : "";
+  }
+
+  if (newHash !== hash) {
+    history.replaceState(null, "", newHash);
+  }
+}
+
+/// Return a single hash param (used by Rust via eval).
+window.__viewerReadHashParam = function (key) {
+  return parseHashParams()[key] || null;
+};
+
+function encodeViewerState(cam, cfg) {
+  const updates = {};
+  if (cam) updates.cam = btoa(JSON.stringify(cam));
+  if (cfg) updates.cfg = btoa(JSON.stringify(cfg));
+  return updates;
+}
+
+/** debounce helper */
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
 const DEFAULT_STATE = {
   background: "#111318",
   textures: true,
@@ -143,9 +263,15 @@ canvas { touch-action:none; }
 // ── Main viewer ─────────────────────────────────────────────────────────────
 
 export class Viewer3D {
-  constructor(container) {
+  constructor(container, opts = {}) {
     this.container = container;
-    this.state = loadPrefs();
+    this._projectName = opts.projectName || "";
+    this._filePath = opts.filePath || "";
+    this._onStateChange = opts.onStateChange || null;
+
+    // Merge initial state from URL hash or options, falling back to saved prefs
+    const saved = loadPrefs();
+    this.state = { ...saved, ...(opts.initialConfig || {}) };
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(this.state.background);
@@ -177,6 +303,15 @@ export class Viewer3D {
     this.controls.minDistance = 0.001;
     this.controls.maxDistance = Infinity;
     this.controls.target.set(0, 0, 0);
+
+    this._queuedCameraState = opts.initialCamera || null;
+    this._debouncedPersistUrl = debounce(() => {
+      this._persistUrlState();
+      if (this._onStateChange) {
+        const cam = this._getCameraState();
+        this._onStateChange({ camera: cam, config: { ...this.state } });
+      }
+    }, 300);
 
     this.mixers = [];
 
@@ -216,9 +351,17 @@ export class Viewer3D {
   // ── Toolbar ───────────────────────────────────────────────────────────────
 
   createToolbar() {
-    this.toolbar = document.createElement("div");
-    this.toolbar.className = "v3d-toolbar";
-    this.container.appendChild(this.toolbar);
+    // Try to embed into the Rust-managed top bar first; fall back to a
+    // floating toolbar inside the container.
+    const host = document.getElementById("viewer-toolbar");
+    if (host) {
+      host.innerHTML = "";
+      this.toolbar = host;
+    } else {
+      this.toolbar = document.createElement("div");
+      this.toolbar.className = "v3d-toolbar";
+      this.container.appendChild(this.toolbar);
+    }
 
     const sec = (label) => {
       const s = document.createElement("div");
@@ -379,7 +522,7 @@ export class Viewer3D {
             const id = axis === "azimuth" ? "v3d-lo-az" : "v3d-lo-el";
             const span = document.getElementById(id);
             if (span) span.textContent = v.toFixed(0);
-            savePrefs(this.state);
+            this._onConfigChange();
           });
         }
       } else {
@@ -388,7 +531,7 @@ export class Viewer3D {
 
       this._loPanel.classList.remove("hidden");
 
-      const btn = container.querySelector("[data-lo-btn]");
+      const btn = document.querySelector("[data-lo-btn]");
       if (btn) {
         const r = btn.getBoundingClientRect();
         this._loPanel.style.left = Math.min(r.left, window.innerWidth - 360) + "px";
@@ -435,7 +578,7 @@ export class Viewer3D {
         slider.addEventListener("input", () => {
           this.state.pointsSize = parseFloat(slider.value);
           this.applyRenderMode();
-          savePrefs(this.state);
+          this._onConfigChange();
         });
       } else {
         if (this._psOutside) document.removeEventListener("pointerdown", this._psOutside);
@@ -471,7 +614,7 @@ export class Viewer3D {
       const wireBtn = this._addBtn(this.sections.render, "◫", "Wireframe", () => {
         this.state.wireframe = !this.state.wireframe;
         this.applyRenderMode();
-        savePrefs(this.state);
+        this._onConfigChange();
         wireBtn.classList.toggle("active", this.state.wireframe);
       });
       wireBtn.classList.toggle("active", this.state.wireframe);
@@ -479,7 +622,7 @@ export class Viewer3D {
       const lightBtn = this._addBtn(this.sections.render, "☀", "Lighting", () => {
         this.state.lighting = !this.state.lighting;
         this.applyRenderMode();
-        savePrefs(this.state);
+        this._onConfigChange();
         lightBtn.classList.toggle("active", this.state.lighting);
       });
       lightBtn.classList.toggle("active", this.state.lighting);
@@ -487,7 +630,7 @@ export class Viewer3D {
       const backBtn = this._addBtn(this.sections.render, "◐", "Backfaces", () => {
         this.state.backfaces = !this.state.backfaces;
         this.applyRenderMode();
-        savePrefs(this.state);
+        this._onConfigChange();
         backBtn.classList.toggle("active", this.state.backfaces);
       });
       backBtn.classList.toggle("active", this.state.backfaces);
@@ -500,7 +643,7 @@ export class Viewer3D {
       const texBtn = this._addBtn(this.sections.render, "🖼", "Textures", () => {
         this.state.textures = !this.state.textures;
         this.applyTextures();
-        savePrefs(this.state);
+        this._onConfigChange();
         texBtn.classList.toggle("active", this.state.textures);
       });
       texBtn.classList.toggle("active", this.state.textures);
@@ -509,7 +652,6 @@ export class Viewer3D {
     if (this.capabilities.points) {
       this._psBtn = this._addBtn(this.sections.render, "•", "Point Size", this._createPointsSlider());
     }
-
   }
 
   // ── Event binding ─────────────────────────────────────────────────────────
@@ -540,6 +682,11 @@ export class Viewer3D {
       }
     };
     window.addEventListener("keydown", this._onEscapePanel);
+
+    // Track camera changes → persist to URL hash (debounced)
+    this.controls.addEventListener("change", () => {
+      this._debouncedPersistUrl();
+    });
   }
 
   dispose() {
@@ -621,7 +768,7 @@ export class Viewer3D {
 
   // ── Model ─────────────────────────────────────────────────────────────────
 
-  setModel(object) {
+  setModel(object, initialCamera) {
     if (this.modelRoot) this.scene.remove(this.modelRoot);
     this.modelRoot = object;
     this.scene.add(object);
@@ -631,7 +778,12 @@ export class Viewer3D {
     this.rebuildRenderSection();
     this.applyRenderMode();
     this.applyTextures();
-    this.homeCamera(true);
+
+    // Queue the camera state from URL so homeCamera picks it up
+    if (initialCamera) {
+      this._queuedCameraState = initialCamera;
+    }
+    this.homeCamera(false);
   }
 
   detectCapabilities() {
@@ -771,10 +923,86 @@ export class Viewer3D {
     });
   }
 
+  // ── Config change helper ─────────────────────────────────────────────────
+
+  _onConfigChange() {
+    savePrefs(this.state);
+    this._persistUrlState();
+  }
+
+  // ── Camera state serialisation ────────────────────────────────────────────
+
+  _getCameraState() {
+    return {
+      position: [
+        Math.round(this.camera.position.x * 1e4) / 1e4,
+        Math.round(this.camera.position.y * 1e4) / 1e4,
+        Math.round(this.camera.position.z * 1e4) / 1e4,
+      ],
+      target: [
+        Math.round(this.controls.target.x * 1e4) / 1e4,
+        Math.round(this.controls.target.y * 1e4) / 1e4,
+        Math.round(this.controls.target.z * 1e4) / 1e4,
+      ],
+      up: [Math.round(this.camera.up.x * 1e4) / 1e4, Math.round(this.camera.up.y * 1e4) / 1e4, Math.round(this.camera.up.z * 1e4) / 1e4],
+      near: Math.round(this.camera.near * 1e4) / 1e4,
+      far: Math.round(this.camera.far * 1e4) / 1e4,
+    };
+  }
+
+  _setCameraState(state) {
+    if (!state || !state.position) return false;
+    const [px, py, pz] = state.position;
+    const [tx, ty, tz] = state.target || [0, 0, 0];
+    this.camera.position.set(px, py, pz);
+    this.controls.target.set(tx, ty, tz);
+    if (state.up) {
+      this.camera.up.set(state.up[0], state.up[1], state.up[2]);
+    }
+    if (state.near !== undefined) this.camera.near = state.near;
+    if (state.far !== undefined) this.camera.far = state.far;
+    this.camera.lookAt(tx, ty, tz);
+    this.camera.updateProjectionMatrix();
+    // Sync the controls WITHOUT update() repositioning the camera.
+    // setCamera calls update() which recalculates camera position from
+    // the gizmo matrix, undoing our careful restoration.
+    // Disabling controls first makes update() a no-op while still
+    // allowing _computeArcballDimensions and _computeRotationInfo
+    // to set up the controls' internal state correctly.
+    this.controls.enabled = false;
+    this.controls.setCamera(this.camera);
+    this.controls.enabled = true;
+    this.controls.saveState();
+    return true;
+  }
+
+  _persistUrlState() {
+    if (!this._projectName || !this._filePath) return;
+    const cam = this._getCameraState();
+    const cfg = { ...this.state };
+    const updates = encodeViewerState(cam, cfg);
+    // Always include the file path so the URL remains shareable.
+    // Without this, only cam/cfg are written and file is lost on reload.
+    updates.file = this._filePath;
+    updateHashParams(updates);
+  }
+
   // ── Home camera ───────────────────────────────────────────────────────────
 
   homeCamera(forceDir) {
     if (!this.modelRoot) return;
+
+    // If an initial camera state from the URL was queued, use that instead.
+    // Do NOT persist afterwards — the URL already contains the correct state;
+    // re-saving after controls.setCamera would compound rounding / precision
+    // errors on every reload.
+    if (!forceDir && this._queuedCameraState) {
+      const restored = this._setCameraState(this._queuedCameraState);
+      this._queuedCameraState = null;
+      if (restored) {
+        return;
+      }
+    }
 
     const box = new THREE.Box3().setFromObject(this.modelRoot);
     const size = box.getSize(new THREE.Vector3());
@@ -801,6 +1029,8 @@ export class Viewer3D {
     this.camera.updateProjectionMatrix();
     this.controls.setCamera(this.camera);
     this.controls.saveState();
+
+    this._persistUrlState();
   }
 
   // ── Lighting update (each frame) ──────────────────────────────────────────
@@ -891,6 +1121,52 @@ export async function launchGlbViewer(b64, filename) {
   } catch (err) {
     container.remove();
     closeBtn.remove();
+    throw err;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// ── Embedded viewer (mount in an existing container) ─────────────────────────
+
+/**
+ * Mount the 3D viewer inside a given container element.
+ *
+ * @param {HTMLElement} container  - The DOM element to render into.
+ * @param {object}       options
+ * @param {string}       options.projectName  - Project name (for URL state).
+ * @param {string}       options.filePath     - Output file path (for URL state).
+ * @param {string}       options.glbBase64    - Base64-encoded GLB data.
+ * @param {object|null}  options.initialCamera - { position: [x,y,z], target: [x,y,z] }
+ * @param {object|null}  options.initialConfig - Partial config to merge over defaults.
+ * @param {function|null} options.onStateChange - Called with { camera, config } on changes.
+ * @returns {Promise<Viewer3D>} The viewer instance.
+ */
+export async function mountViewer3d(container, options) {
+  const { projectName = "", filePath = "", glbBase64, initialCamera = null, initialConfig = null, onStateChange = null } = options || {};
+
+  if (!glbBase64) throw new Error("mountViewer3d: glbBase64 is required");
+
+  const binary = Uint8Array.from(atob(glbBase64), (c) => c.charCodeAt(0));
+  const blob = new Blob([binary], { type: "model/gltf-binary" });
+  const url = URL.createObjectURL(blob);
+
+  try {
+    const gltf = await new Promise((resolve, reject) => {
+      new GLTFLoader().load(url, resolve, undefined, reject);
+    });
+
+    const viewer = new Viewer3D(container, {
+      projectName,
+      filePath,
+      initialCamera,
+      initialConfig,
+      onStateChange,
+    });
+    viewer.setModel(gltf.scene, initialCamera);
+
+    return viewer;
+  } catch (err) {
     throw err;
   } finally {
     URL.revokeObjectURL(url);

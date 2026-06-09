@@ -11,3 +11,6 @@ pub use project::{
 
 mod startup_tasks;
 pub use startup_tasks::StartupTasks;
+
+mod viewer;
+pub use viewer::Viewer;

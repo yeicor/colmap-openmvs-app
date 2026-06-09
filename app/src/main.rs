@@ -17,6 +17,14 @@ pub mod task_manager;
 pub mod viewer_conversion;
 pub mod views;
 
+/// Transient viewer state set by the outputs tab before navigating,
+/// then consumed by the viewer page once to recover the file path
+/// without needing a JS↔Rust eval round-trip.
+#[derive(Clone)]
+pub struct ViewerPendingParams {
+    pub file: String,
+}
+
 #[cfg(feature = "demo")]
 pub mod demo;
 
@@ -24,6 +32,7 @@ use logging::init as init_logging;
 pub use views::{
     ProjectConfig, ProjectImages, ProjectLogs, ProjectOutputs, ProjectOverview, ProjectPage,
     Projects, ProjectsSidebar, SettingsGeneral, SettingsPageLayout, SettingsRuntime, StartupTasks,
+    Viewer,
 };
 
 #[derive(Debug, Clone, Routable, PartialEq)]
@@ -48,6 +57,8 @@ pub enum Route {
         ProjectOutputs { name: String },
     #[route("/startup")]
     StartupTasks {},
+    #[route("/viewer/:name")]
+    Viewer { name: String },
 }
 
 #[component]
@@ -67,6 +78,9 @@ pub fn App() -> Element {
     info!("App component: creating startup context...");
     let startup = StartupCtx::new();
     use_context_provider(|| startup);
+
+    // Transient channel: outputs tab → viewer page (avoids eval bridge).
+    use_context_provider(|| Signal::new(Option::<ViewerPendingParams>::None));
 
     {
         // Start the startup task in background as early as possible.
@@ -171,6 +185,7 @@ pub fn App() -> Element {
         document::Link { rel: "stylesheet", href: asset!("/assets/views/project/config.css", AssetOptions::css().with_preload(true)) }
         document::Link { rel: "stylesheet", href: asset!("/assets/views/project/logs.css", AssetOptions::css().with_preload(true)) }
         document::Link { rel: "stylesheet", href: asset!("/assets/views/project/outputs.css", AssetOptions::css().with_preload(true)) }
+        document::Link { rel: "stylesheet", href: asset!("/assets/views/viewer.css", AssetOptions::css().with_preload(true)) }
         // ── Component-library stylesheets (preloaded to avoid FOUC) ──────
         document::Link { rel: "stylesheet", href: asset!("./components/alert_dialog/style.css", AssetOptions::css().with_preload(true)) }
         document::Link { rel: "stylesheet", href: asset!("./components/button/style.css", AssetOptions::css().with_preload(true)) }

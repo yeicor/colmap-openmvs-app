@@ -616,7 +616,6 @@ pub fn OutputsTab(project_name: String) -> Element {
 
     let toast_ctx = crate::mycomponents::use_toast_ctx();
     let mut refresh_counter = use_signal(|| 0u32);
-    let mut viewing = use_signal(|| Option::<String>::None);
     let mut confirming_delete = use_signal(|| Option::<String>::None);
     let mut deleting_path = use_signal(|| Option::<String>::None);
     let mut collapsed = use_signal(HashSet::<String>::new);
@@ -807,7 +806,6 @@ pub fn OutputsTab(project_name: String) -> Element {
                                             let is_collapsed  = is_dir && coll.contains(&rel_path);
                                             let is_confirming = confirming_delete() == Some(rel_path.clone());
                                             let is_deleting   = deleting_path()    == Some(rel_path.clone());
-                                            let is_viewing    = viewing()          == Some(rel_path.clone());
                                             let is_viewable   = entry.file.as_ref().map(|f| f.is_viewable).unwrap_or(false);
 
                                             // For download/view use the *real* file path (handles virtual entries)
@@ -833,13 +831,11 @@ pub fn OutputsTab(project_name: String) -> Element {
                                             let rp_del     = rel_path.clone();
                                             let pn_del     = project_name.clone();
                                             let rp_view    = actual_path.clone();
-                                            let fn_view    = actual_name.clone();
                                             let pn_view    = project_name.clone();
                                             let pn_dl      = project_name.clone();
                                             let rp_dl      = actual_path.clone();
                                             let fname_dl   = actual_name.clone();
                                             let tc_dl      = toast_ctx;
-                                            let tc_dl2     = toast_ctx;
                                             let tc_dl3     = toast_ctx;
 
                                             rsx! {
@@ -1017,96 +1013,28 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                         }
                                                     }
 
-                                                    // 3D View (viewable files only)
+                                                    // 3D View (viewable files only) — navigate to the viewer route
                                                     if is_viewable {
                                                         button {
                                                             class: "outputs-btn outputs-view-3d-btn",
-                                                            disabled: is_viewing,
                                                             onclick: move |_| {
                                                                 let pn = pn_view.clone();
                                                                 let rp = rp_view.clone();
-                                                                let fn_ = fn_view.clone();
-                                                                let mut tc = tc_dl2;
-                                                                debug!(file = %fn_, "Opening 3D viewer");
-                                                                viewing.set(Some(rel_path.clone()));
-                                                                spawn(async move {
-                                                                    match get_project_output_bytes(pn.clone(), rp.clone()).await {
-                                                                         Ok(stream) => {
-                                                                             let mut raw_bytes = Vec::new();
-                                                                            let mut s = stream;
-                                                                            while let Some(chunk) = s.next().await {
-                                                                                match chunk {
-                                                                                    Ok(data) => raw_bytes.extend_from_slice(&data),
-                                                                                    Err(e) => {
-                                                                                        error!(error = %e, "Viewer stream error");
-                                                                                        add_toast(&mut tc, format!("Failed to load viewer data: {e}"), ToastType::Error, None);
-                                                                                        viewing.set(None);
-                                                                                        return;
-                                                                                    }
-                                                                                }
-                                                                            }
+                                                                debug!(file = %rp, "Navigating to viewer route");
 
-                                                                            let companion_png = if let Some(tex_name) = crate::viewer_conversion::ply_texture_file_name(&raw_bytes) {
-                                                                                let tex_rp = std::path::Path::new(&rp)
-                                                                                    .parent()
-                                                                                    .map(|d| d.join(&tex_name).to_string_lossy().to_string())
-                                                                                    .unwrap_or(tex_name.clone());
-                                                                                debug!(texture = %tex_rp, "Fetching companion texture");
-                                                                                match get_project_output_bytes(pn.clone(), tex_rp).await {
-                                                                                    Ok(tex_stream) => {
-                                                                                        let mut tex_bytes = Vec::new();
-                                                                                        let mut ts = tex_stream;
-                                                                                        while let Some(chunk) = ts.next().await {
-                                                                                            match chunk {
-                                                                                                Ok(data) => tex_bytes.extend_from_slice(&data),
-                                                                                                Err(e) => {
-                                                                                                    error!(error = %e, "Texture stream error");
-                                                                                                    break;
-                                                                                                }
-                                                                                            }
-                                                                                        }
-                                                                                        if tex_bytes.is_empty() {
-                                                                                            None
-                                                                                        } else {
-                                                                                            Some(tex_bytes)
-                                                                                        }
-                                                                                    }
-                                                                                    Err(e) => {
-                                                                                        warn!(error = %e, "Companion texture not found");
-                                                                                        None
-                                                                                    }
-                                                                                }
-                                                                            } else {
-                                                                                None
-                                                                            };
+                                                                // Store file path in context — viewer reads it synchronously
+                                                                // on mount, bypassing the unreliable JS↔Rust eval bridge.
+                                                                let mut pending =
+                                                                    use_context::<Signal<Option<crate::ViewerPendingParams>>>();
+                                                                pending.set(Some(crate::ViewerPendingParams {
+                                                                    file: rp.clone(),
+                                                                }));
 
-                                                                            let glb = crate::viewer_conversion::convert_output_for_viewer(&fn_, &raw_bytes, companion_png);
-                                                                            match glb {
-                                                                                Ok(glb_bytes) => {
-                                                                                    info!(file = %fn_, bytes = glb_bytes.len(), "Converted to GLB for 3D viewer");
-                                                                                    let b64 = base64::engine::general_purpose::STANDARD.encode(&glb_bytes);
-                                                                                    let fname_safe = js_escape(&fn_);
-                                                                                    launch_glb_viewer(&b64, &fname_safe).await;
-                                                                                }
-                                                                                Err(e) => {
-                                                                                    error!(file = %fn_, error = %e, "GLB conversion failed");
-                                                                                    add_toast(&mut tc, format!("Failed to convert for viewer: {e}"), ToastType::Error, None);
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        Err(e) => {
-                                                                            error!(file = %fn_, error = %e, "Viewer load failed");
-                                                                            add_toast(&mut tc, format!("Failed to load viewer data: {e}"), ToastType::Error, None);
-                                                                        }
-                                                                    }
-                                                                    viewing.set(None);
-                                                                });
+                                                                // Dioxus navigation (works for path and hash routing)
+                                                                navigator().push(crate::Route::Viewer { name: pn });
                                                             },
-                                                            if is_viewing { Icon { icon: BsHourglass } } else { Icon { icon: BsEye } }
-                                                            span {
-                                                                class: "btn-label",
-                                                                if is_viewing { " Loading…" } else { " View 3D" }
-                                                            }
+                                                            Icon { icon: BsEye }
+                                                            span { class: "btn-label", " View 3D" }
                                                         }
                                                     }
 
@@ -1170,40 +1098,5 @@ pub fn OutputsTab(project_name: String) -> Element {
                 }
             }
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 3-D Viewer (launched via eval'd JavaScript)
-// ---------------------------------------------------------------------------
-
-async fn launch_glb_viewer(b64: &str, fname_safe: &str) {
-    info!(file_name = %fname_safe, "Launching 3D GLB viewer");
-    let b64_esc = js_escape(b64);
-    let fname_esc = js_escape(fname_safe);
-
-    // viewer3d.bundle.js is pre-built by build.rs using esbuild (three.js +
-    // GLTFLoader + TrackballControls all inlined).  with_minify(false) tells dx
-    // to copy it verbatim — no reprocessing, no importmap needed.
-    let viewer_url = asset!(
-        "/assets/viewer3d.bundle.js",
-        AssetOptions::js().with_minify(false)
-    )
-    .to_string();
-
-    let js = format!(
-        r#"(async () => {{
-    try {{
-        const absUrl = new URL('{viewer_url}', window.location.origin).href;
-        const {{ launchGlbViewer }} = await import(absUrl);
-        await launchGlbViewer('{b64_esc}', '{fname_esc}');
-    }} catch (err) {{
-        console.error('[3D Viewer] launch error:', err.stack || err);
-    }}
-}})();"#
-    );
-
-    if let Err(e) = eval(&js).await {
-        tracing::error!("Failed to launch 3D viewer: {:?}", e);
     }
 }
