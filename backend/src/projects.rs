@@ -133,6 +133,10 @@ async fn write_low_resource_project_config(
                 value: "--FeatureExtraction.num_threads=1".into(),
             },
             EnvVarConfig {
+                name: "COLMAP_MATCHER".into(),
+                value: "exhaustive_matcher".into(), // vocab_tree may require instructions that some arm64 CPUs don't support, causing crashes.
+            },
+            EnvVarConfig {
                 name: "COLMAP_MATCHER_ARGS".into(),
                 value: "--FeatureMatching.num_threads=1".into(),
             },
