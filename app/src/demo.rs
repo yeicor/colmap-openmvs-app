@@ -145,7 +145,7 @@ pub async fn poll_task_events(
     let events = match task_id.as_str() {
         "demo-download-task" => get_download_events(),
         "demo-pipeline-task" => get_pipeline_events(),
-        "demo-pipeline-dry-run" => get_pipeline_events(),
+        "demo-pipeline-recover-logs" => get_pipeline_events(),
         "demo-startup-task" => &vec![
             TaskEvent::Log("No platform-specific startup steps needed (demo).".to_string()),
             TaskEvent::Completed,
@@ -160,7 +160,7 @@ pub async fn poll_task_events(
         }
     };
 
-    let chunk_size = if task_id == "demo-pipeline-dry-run" {
+    let chunk_size = if task_id == "demo-pipeline-recover-logs" {
         events.len()
     } else {
         10usize
@@ -264,9 +264,9 @@ pub async fn save_project_config(
 pub async fn cancel_task(_task_id: String) -> Result<()> {
     read_only_error()
 }
-pub async fn run_pipeline(_project_name: String, dry_run: bool) -> Result<String> {
-    if dry_run {
-        Ok("demo-pipeline-dry-run".to_string())
+pub async fn run_pipeline(_project_name: String, recover_logs: bool) -> Result<String> {
+    if recover_logs {
+        Ok("demo-pipeline-recover-logs".to_string())
     } else {
         Ok("demo-pipeline-task".to_string())
     }

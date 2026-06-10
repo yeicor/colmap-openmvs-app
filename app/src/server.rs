@@ -223,8 +223,8 @@ pub async fn cancel_task(task_id: String) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 #[cfg_attr(not(feature = "demo"), post("/api/projects/{project_name}/pipeline"))]
-pub async fn run_pipeline(project_name: String, dry_run: bool) -> Result<String> {
-    backend::run_pipeline(project_name, dry_run).await
+pub async fn run_pipeline(project_name: String, recover_logs: bool) -> Result<String> {
+    backend::run_pipeline(project_name, recover_logs).await
 }
 
 #[cfg_attr(not(feature = "demo"), get("/api/projects/{project_name}/run-status"))]

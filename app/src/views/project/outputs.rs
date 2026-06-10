@@ -13,6 +13,7 @@ use dioxus_free_icons::icons::bs_icons::{
 };
 use dioxus_free_icons::Icon;
 use std::collections::{HashMap, HashSet};
+use std::io::{Read, Write};
 use tracing::{debug, error, info};
 
 // ---------------------------------------------------------------------------
@@ -62,6 +63,19 @@ fn js_escape(s: &str) -> String {
         .replace('\'', "\\'")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
+}
+
+/// Yield control back to the event loop so the UI stays responsive
+/// during long-running synchronous work (e.g. ZIP compression).
+#[cfg(target_arch = "wasm32")]
+async fn yield_to_event_loop() {
+    gloo_timers::future::TimeoutFuture::new(0).await;
+}
+
+/// Yield control back to the event loop (non-WASM, e.g. server-side tokio).
+#[cfg(not(target_arch = "wasm32"))]
+async fn yield_to_event_loop() {
+    tokio::task::yield_now().await;
 }
 
 /// Pick an emoji icon based on file extension.
@@ -293,6 +307,60 @@ fn zip_entry_path(relative_path: &str, folder_path: &str) -> String {
 // Async folder download / restore helpers (called from spawn blocks)
 // ---------------------------------------------------------------------------
 
+/// Create a Blob from the ZIP bytes and trigger a browser download.
+///
+/// On WASM targets this uses `web-sys` / `js-sys` to build the Blob directly
+/// from a view into WASM linear memory, avoiding costly base64 serialization.
+/// Falls back to base64 + eval on other targets.
+#[cfg(target_arch = "wasm32")]
+async fn trigger_zip_download(zip_bytes: Vec<u8>, zip_name: &str) {
+    use js_sys::Array;
+
+    // SAFETY: we create a short-lived view into WASM memory and immediately
+    // hand it off to the Blob constructor (which copies the data). No
+    // allocations or yielding happen between the view and the Blob call.
+    let uint8_view = unsafe { js_sys::Uint8Array::view(&zip_bytes) };
+    let arr = Array::new();
+    arr.push(uint8_view.as_ref());
+
+    let mut opts = web_sys::BlobPropertyBag::new();
+    opts.set_type("application/zip");
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(arr.as_ref(), &opts)
+        .expect("Failed to create Blob from ZIP bytes");
+    let url =
+        web_sys::Url::create_object_url_with_blob(&blob).expect("Failed to create object URL");
+
+    // Minimal one-shot eval: just create an anchor and click it.
+    let zip_name_esc = js_escape(zip_name);
+    let js = format!(
+        r#"const a = document.createElement('a');
+a.href = '{url}';
+a.download = '{zip_name_esc}';
+document.body.appendChild(a);
+a.click();
+setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(a.href); }}, 10000);"#
+    );
+    let _ = eval(&js).await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn trigger_zip_download(zip_bytes: Vec<u8>, zip_name: &str) {
+    // Fallback path (e.g. server-side tests): base64 + eval.
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&zip_bytes);
+    let zip_name_esc = js_escape(zip_name);
+    let js = format!(
+        r#"const b64 = '{b64}';
+const blob = new Blob([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], {{type: 'application/zip'}});
+const a = document.createElement('a');
+a.href = URL.createObjectURL(blob);
+a.download = '{zip_name_esc}';
+document.body.appendChild(a);
+a.click();
+setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(a.href); }}, 10000);"#
+    );
+    let _ = eval(&js).await;
+}
+
 /// Download every file under `folder_path` and save the user a ZIP archive.
 ///
 /// On error, still exports a partial zip with whatever files were successfully
@@ -374,40 +442,31 @@ async fn download_folder_zip(
         return;
     }
 
-    // Build a JSON array of all file entries for the JS side.
-    let mut items = Vec::with_capacity(file_data.len());
-    for (zpath, bytes) in &file_data {
-        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-        let path_json = serde_json::to_string(zpath).unwrap_or_default();
-        let b64_json = serde_json::to_string(&b64).unwrap_or_default();
-        items.push(format!(r#"{{"path":{},"b64":{}}}"#, path_json, b64_json));
+    // Create ZIP archive in memory using the Rust `zip` crate.
+    let mut zip_buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip_writer = zip::ZipWriter::new(&mut zip_buf);
+        for (zpath, bytes) in &file_data {
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            if let Err(e) = zip_writer.start_file(zpath, options) {
+                error!("Failed to start ZIP entry {}: {e}", zpath);
+            }
+            if let Err(e) = zip_writer.write_all(bytes) {
+                error!("Failed to write ZIP entry {}: {e}", zpath);
+            }
+            // Yield to the event loop so the UI stays responsive during
+            // ZIP compression (which may block for large files).
+            yield_to_event_loop().await;
+        }
+        if let Err(e) = zip_writer.finish() {
+            error!("Failed to finish ZIP: {e}");
+        }
     }
-    let json_array = format!("[{}]", items.join(","));
+    let zip_bytes = zip_buf.into_inner();
 
-    // Feed all data as a single JSON literal into a one-shot eval.
-    let zip_name_esc = js_escape(zip_name);
-    let js = format!(
-        r#"(async function() {{
-    const JSZip = (await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm')).default;
-    const zip = new JSZip();
-    const files = {json_array};
-    for (const f of files) {{
-        zip.file(f.path, f.b64, {{base64: true}});
-    }}
-    const blob = await zip.generateAsync({{type: 'blob'}});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = '{zip_name_esc}';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {{
-        document.body.removeChild(a);
-        URL.revokeObjectURL(a.href);
-    }}, 10000);
-}})();"#
-    );
-
-    let _ = eval(&js).await;
+    // Trigger browser download using the optimal path for the current target.
+    trigger_zip_download(zip_bytes, zip_name).await;
 
     remove_toast(&mut toast_ctx, &progress_id);
 
@@ -445,6 +504,9 @@ async fn restore_from_zip(
     mut refresh_counter: Signal<u32>,
     mut toast_ctx: crate::mycomponents::ToastCtx,
 ) {
+    // The eval JS opens a file picker, reads the selected file as bytes
+    // (via native FileReader, no JSZip needed), and sends the raw ZIP bytes
+    // as a base64 string back to Rust for extraction.
     let js = r#"
 (async function() {
     const input = document.createElement('input');
@@ -459,30 +521,43 @@ async fn restore_from_zip(
     });
     document.body.removeChild(input);
 
-    if (!file) { dioxus.send(''); dioxus.send(''); return; }
+    if (!file) { dioxus.send(''); return; }
 
-    const JSZip = (await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm')).default;
-    const zip = await JSZip.loadAsync(file);
+    const bytes = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(new Uint8Array(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsArrayBuffer(file);
+    });
 
-    const entries = [];
-    zip.forEach((path, entry) => { if (!entry.dir) entries.push(path); });
-
-    dioxus.send(String(entries.length));
-
-    for (const path of entries) {
-        const data = await zip.files[path].async('base64');
-        dioxus.send(path);
-        dioxus.send(data);
+    // Convert Uint8Array to base64 string (chunked to avoid stack overflow).
+    const chunkSize = 65536;
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+        binary += String.fromCharCode.apply(null, chunk);
     }
-
+    const b64 = btoa(binary);
+    dioxus.send(b64);
     dioxus.send('__done__');
 })();
 "#;
 
     let mut eval_handle = document::eval(js);
 
-    // First value: total count, or empty string if cancelled.
-    let total_str = match eval_handle.recv::<String>().await {
+    // Receive the base64-encoded ZIP data.
+    let b64_data = match eval_handle.recv::<String>().await {
+        Ok(s) if s.is_empty() => {
+            // User cancelled the file picker.
+            add_toast(
+                &mut toast_ctx,
+                "Restore cancelled".to_string(),
+                ToastType::Info,
+                None,
+            );
+            restoring.set(false);
+            return;
+        }
         Ok(s) => s,
         Err(_) => {
             add_toast(
@@ -496,24 +571,16 @@ async fn restore_from_zip(
         }
     };
 
-    if total_str.is_empty() {
-        // User cancelled the file picker.
-        add_toast(
-            &mut toast_ctx,
-            "Restore cancelled".to_string(),
-            ToastType::Info,
-            None,
-        );
-        restoring.set(false);
-        return;
-    }
+    // Wait for the __done__ sentinel.
+    let _ = eval_handle.recv::<String>().await;
 
-    let total: usize = match total_str.parse() {
-        Ok(n) => n,
-        Err(_) => {
+    // Decode base64 into raw ZIP bytes.
+    let zip_bytes = match base64::engine::general_purpose::STANDARD.decode(&b64_data) {
+        Ok(b) => b,
+        Err(e) => {
             add_toast(
                 &mut toast_ctx,
-                "Invalid zip file".to_string(),
+                format!("Invalid ZIP data: {e}"),
                 ToastType::Error,
                 None,
             );
@@ -522,6 +589,23 @@ async fn restore_from_zip(
         }
     };
 
+    // Parse the ZIP archive using the Rust `zip` crate.
+    let cursor = std::io::Cursor::new(zip_bytes);
+    let mut archive = match zip::ZipArchive::new(cursor) {
+        Ok(a) => a,
+        Err(e) => {
+            add_toast(
+                &mut toast_ctx,
+                format!("Invalid ZIP file: {e}"),
+                ToastType::Error,
+                None,
+            );
+            restoring.set(false);
+            return;
+        }
+    };
+
+    let total = archive.len();
     let progress_id = add_toast(
         &mut toast_ctx,
         format!("Restoring {} files into '{}'…", total, folder_path),
@@ -530,18 +614,28 @@ async fn restore_from_zip(
     );
 
     let mut done = 0usize;
-    loop {
-        let path = match eval_handle.recv::<String>().await {
-            Ok(p) => p,
+    for i in 0..total {
+        let mut entry = match archive.by_index(i) {
+            Ok(e) => e,
             Err(_) => break,
         };
-        if path == "__done__" {
+
+        if entry.is_dir() {
+            continue;
+        }
+
+        let path = entry.name().to_string();
+
+        let mut bytes = Vec::new();
+        if entry.read_to_end(&mut bytes).is_err() {
+            add_toast(
+                &mut toast_ctx,
+                format!("Failed to read {} from ZIP", path),
+                ToastType::Error,
+                None,
+            );
             break;
         }
-        let b64_data = match eval_handle.recv::<String>().await {
-            Ok(d) => d,
-            Err(_) => break,
-        };
 
         // Prepend folder prefix.
         let target_path = if folder_path.is_empty() {
@@ -550,39 +644,25 @@ async fn restore_from_zip(
             format!("{}/{}", folder_path, path)
         };
 
-        // Decode and upload.
-        match base64::engine::general_purpose::STANDARD.decode(&b64_data) {
-            Ok(bytes) => {
-                let byte_stream =
-                    crate::fullstack_compat::ByteStream::new(futures::stream::once(async move {
-                        crate::fullstack_compat::body::Bytes::from(bytes)
-                    }));
-                match write_project_output(project_name.to_string(), target_path, byte_stream).await
-                {
-                    Ok(()) => {
-                        done += 1;
-                        update_toast(
-                            &mut toast_ctx,
-                            &progress_id,
-                            Some(format!("Restoring {}", path)),
-                            Some(Some((done, total))),
-                        );
-                    }
-                    Err(e) => {
-                        add_toast(
-                            &mut toast_ctx,
-                            format!("Failed to write {}: {e}", path),
-                            ToastType::Error,
-                            None,
-                        );
-                        break;
-                    }
-                }
+        // Upload.
+        let byte_stream =
+            crate::fullstack_compat::ByteStream::new(futures::stream::once(async move {
+                crate::fullstack_compat::body::Bytes::from(bytes)
+            }));
+        match write_project_output(project_name.to_string(), target_path, byte_stream).await {
+            Ok(()) => {
+                done += 1;
+                update_toast(
+                    &mut toast_ctx,
+                    &progress_id,
+                    Some(format!("Restoring {}", path)),
+                    Some(Some((done, total))),
+                );
             }
             Err(e) => {
                 add_toast(
                     &mut toast_ctx,
-                    format!("Failed to decode {}: {e}", path),
+                    format!("Failed to write {}: {e}", path),
                     ToastType::Error,
                     None,
                 );
@@ -601,10 +681,6 @@ async fn restore_from_zip(
     );
     refresh_counter += 1;
 }
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Component

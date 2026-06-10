@@ -123,7 +123,8 @@ pub fn Viewer(name: String, file_encoded: String, cfg: String) -> Element {
 
                     let js = format!(
                         r#"
-import('{viewer_url}').then(async function(mod) {{
+var _viewerAbsUrl = new URL('{viewer_url}', window.location.href).href;
+import(_viewerAbsUrl).then(async function(mod) {{
     try {{
         var container = document.getElementById('{container_id}');
         if (!container) {{ console.error('Viewer container not found'); return; }}
@@ -144,26 +145,11 @@ import('{viewer_url}').then(async function(mod) {{
 "#
                     );
 
-                    #[cfg(target_arch = "wasm32")]
-                    if let Some(window) = web_sys::window() {
-                        if let Some(doc) = window.document() {
-                            if let Ok(script) = doc.create_element("script") {
-                                script.set_text_content(Some(&js));
-                                if let Some(body) = doc.body() {
-                                    let _ = body.append_child(&script);
-                                    loading.set(false);
-                                }
-                            }
-                        }
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        if let Err(e) = dioxus::document::eval(&js).await {
-                            error!(error = ?e, "Failed to mount viewer JS");
-                            err.set(Some(format!("Failed to launch viewer: {e}")));
-                        } else {
-                            loading.set(false);
-                        }
+                    if let Err(e) = dioxus::document::eval(&js).await {
+                        error!(error = ?e, "Failed to mount viewer JS");
+                        err.set(Some(format!("Failed to launch viewer: {e}")));
+                    } else {
+                        loading.set(false);
                     }
                 }
                 Err(e) => {
@@ -219,7 +205,7 @@ import('{viewer_url}').then(async function(mod) {{
                     class: "viewer-info-btn",
                     title: "Model info",
                     onclick: move |_| show_info.set(!show_info()),
-                    "ⓘ"
+                    "ℹ️"
                 }
 
                 // Back to outputs — placed right-most, consistent with the
@@ -229,7 +215,7 @@ import('{viewer_url}').then(async function(mod) {{
                     onclick: move |_| {
                         let _ = navigator().push(crate::Route::ProjectOutputs { name: name_for_back.clone() });
                     },
-                    span { class: "viewer-back-arrow", "←" }
+                    span { class: "viewer-back-arrow", "🔙" }
                     span { class: "viewer-back-label", "Back" }
                 }
             }

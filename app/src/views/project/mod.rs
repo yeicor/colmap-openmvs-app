@@ -65,7 +65,7 @@ pub fn ProjectOutputs(name: String) -> Element {
 /// Value is 0.0..=1.0; `None` means no pipeline is active.
 pub type PipelineProgressCtx = Signal<Option<f32>>;
 
-/// Whether a pipeline (full run or dry-run) is currently running.
+/// Whether a pipeline (full run or recover-logs) is currently running.
 /// Written by LogsTab, read by the PageHeader Run/Cancel button.
 pub type PipelineIsRunningCtx = Signal<bool>;
 

@@ -1,4 +1,4 @@
-//! Android-specific startup tasks to prepare the runtime environment.
+//! Android-specific startup tasks to prepare the PRoot runtime environment.
 //!
 //! On Android, the APK's native libraries (jniLibs) are extracted to disk by the
 //! Android installer. Only true ELF binaries are placed in jniLibs (as
@@ -19,6 +19,7 @@
 
 use crate::runtimes::shared;
 use crate::runtimes::ImageMetadata;
+
 use std::io::{Cursor, Read};
 use std::path::PathBuf;
 use std::sync::OnceLock;

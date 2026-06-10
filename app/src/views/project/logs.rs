@@ -196,9 +196,9 @@ pub enum PipelineStatus {
 // Helper: find a running task of a given kind for this project
 // ---------------------------------------------------------------------------
 
-async fn find_running_task(project_name: &str, dry_run: bool) -> Option<String> {
-    let kind_filter = if dry_run {
-        TaskKind::DryRunPipeline
+async fn find_running_task(project_name: &str, recover_logs: bool) -> Option<String> {
+    let kind_filter = if recover_logs {
+        TaskKind::RecoverPipelineLogs
     } else {
         TaskKind::RunPipeline
     };
@@ -248,7 +248,7 @@ fn spawn_pipeline_stream(
     mut expanded_stage: Signal<Option<u32>>,
     mut pipeline_progress_ctx: Signal<Option<f32>>,
     mut error_msg: Signal<String>,
-    is_dry_run: bool,
+    is_recover_logs: bool,
     mut tasks_ctx: TasksCtx,
     mut recovering: Signal<bool>,
 ) {
@@ -333,7 +333,7 @@ fn spawn_pipeline_stream(
                                 }
                                 let cached = matches!(stage_status, PipelineStageStatus::Cached);
                                 let skipped = matches!(stage_status, PipelineStageStatus::Skipped);
-                                let actually_running = !cached && !skipped && !is_dry_run;
+                                let actually_running = !cached && !skipped && !is_recover_logs;
                                 {
                                     let stage = &mut update.stages[stage_index as usize];
                                     stage.name = stage_name.clone();
@@ -419,7 +419,7 @@ fn spawn_pipeline_stream(
                             }
                             TaskEvent::PipelineStageCompleted { stage_index, .. } => {
                                 if let Some(stage) = update.stages.get_mut(stage_index as usize) {
-                                    if !is_dry_run || stage.cached || stage.skipped {
+                                    if !is_recover_logs || stage.cached || stage.skipped {
                                         stage.completed = true;
                                         if stage.pipeline_stage_num.is_some() {
                                             stage.progress = Some(1.0);
@@ -444,7 +444,7 @@ fn spawn_pipeline_stream(
                                 }
                             }
                             TaskEvent::Completed => {
-                                if is_dry_run {
+                                if is_recover_logs {
                                     update.pipeline_status = PipelineStatus::Idle;
                                 } else {
                                     update.pipeline_status = PipelineStatus::Completed;
@@ -454,7 +454,7 @@ fn spawn_pipeline_stream(
                                 should_terminate = true;
                             }
                             TaskEvent::Failed(msg) => {
-                                if is_dry_run {
+                                if is_recover_logs {
                                     update.pipeline_status = PipelineStatus::Idle;
                                 } else {
                                     update.pipeline_status = PipelineStatus::Failed(msg);
@@ -512,7 +512,7 @@ pub fn LogsTab(project_name: String) -> Element {
     let mut active_task_id = use_signal(String::new);
     let mut expanded_stage = use_signal(|| Option::<u32>::None);
     let mut auto_scroll = use_signal(|| true);
-    let mut is_current_dry_run = use_signal(|| false);
+    let mut is_current_recover_logs = use_signal(|| false);
     // `true` while the tab is reconnecting to a running pipeline and
     // replaying its event log.  UI shows a spinner + message instead
     // of an empty placeholder during this phase.
@@ -595,7 +595,7 @@ pub fn LogsTab(project_name: String) -> Element {
         ));
     });
 
-    // ── On mount: reconnect or auto-start dry-run ─────────────────────────
+    // ── On mount: reconnect or auto-start recover-logs ─────────────────────────
     //
     // We intentionally read NO signals in the synchronous closure body so
     // this effect runs exactly once (on mount).  All signal reads happen
@@ -605,7 +605,7 @@ pub fn LogsTab(project_name: String) -> Element {
         let project_name = project_name_mount.clone();
         spawn(async move {
             // If the command watcher already set Running (e.g. user clicked
-            // Run before this tab was mounted), skip the auto dry-run so we
+            // Run before this tab was mounted), skip the auto recover-logs so we
             // don't race with the full run that the command watcher starts.
             if matches!(pipeline_status.peek().clone(), PipelineStatus::Running) {
                 return;
@@ -615,7 +615,7 @@ pub fn LogsTab(project_name: String) -> Element {
             if let Some(task_id) = find_running_task(&project_name, false).await {
                 active_task_id.set(task_id.clone());
                 pipeline_status.set(PipelineStatus::Running);
-                is_current_dry_run.set(false);
+                is_current_recover_logs.set(false);
                 tasks_ctx.write().register(
                     task_id.clone(),
                     format!("Pipeline: {}", project_name),
@@ -638,15 +638,15 @@ pub fn LogsTab(project_name: String) -> Element {
                 return;
             }
 
-            // 2. Reconnect to a running dry-run.
+            // 2. Reconnect to a running recover-logs.
             if let Some(task_id) = find_running_task(&project_name, true).await {
                 active_task_id.set(task_id.clone());
                 pipeline_status.set(PipelineStatus::Running);
-                is_current_dry_run.set(true);
+                is_current_recover_logs.set(true);
                 tasks_ctx.write().register(
                     task_id.clone(),
-                    format!("Dry-run: {}", project_name),
-                    TaskKind::DryRunPipeline,
+                    format!("Recover-logs: {}", project_name),
+                    TaskKind::RecoverPipelineLogs,
                 );
                 recovering.set(true);
                 spawn_pipeline_stream(
@@ -665,16 +665,16 @@ pub fn LogsTab(project_name: String) -> Element {
                 return;
             }
 
-            // 3. Auto-start a dry-run to show cached/pending stage status.
+            // 3. Auto-start a recover-logs to show cached/pending stage status.
             match run_pipeline(project_name.clone(), true).await {
                 Ok(task_id) => {
                     active_task_id.set(task_id.clone());
                     pipeline_status.set(PipelineStatus::Running);
-                    is_current_dry_run.set(true);
+                    is_current_recover_logs.set(true);
                     tasks_ctx.write().register(
                         task_id.clone(),
-                        format!("Dry-run: {}", project_name),
-                        TaskKind::DryRunPipeline,
+                        format!("Recover-logs: {}", project_name),
+                        TaskKind::RecoverPipelineLogs,
                     );
                     recovering.set(true);
                     spawn_pipeline_stream(
@@ -712,10 +712,10 @@ pub fn LogsTab(project_name: String) -> Element {
             // Consume the command immediately.
             pipeline_command.set(None);
             // Mark as running synchronously so the mount-effect task won't
-            // race and also start a dry-run.
+            // race and also start a recover-logs.
             pipeline_status.set(PipelineStatus::Running);
-            // Reset runtime state but preserve cached/skipped flags from dry-run.
-            // This allows us to recover from a dry-run and start the real pipeline
+            // Reset runtime state but preserve cached/skipped flags from recover-logs.
+            // This allows us to recover from a recover-logs and start the real pipeline
             // while keeping the cached stage information, so cached stages will be
             // marked as done immediately when their PipelineStageStarted event arrives
             // with status=cached.
@@ -730,7 +730,7 @@ pub fn LogsTab(project_name: String) -> Element {
             drop(s);
             error_msg.set(String::new());
             pipeline_progress_ctx.set(Some(0.0));
-            is_current_dry_run.set(false);
+            is_current_recover_logs.set(false);
 
             let project_name = project_name_cmd.clone();
             spawn(async move {
@@ -776,7 +776,6 @@ pub fn LogsTab(project_name: String) -> Element {
 
     // ── Snapshot for render ───────────────────────────────────────────────
     let stages_snapshot = stages();
-    let is_running = matches!(pipeline_status(), PipelineStatus::Running);
     let is_recovering = recovering();
 
     rsx! {
@@ -793,7 +792,7 @@ pub fn LogsTab(project_name: String) -> Element {
                     PipelineStatus::Running => rsx! {
                         span {
                             class: "logs-status logs-status-running",
-                            if is_current_dry_run() { "● Checking…" } else { "● Running" }
+                            if is_current_recover_logs() { "● Checking…" } else { "● Running" }
                         }
                     },
                     PipelineStatus::Completed => rsx! {
@@ -844,11 +843,8 @@ pub fn LogsTab(project_name: String) -> Element {
             } else if stages_snapshot.is_empty() {
                 div {
                     class: "logs-placeholder",
-                    if is_running {
-                        "Checking pipeline state…"
-                    } else {
-                        "Press ▶️ Run in the header to start the reconstruction."
-                    }
+                    div { class: "spinner" }
+                    span { "Loading..." }
                 }
             } else {
                 div {

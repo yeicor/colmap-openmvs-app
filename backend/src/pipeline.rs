@@ -32,8 +32,9 @@ static FRACTION_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d+)\s*/\s*(\d+)").
 // ---------------------------------------------------------------------------
 
 /// Start the reconstruction pipeline for a project. Returns the task ID.
-pub async fn run_pipeline(project_name: String, dry_run: bool) -> dioxus::Result<String> {
-    let span = span!(Level::DEBUG, "run_pipeline", project = %project_name, dry_run = %dry_run);
+pub async fn run_pipeline(project_name: String, recover_logs: bool) -> dioxus::Result<String> {
+    let span =
+        span!(Level::DEBUG, "run_pipeline", project = %project_name, recover_logs = %recover_logs);
     let _enter = span.enter();
 
     debug!("Starting pipeline execution");
@@ -61,8 +62,8 @@ pub async fn run_pipeline(project_name: String, dry_run: bool) -> dioxus::Result
         })?;
     debug!(project_path = %project_path.display(), "Resolved project path");
 
-    let task_kind = if dry_run {
-        TaskKind::DryRunPipeline
+    let task_kind = if recover_logs {
+        TaskKind::RecoverPipelineLogs
     } else {
         TaskKind::RunPipeline
     };
@@ -77,7 +78,7 @@ pub async fn run_pipeline(project_name: String, dry_run: bool) -> dioxus::Result
             runtime,
             image_tag,
             project_path.to_string_lossy().into_owned(),
-            dry_run,
+            recover_logs,
         )
         .await
         {
@@ -98,9 +99,9 @@ async fn run_pipeline_task(
     runtime: String,
     image_tag: String,
     project_path: String,
-    dry_run: bool,
+    recover_logs: bool,
 ) -> Result<()> {
-    let span = span!(Level::DEBUG, "run_pipeline_task", task_id = %task_id, runtime = %runtime, project_path = %project_path, dry_run = %dry_run);
+    let span = span!(Level::DEBUG, "run_pipeline_task", task_id = %task_id, runtime = %runtime, project_path = %project_path, recover_logs = %recover_logs);
     let _enter = span.enter();
 
     info!("Starting pipeline container");
@@ -122,11 +123,11 @@ async fn run_pipeline_task(
     }];
     debug!(count = mounts.len(), "Configured container mounts");
 
-    // Build args: /work -v [--dry-run]
+    // Build args: /work -v [--recover-logs]
     let mut args = vec!["/work".to_string(), "-v".to_string()];
-    if dry_run {
-        args.push("--dry-run".to_string());
-        debug!("Added --dry-run flag to container arguments");
+    if recover_logs {
+        args.push("--recover-logs".to_string());
+        debug!("Added --recover-logs flag to container arguments");
     }
     debug!(args = ?args, "Container arguments prepared");
 
@@ -236,7 +237,7 @@ async fn run_pipeline_task(
     log_handle.await.ok();
     info!("Log reading completed");
 
-    if !dry_run && !exit_status.success() {
+    if !recover_logs && !exit_status.success() {
         let msg = format!("Pipeline failed with exit code {:?}", exit_status.code());
         error!("Pipeline execution failed");
         crate::task_registry::publish_event(&task_id, TaskEvent::Failed(msg.clone()));

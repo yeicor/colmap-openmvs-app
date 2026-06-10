@@ -158,25 +158,38 @@ pub(crate) fn parse_image_ref(image: &str) -> (String, String, String) {
 
 fn registry_token(registry: &str, _repo: &str) -> String {
     let probe_url = format!("https://{}/v2/", registry);
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(15))
-        .build();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(std::time::Duration::from_secs(15)))
+        .build()
+        .into();
 
-    let response = match agent.head(&probe_url).call() {
+    // Use http_status_as_error(false) to inspect non-2xx responses manually
+    let response = match agent
+        .head(&probe_url)
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+    {
         Ok(r) => r,
-        Err(ureq::Error::Status(401, r)) => r,
-        Err(ureq::Error::Status(code, _)) => {
-            tracing::warn!("Registry probe returned {code}");
-            return String::new();
-        }
         Err(e) => {
             tracing::warn!("Registry probe failed: {e}");
             return String::new();
         }
     };
 
+    let status = response.status();
+    if status.as_u16() == 401 {
+        // 401 is expected — continue to parse auth challenge
+    } else if !status.is_success() {
+        tracing::warn!("Registry probe returned {status}");
+        return String::new();
+    }
+
     let auth_header = response
-        .header("www-authenticate")
+        .headers()
+        .get("www-authenticate")
+        .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
 
@@ -216,10 +229,11 @@ fn registry_token(registry: &str, _repo: &str) -> String {
 
     let body = agent
         .get(&token_url)
-        .set("Accept", "application/json")
+        .header("Accept", "application/json")
         .call()
         .unwrap_or_else(|e| panic!("Failed to get registry token from {realm}: {e}"))
-        .into_string()
+        .into_body()
+        .read_to_string()
         .expect("token response UTF-8");
 
     #[derive(serde::Deserialize)]
@@ -239,28 +253,36 @@ fn registry_token(registry: &str, _repo: &str) -> String {
 
 fn registry_fetch(registry: &str, path: &str, accept: Option<&str>, token: &str) -> Vec<u8> {
     let url = format!("https://{registry}{path}");
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(30))
-        .build();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(std::time::Duration::from_secs(30)))
+        .build()
+        .into();
 
-    let mut req = agent.get(&url);
+    let mut req = agent.get(&url).config().http_status_as_error(false).build();
     if let Some(accept_val) = accept {
-        req = req.set("Accept", accept_val);
+        req = req.header("Accept", accept_val);
     }
     if !token.is_empty() {
-        req = req.set("Authorization", &format!("Bearer {token}"));
+        req = req.header("Authorization", &format!("Bearer {token}"));
     }
 
-    let response = req.call().unwrap_or_else(|e| {
+    let mut response = req.call().unwrap_or_else(|e| {
         panic!("registry_fetch failed for {registry}{path}: {e}");
     });
 
-    let mut body: Vec<u8> = Vec::new();
+    if !response.status().is_success() {
+        panic!(
+            "registry_fetch got HTTP {} for {registry}{path}",
+            response.status()
+        );
+    }
+
     response
-        .into_reader()
-        .read_to_end(&mut body)
-        .expect("read registry response body");
-    body
+        .body_mut()
+        .with_config()
+        .limit(200 * 1024 * 1024) // 200 MB limit for image layers
+        .read_to_vec()
+        .expect("read registry response body")
 }
 
 // ---------------------------------------------------------------------------

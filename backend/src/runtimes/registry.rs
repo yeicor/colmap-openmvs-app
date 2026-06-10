@@ -201,7 +201,7 @@ impl RemoteImage {
 /// Docker Registry V2 API client
 pub struct RegistryClient {
     registry_url: String,
-    client: reqwest::Client,
+    agent: ureq::Agent,
 }
 
 impl RegistryClient {
@@ -212,9 +212,13 @@ impl RegistryClient {
 
     /// Create a new registry client for a custom registry
     pub fn new(registry_url: String) -> Self {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .user_agent("colmap-openmvs-app")
+            .build()
+            .into();
         RegistryClient {
             registry_url: registry_url.trim_end_matches('/').to_string(),
-            client: reqwest::Client::new(),
+            agent,
         }
     }
 
@@ -233,18 +237,21 @@ impl RegistryClient {
         };
 
         let response = self
-            .client
+            .agent
             .get(&url)
-            .header("User-Agent", "colmap-openmvs-app")
-            .send()
-            .await
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call()
             .map_err(|e| anyhow::anyhow!("Failed to fetch tags: {}", e))?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response.into_body().read_to_string().unwrap_or_default();
             return Err(anyhow::anyhow!(
                 "Registry returned status {}: {}",
-                response.status(),
-                response.text().await.unwrap_or_default()
+                status,
+                body
             ));
         }
 
@@ -262,9 +269,11 @@ impl RegistryClient {
                 results: Vec<DockerHubTag>,
             }
 
-            let data: DockerHubResponse = response
-                .json()
-                .await
+            let body = response
+                .into_body()
+                .read_to_vec()
+                .map_err(|e| anyhow::anyhow!("Failed to read response: {}", e))?;
+            let data: DockerHubResponse = serde_json::from_slice(&body)
                 .map_err(|e| anyhow::anyhow!("Failed to parse response: {}", e))?;
 
             let images = data
@@ -281,9 +290,11 @@ impl RegistryClient {
                 tags: Vec<String>,
             }
 
-            let data: RegistryResponse = response
-                .json()
-                .await
+            let body = response
+                .into_body()
+                .read_to_vec()
+                .map_err(|e| anyhow::anyhow!("Failed to read response: {}", e))?;
+            let data: RegistryResponse = serde_json::from_slice(&body)
                 .map_err(|e| anyhow::anyhow!("Failed to parse response: {}", e))?;
 
             let images = data
@@ -302,15 +313,16 @@ impl RegistryClient {
         let url = format!("{}/v2/{}/manifests/{}", self.registry_url, repo, tag_str);
 
         let response = self
-            .client
+            .agent
             .get(&url)
             .header(
                 "Accept",
                 "application/vnd.docker.distribution.manifest.v2+json",
             )
-            .header("User-Agent", "colmap-openmvs-app")
-            .send()
-            .await
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call()
             .map_err(|e| anyhow::anyhow!("Failed to fetch manifest: {}", e))?;
 
         if !response.status().is_success() {
@@ -321,8 +333,8 @@ impl RegistryClient {
         }
 
         response
-            .text()
-            .await
+            .into_body()
+            .read_to_string()
             .map_err(|e| anyhow::anyhow!("Failed to read manifest: {}", e))
     }
 
@@ -332,15 +344,16 @@ impl RegistryClient {
         let url = format!("{}/v2/{}/manifests/{}", self.registry_url, repo, tag_str);
 
         let response = self
-            .client
+            .agent
             .head(&url)
             .header(
                 "Accept",
                 "application/vnd.docker.distribution.manifest.v2+json",
             )
-            .header("User-Agent", "colmap-openmvs-app")
-            .send()
-            .await
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call()
             .map_err(|e| anyhow::anyhow!("Failed to fetch manifest: {}", e))?;
 
         if !response.status().is_success() {
@@ -370,11 +383,12 @@ impl RegistryClient {
             );
 
             let response = self
-                .client
+                .agent
                 .get(&url)
-                .header("User-Agent", "colmap-openmvs-app")
-                .send()
-                .await
+                .config()
+                .http_status_as_error(false)
+                .build()
+                .call()
                 .map_err(|e| anyhow::anyhow!("Failed to search: {}", e))?;
 
             #[derive(Deserialize)]
@@ -387,9 +401,11 @@ impl RegistryClient {
                 results: Vec<SearchResult>,
             }
 
-            let data: SearchResponse = response
-                .json()
-                .await
+            let body = response
+                .into_body()
+                .read_to_vec()
+                .map_err(|e| anyhow::anyhow!("Failed to read search results: {}", e))?;
+            let data: SearchResponse = serde_json::from_slice(&body)
                 .map_err(|e| anyhow::anyhow!("Failed to parse search results: {}", e))?;
 
             let mut images = Vec::new();

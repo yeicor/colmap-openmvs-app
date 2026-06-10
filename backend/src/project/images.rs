@@ -113,9 +113,9 @@ pub async fn get_project_image_bytes(
     let bytes = tokio::fs::read(&canonical_image)
         .await
         .map_err(|e| anyhow!("Failed to read image file: {}", e))?;
-    Ok(ByteStream::new(
-        futures::stream::once(async move { Bytes::from(bytes) }),
-    ))
+    Ok(ByteStream::new(futures::stream::once(async move {
+        Bytes::from(bytes)
+    })))
 }
 
 pub async fn add_project_image(
@@ -350,29 +350,33 @@ async fn download_github_images_stream(
     let _ = tx.unbounded_send(DemoProgressEvent::FetchingFileList);
 
     let api_url = format!("https://api.github.com/repos/{}/contents/{}", repo, path);
-    let client = reqwest::Client::builder()
+    let agent: ureq::Agent = ureq::Agent::config_builder()
         .user_agent("colmap-openmvs-app/1.0")
         .build()
-        .map_err(|e| anyhow!("Failed to build HTTP client: {}", e))?;
+        .into();
 
-    let response = client
+    let response = agent
         .get(&api_url)
-        .send()
-        .await
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
         .map_err(|e| anyhow!("Failed to fetch GitHub directory listing: {}", e))?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let status = response.status().as_u16();
+        let body = response.into_body().read_to_string().unwrap_or_default();
         let _ = tx.unbounded_send(DemoProgressEvent::Error {
             message: format!("GitHub API returned {}: {}", status, body),
         });
         return Ok(());
     }
 
-    let entries: Vec<GitHubEntry> = response
-        .json()
-        .await
+    let body = response
+        .into_body()
+        .read_to_vec()
+        .map_err(|e| anyhow!("Failed to read GitHub API response: {}", e))?;
+    let entries: Vec<GitHubEntry> = serde_json::from_slice(&body)
         .map_err(|e| anyhow!("Failed to parse GitHub API response: {}", e))?;
 
     let jpg_files: Vec<GitHubEntry> = entries
@@ -405,19 +409,19 @@ async fn download_github_images_stream(
             total,
         });
 
-        let data = match client.get(&download_url).send().await {
-            Ok(resp) => match resp.bytes().await {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    let _ = tx.unbounded_send(DemoProgressEvent::Error {
-                        message: format!("Failed to read {}: {}", entry.name, e),
-                    });
-                    return Ok(());
-                }
-            },
+        let data = match agent.get(&download_url).call() {
+            Ok(resp) => resp
+                .into_body()
+                .read_to_vec()
+                .map_err(|e| anyhow!("Failed to read {}: {}", entry.name, e)),
+            Err(e) => Err(anyhow!("Failed to download {}: {}", entry.name, e)),
+        };
+
+        let data = match data {
+            Ok(bytes) => bytes,
             Err(e) => {
                 let _ = tx.unbounded_send(DemoProgressEvent::Error {
-                    message: format!("Failed to download {}: {}", entry.name, e),
+                    message: e.to_string(),
                 });
                 return Ok(());
             }

@@ -974,7 +974,8 @@ fn fetch_url(url: &str) -> String {
         .call()
         .unwrap_or_else(|e| panic!("HTTP GET failed for {url}: {e}"));
     response
-        .into_string()
+        .into_body()
+        .read_to_string()
         .expect("response body is valid UTF-8")
 }
 
@@ -982,12 +983,10 @@ fn fetch_url_bytes(url: &str) -> Vec<u8> {
     let response = ureq::get(url)
         .call()
         .unwrap_or_else(|e| panic!("HTTP GET failed for {url}: {e}"));
-    let mut body: Vec<u8> = Vec::new();
     response
-        .into_reader()
-        .read_to_end(&mut body)
-        .expect("read response body");
-    body
+        .into_body()
+        .read_to_vec()
+        .expect("read response body")
 }
 
 fn set_executable(path: &Path) {

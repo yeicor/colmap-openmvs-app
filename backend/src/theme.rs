@@ -50,8 +50,19 @@ pub async fn get_dark_mode() -> dioxus::Result<Option<bool>> {
     Ok(None)
 }
 
+/// Query the Android system UI mode via JNI
+///
+/// Equivalent Java for dark-mode detection:
+/// ```java
+/// int uiMode = context.getResources().getConfiguration().uiMode;
+/// boolean isDark =
+///     (uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+/// ```
 #[cfg(target_os = "android")]
-fn grab_vm_and_context() -> anyhow::Result<(jni::JavaVM, jni::objects::JObject<'static>)> {
+fn detect_android_dark_mode() -> anyhow::Result<bool> {
+    use jni::objects::JObject;
+    use jni::signature::{RuntimeFieldSignature, RuntimeMethodSignature};
+    use jni::strings::JNIString;
     use jni::JavaVM;
 
     let android_ctx = ndk_context::android_context();
@@ -63,56 +74,56 @@ fn grab_vm_and_context() -> anyhow::Result<(jni::JavaVM, jni::objects::JObject<'
         anyhow::bail!("Android context pointer is null – ndk-context not initialised");
     }
 
-    // SAFETY: the pointer is non-null and was written by the Android runtime.
-    let vm = unsafe { JavaVM::from_raw(android_ctx.vm().cast()) }?;
-    let context = unsafe { jni::objects::JObject::from_raw(android_ctx.context().cast()) };
+    // SAFETY: the pointer is non-null (checked above) and was written by the Android runtime.
+    let vm = unsafe { JavaVM::from_raw(android_ctx.vm().cast()) };
+    let context_ptr = android_ctx.context().cast();
 
-    Ok((vm, context))
-}
+    vm.attach_current_thread(move |env| {
+        // SAFETY: the context pointer is non-null and was provided by the Android runtime.
+        let context = unsafe { JObject::from_raw(env, context_ptr) };
 
-/// Query the Android system UI mode via JNI
-///
-/// Equivalent Java for dark-mode detection:
-/// ```java
-/// int uiMode = context.getResources().getConfiguration().uiMode;
-/// boolean isDark =
-///     (uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-/// ```
-#[cfg(target_os = "android")]
-fn detect_android_dark_mode() -> anyhow::Result<bool> {
-    let (vm, context) = grab_vm_and_context()?;
-    let mut env = vm.attach_current_thread()?;
+        // ── Detect dark mode ────────────────────────────────────────────────
+        let get_resources_sig =
+            RuntimeMethodSignature::from_str("()Landroid/content/res/Resources;")
+                .map_err(|e| anyhow::anyhow!("parsing getResources signature: {e}"))?;
+        let resources = env
+            .call_method(
+                &context,
+                JNIString::from("getResources"),
+                get_resources_sig.method_signature(),
+                &[],
+            )
+            .map_err(|e| anyhow::anyhow!("getResources() failed: {e}"))?
+            .l()
+            .map_err(|e| anyhow::anyhow!("getResources() return type coercion failed: {e}"))?;
 
-    // ── Detect dark mode ────────────────────────────────────────────────
-    let resources = env
-        .call_method(
-            &context,
-            "getResources",
-            "()Landroid/content/res/Resources;",
-            &[],
-        )
-        .map_err(|e| anyhow::anyhow!("getResources() failed: {e}"))?
-        .l()
-        .map_err(|e| anyhow::anyhow!("getResources() return type error: {e}"))?;
+        let get_config_sig =
+            RuntimeMethodSignature::from_str("()Landroid/content/res/Configuration;")
+                .map_err(|e| anyhow::anyhow!("parsing getConfiguration signature: {e}"))?;
+        let configuration = env
+            .call_method(
+                &resources,
+                JNIString::from("getConfiguration"),
+                get_config_sig.method_signature(),
+                &[],
+            )
+            .map_err(|e| anyhow::anyhow!("getConfiguration() failed: {e}"))?
+            .l()
+            .map_err(|e| anyhow::anyhow!("getConfiguration() return type coercion failed: {e}"))?;
 
-    let configuration = env
-        .call_method(
-            &resources,
-            "getConfiguration",
-            "()Landroid/content/res/Configuration;",
-            &[],
-        )
-        .map_err(|e| anyhow::anyhow!("getConfiguration() failed: {e}"))?
-        .l()
-        .map_err(|e| anyhow::anyhow!("getConfiguration() return type error: {e}"))?;
+        let ui_mode_sig = RuntimeFieldSignature::from_str("I")
+            .map_err(|e| anyhow::anyhow!("parsing uiMode signature: {e}"))?;
+        let ui_mode = env
+            .get_field(
+                &configuration,
+                JNIString::from("uiMode"),
+                ui_mode_sig.field_signature(),
+            )
+            .map_err(|e| anyhow::anyhow!("uiMode field access failed: {e}"))?
+            .i()
+            .map_err(|e| anyhow::anyhow!("uiMode type coercion failed: {e}"))?;
 
-    let ui_mode = env
-        .get_field(&configuration, "uiMode", "I")
-        .map_err(|e| anyhow::anyhow!("uiMode field access failed: {e}"))?
-        .i()
-        .map_err(|e| anyhow::anyhow!("uiMode type error: {e}"))?;
-
-    let is_dark = (ui_mode & 0x30) == 0x20;
-
-    Ok(is_dark)
+        let is_dark = (ui_mode & 0x30) == 0x20;
+        Ok(is_dark)
+    })
 }

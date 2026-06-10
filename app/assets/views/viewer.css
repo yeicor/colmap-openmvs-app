@@ -52,25 +52,25 @@ html[data-theme="light"] .viewer-page {
 
 .viewer-back-btn,
 .viewer-info-btn {
-    background: rgba(255, 255, 255, 0.04);
+    background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #eef2ff;
+    color: #d0d4e0;
     cursor: pointer;
     font-weight: 500;
     transition:
-        background 0.12s ease,
-        border-color 0.12s ease;
-    /* Text shadow keeps text readable over any canvas background */
-    text-shadow:
-        0 1px 6px rgba(0, 0, 0, 0.65),
-        0 1px 2px rgba(0, 0, 0, 0.4);
+        background 0.1s,
+        color 0.1s;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+    white-space: nowrap;
+    line-height: 1.3;
     -webkit-app-region: no-drag;
 }
 
 .viewer-back-btn:hover,
 .viewer-info-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.08);
+    color: #f0f2f8;
 }
 
 .viewer-back-btn:active,
@@ -84,9 +84,9 @@ html[data-theme="light"] .viewer-page {
     display: inline-flex;
     align-items: center;
     gap: 0.2rem;
-    padding: 0.3rem 0.65rem;
-    border-radius: 0.35rem;
-    font-size: 0.78rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.3rem;
+    font-size: 0.75rem;
     flex-shrink: 0;
 }
 
@@ -98,17 +98,15 @@ html[data-theme="light"] .viewer-page {
 /* ── Info button ("i") ────────────────────────────────────────────────── */
 
 .viewer-info-btn {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-weight: 700;
-    font-size: 0.85rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.3rem;
+    font-size: 0.75rem;
+    font-weight: 500;
     flex-shrink: 0;
-    padding: 0;
-    line-height: 1;
+    line-height: 1.3;
 }
 
 /* ── Info overlay ─────────────────────────────────────────────────────── */
@@ -282,7 +280,10 @@ html[data-theme="light"] .viewer-page {
         padding: 0.25rem 0.35rem;
     }
     .viewer-back-btn {
-        padding: 0.3rem 0.45rem;
+        padding: 0.25rem 0.35rem;
+    }
+    .viewer-info-btn {
+        padding: 0.25rem 0.35rem;
     }
     .viewer-info-overlay {
         right: 0.4rem;
@@ -431,14 +432,14 @@ html[data-theme="light"] .viewer-back-btn,
 html[data-theme="light"] .viewer-info-btn {
     background: rgba(0, 0, 0, 0.04);
     border-color: rgba(0, 0, 0, 0.1);
-    color: #1a1a2e;
+    color: #333;
     text-shadow: none;
 }
 
 html[data-theme="light"] .viewer-back-btn:hover,
 html[data-theme="light"] .viewer-info-btn:hover {
     background: rgba(0, 0, 0, 0.08);
-    border-color: rgba(0, 0, 0, 0.15);
+    color: #111;
 }
 
 html[data-theme="light"] #viewer-toolbar .v3d-btn {

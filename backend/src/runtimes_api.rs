@@ -8,7 +8,6 @@ use colmap_openmvs_api::{
     TaskEventBatch, TaskInfo, TaskKind, TaskState,
 };
 use dioxus::Result;
-use reqwest::Client;
 use tracing::warn;
 
 /// Return the current status of the PRoot runtime.
@@ -164,28 +163,34 @@ struct HubTagsResponse {
 
 /// Private helper: fetch and sort image tags from Docker Hub.
 async fn fetch_hub_image_tags() -> anyhow::Result<Vec<ImageTagInfo>> {
-    let client = Client::new();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .user_agent("colmap-openmvs-app")
+        .build()
+        .into();
     let url =
         "https://registry.hub.docker.com/v2/repositories/yeicor/colmap-openmvs/tags?page_size=100";
 
-    let response = client
+    let response = agent
         .get(url)
-        .header("User-Agent", "colmap-openmvs-app")
-        .send()
-        .await
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
         .map_err(|e| anyhow::anyhow!("Failed to fetch image tags: {}", e))?;
 
     if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let body = response.into_body().read_to_string().unwrap_or_default();
         return Err(anyhow::anyhow!(
             "Docker Hub API returned status {}: {}",
-            response.status(),
-            response.text().await.unwrap_or_default()
+            status,
+            body
         ));
     }
 
     let body = response
-        .text()
-        .await
+        .into_body()
+        .read_to_string()
         .map_err(|e| anyhow::anyhow!("Failed to read response: {}", e))?;
 
     let tags_response: HubTagsResponse = serde_json::from_str(&body)
@@ -481,18 +486,18 @@ pub async fn remove_docker_image(image_tag: String) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Query the current run status for a project.
-/// Returns information about any active or recently completed RunPipeline/DryRunPipeline task.
+/// Returns information about any active or recently completed RunPipeline/RecoverPipelineLogs task.
 pub async fn get_project_run_status(project_name: String) -> Result<ProjectRunStatus> {
     let tasks = TASK_REGISTRY.list_tasks();
 
-    // Look for the most recent RunPipeline or DryRunPipeline task for this project
+    // Look for the most recent RunPipeline or RecoverPipelineLogs task for this project
     for task_info in &tasks {
         if task_info.context_key == project_name
             && (task_info.kind == TaskKind::RunPipeline
-                || task_info.kind == TaskKind::DryRunPipeline)
+                || task_info.kind == TaskKind::RecoverPipelineLogs)
         {
             let is_running = matches!(task_info.state, TaskState::Running);
-            let is_dry_run = task_info.kind == TaskKind::DryRunPipeline;
+            let is_recover_logs = task_info.kind == TaskKind::RecoverPipelineLogs;
 
             // Try to extract progress from the task's event log
             let progress = is_running
@@ -501,7 +506,7 @@ pub async fn get_project_run_status(project_name: String) -> Result<ProjectRunSt
 
             return Ok(ProjectRunStatus {
                 is_running,
-                is_dry_run,
+                is_recover_logs,
                 progress,
                 task_id: task_info.id.clone(),
             });
@@ -511,7 +516,7 @@ pub async fn get_project_run_status(project_name: String) -> Result<ProjectRunSt
     // No active or recent task found
     Ok(ProjectRunStatus {
         is_running: false,
-        is_dry_run: false,
+        is_recover_logs: false,
         progress: None,
         task_id: String::new(),
     })

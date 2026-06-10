@@ -41,7 +41,7 @@ tar = { version = "0.4" }
 once_cell = { version = "1.21.4" }
 
 # HTTP requests for downloading runtimes and demo data
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "json", "stream"] }
+ureq = "3.3"
 
 # File discovery
 which = { version = "8.0" }
@@ -68,9 +68,6 @@ uuid = { version = "1", features = ["v4"] }
 # Unix signal handling
 nix = { version = "0.31", features = ["process"] }
 
-# Pure-Rust HTTP client (sync, used by build script + runtime registry)
-ureq = { version = "2", default-features = false, features = ["tls"] }
-
 # Structured logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -83,7 +80,7 @@ clap = { version = "4", features = ["derive", "env"] }
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-jni = { version = "0.21" }
+jni = { version = "0.22" }
 ndk-context = { version = "0.1" }
 
 [build-dependencies]
@@ -93,7 +90,7 @@ zip = { version = "2", features = ["deflate"] }
 tar = { version = "0.4" }
 xz2 = { version = "0.1" }
 flate2 = { version = "1.0" }
-ureq = { version = "2", default-features = false, features = ["tls"] }
+ureq = { version = "3.3" }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 

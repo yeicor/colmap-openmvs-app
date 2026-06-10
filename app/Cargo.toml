@@ -18,6 +18,9 @@ tokio = { version = "1.35", features = ["sync"], optional = true }
 # Utilities
 urlencoding = { version = "2.1" }
 
+# ZIP archive creation / extraction (replaces JSZip CDN dependency)
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 # Error handling (used by viewer conversion)
 anyhow = { workspace = true }
 bytes = { version = "1" }

@@ -258,7 +258,7 @@ pub enum TaskKind {
     DownloadDemo,
     BatchResize,
     RunPipeline,
-    DryRunPipeline,
+    RecoverPipelineLogs,
     AndroidSettingsRepair,
     /// Generic system startup — runs all registered startup steps.
     Startup,
@@ -269,7 +269,7 @@ pub enum TaskKind {
 pub enum PipelineStageStatus {
     /// Stage output was already cached from a previous run
     Cached,
-    /// Stage needs to run (or was skipped in dry-run mode)
+    /// Stage needs to run (or was skipped in recover-logs mode)
     Run,
     /// Stage was explicitly skipped via --skip flag
     Skipped,
@@ -368,8 +368,8 @@ pub struct TaskEventBatch {
 pub struct ProjectRunStatus {
     /// Whether a pipeline is currently running for this project
     pub is_running: bool,
-    /// Whether the active pipeline is a dry-run (true) or actual run (false)
-    pub is_dry_run: bool,
+    /// Whether the active pipeline is a recoveer-logs-run (true) or actual run (false)
+    pub is_recover_logs: bool,
     /// Current progress as a percentage (0.0..=1.0), None if not started or not available
     pub progress: Option<f32>,
     /// The task ID of the active/last pipeline run, empty string if no active task

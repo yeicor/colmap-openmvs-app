@@ -196,14 +196,16 @@ impl PRoot {
     // -----------------------------------------------------------------------
 
     async fn fetch_linux_versions(&self) -> RuntimeResult<Vec<String>> {
-        let client = reqwest::Client::new();
         let url = "https://gitlab.com/api/v4/projects/proot%2Fproot/repository/tags";
 
-        let response = client
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .user_agent("colmap-openmvs-app")
+            .build()
+            .into();
+
+        let response = agent
             .get(url)
-            .header("User-Agent", "colmap-openmvs-app")
-            .send()
-            .await
+            .call()
             .map_err(|e| anyhow::anyhow!("Failed to fetch versions: {}", e))?;
 
         #[derive(Deserialize)]
@@ -211,9 +213,11 @@ impl PRoot {
             name: String,
         }
 
-        let tags: Vec<GitLabTag> = response
-            .json::<Vec<GitLabTag>>()
-            .await
+        let body = response
+            .into_body()
+            .read_to_vec()
+            .map_err(|e| anyhow::anyhow!("Failed to read versions response: {}", e))?;
+        let tags: Vec<GitLabTag> = serde_json::from_slice(&body)
             .map_err(|e| anyhow::anyhow!("Failed to parse versions: {}", e))?;
 
         let mut versions: Vec<String> = tags.into_iter().map(|t| t.name).collect();
@@ -224,18 +228,20 @@ impl PRoot {
 
     async fn fetch_android_latest_version(&self) -> RuntimeResult<Vec<String>> {
         debug!("fetch_android_latest_version: starting");
-        let client = reqwest::Client::new();
         let url = "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/";
 
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .user_agent("colmap-openmvs-app")
+            .build()
+            .into();
+
         debug!(url = %url, "fetch_android_latest_version: fetching from Termux repository");
-        let html = client
+        let html = agent
             .get(url)
-            .header("User-Agent", "colmap-openmvs-app")
-            .send()
-            .await
+            .call()
             .map_err(|e| anyhow::anyhow!("Failed to fetch versions: {}", e))?
-            .text()
-            .await
+            .into_body()
+            .read_to_string()
             .map_err(|e| anyhow::anyhow!("Failed to read response: {}", e))?;
 
         debug!(
@@ -272,18 +278,20 @@ impl PRoot {
 
     async fn fetch_libtalloc_version(&self) -> RuntimeResult<Vec<String>> {
         debug!("fetch_libtalloc_version: starting");
-        let client = reqwest::Client::new();
         let url = "https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/";
 
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .user_agent("colmap-openmvs-app")
+            .build()
+            .into();
+
         debug!(url = %url, "fetch_libtalloc_version: fetching from Termux repository");
-        let html = client
+        let html = agent
             .get(url)
-            .header("User-Agent", "colmap-openmvs-app")
-            .send()
-            .await
+            .call()
             .map_err(|e| anyhow::anyhow!("Failed to fetch libtalloc versions: {}", e))?
-            .text()
-            .await
+            .into_body()
+            .read_to_string()
             .map_err(|e| anyhow::anyhow!("Failed to read libtalloc response: {}", e))?;
 
         debug!(
@@ -360,13 +368,20 @@ impl PRoot {
             .map_err(|e| anyhow::anyhow!("Failed to create runtime directory: {}", e))?;
 
         let url = "https://proot.gitlab.io/proot/bin/proot";
-        let bytes = reqwest::Client::new()
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .user_agent("colmap-openmvs-app")
+            .build()
+            .into();
+
+        let mut response = agent
             .get(url)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to download proot: {}", e))?
-            .bytes()
-            .await
+            .call()
+            .map_err(|e| anyhow::anyhow!("Failed to download proot: {}", e))?;
+        let bytes = response
+            .body_mut()
+            .with_config()
+            .limit(200 * 1024 * 1024)
+            .read_to_vec()
             .map_err(|e| anyhow::anyhow!("Failed to read download: {}", e))?;
 
         let proot_path = self.runtime_dir.join("proot");
@@ -394,12 +409,15 @@ impl PRoot {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create runtime directory: {}", e))?;
 
-        let client = reqwest::Client::new();
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .user_agent("colmap-openmvs-app")
+            .build()
+            .into();
         let proot_base_url = "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/";
 
         let proot_url = format!("{}proot_{}_aarch64.deb", proot_base_url, version);
         info!(version = %version, url = %proot_url, "download_android: downloading PRoot");
-        self.download_and_extract_deb(&client, &proot_url, "proot")
+        self.download_and_extract_deb(&agent, &proot_url, "proot")
             .await?;
         debug!("download_android: PRoot download completed");
 
@@ -419,7 +437,7 @@ impl PRoot {
             libtalloc_base_url, libtalloc_version
         );
         info!(libtalloc_version = %libtalloc_version, url = %talloc_url, "download_android: downloading libtalloc");
-        self.download_and_extract_deb(&client, &talloc_url, "libtalloc")
+        self.download_and_extract_deb(&agent, &talloc_url, "libtalloc")
             .await?;
         debug!("download_android: libtalloc download completed");
 
@@ -429,30 +447,23 @@ impl PRoot {
 
     async fn download_and_extract_deb(
         &self,
-        client: &reqwest::Client,
+        agent: &ureq::Agent,
         url: &str,
         package_name: &str,
     ) -> RuntimeResult<()> {
         info!(package_name = %package_name, url = %url, "download_and_extract_deb: starting download");
 
-        // Fetch bytes asynchronously
-        let response = client
+        // Fetch bytes (HTTP errors are returned as Err by ureq by default)
+        let mut response = agent
             .get(url)
-            .header("User-Agent", "colmap-openmvs-app")
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to download {}: {}", package_name, e))?
-            .error_for_status()
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to download {} (HTTP error): {}", package_name, e)
-            })?;
-
-        debug!(package_name = %package_name, "download_and_extract_deb: response received");
+            .call()
+            .map_err(|e| anyhow::anyhow!("Failed to download {}: {}", package_name, e))?;
         let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", package_name, e))?
-            .to_vec();
+            .body_mut()
+            .with_config()
+            .limit(200 * 1024 * 1024)
+            .read_to_vec()
+            .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", package_name, e))?;
 
         debug!(package_name = %package_name, size = bytes.len(), "download_and_extract_deb: bytes received");
 
