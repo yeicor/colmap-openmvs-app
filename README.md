@@ -32,7 +32,7 @@ Project management:
   <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-outputs.png" width="200" alt="Project outputs" />
 </p>
 
-3D viewer (dark theme):
+3D viewer:
 
 <p align="center">
   <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-pointcloud.png" width="200" alt="Point cloud" />

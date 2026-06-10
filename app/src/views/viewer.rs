@@ -145,12 +145,8 @@ import(_viewerAbsUrl).then(async function(mod) {{
 "#
                     );
 
-                    if let Err(e) = dioxus::document::eval(&js).await {
-                        error!(error = ?e, "Failed to mount viewer JS");
-                        err.set(Some(format!("Failed to launch viewer: {e}")));
-                    } else {
-                        loading.set(false);
-                    }
+                    let _ = dioxus::document::eval(&js);
+                    loading.set(false);
                 }
                 Err(e) => {
                     error!(file = %fp_clone, error = %e, "Failed to load output for viewer");
