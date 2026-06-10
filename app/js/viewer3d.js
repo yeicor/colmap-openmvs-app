@@ -714,6 +714,12 @@ export class Viewer3D {
       this._queuedCameraState = initialCamera;
     }
     this.homeCamera(false);
+
+    // Force an immediate render so there is at least one frame before the
+    // animation loop (driven by requestAnimationFrame) kicks in.  This is
+    // important on headless / CI environments where rAF timing may lag,
+    // causing the first screenshot to be blank.
+    this.renderer.render(this.scene, this.camera);
   }
 
   detectCapabilities() {

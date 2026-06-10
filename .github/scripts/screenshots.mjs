@@ -104,15 +104,15 @@ const routes = [
   { url: "/project/demo/logs", name: "project-demo-logs" },
   { url: "/project/demo/outputs", name: "project-demo-outputs" },
   {
-    url: "/viewer/demo/openmvs|scene_dense.ply/eyJjYW0iOnsicG9zaXRpb24iOlsyLjM2NDcsLTIuMjM0MywxLjI3MjVdLCJ0YXJnZXQiOlszLjgxODIsMC42NjgsMy45NDExXSwidXAiOlswLjU5MjksLTAuNjg1NSwwLjQyMjZdLCJuZWFyIjowLjAwNywiZmFyIjoxMDAwfSwiY29uZmlnIjp7ImJhY2tncm91bmQiOiIjMTExMzE4IiwidGV4dHVyZXMiOnRydWUsIndpcmVmcmFtZSI6ZmFsc2UsImJhY2tmYWNlcyI6ZmFsc2UsImxpZ2h0aW5nIjp0cnVlLCJsaWdodEF6aW11dGgiOjAsImxpZ2h0RWxldmF0aW9uIjozMCwicG9pbnRzU2l6ZSI6Mi4yLCJ0b25lTWFwcGluZyI6dHJ1ZSwiZXhwb3N1cmUiOjF9fQ==",
+    url: "/viewer/demo/openmvs%7Cscene_dense.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjQ0ODYsLTAuMzUyMywtMC4zNjI1XSwidGFyZ2V0IjpbLTAuNTE4NSwtMi41MjI2LDQuMzU4M10sInVwIjpbLTAuMTIzMiwtMC44OTE4LC0wLjQzNTJdLCJuZWFyIjowLjAwNzEsImZhciI6MTAwMH0sImNvbmZpZyI6eyJiYWNrZ3JvdW5kIjoiIzExMTMxOCIsInRleHR1cmVzIjp0cnVlLCJ3aXJlZnJhbWUiOmZhbHNlLCJiYWNrZmFjZXMiOmZhbHNlLCJsaWdodGluZyI6dHJ1ZSwibGlnaHRBemltdXRoIjowLCJsaWdodEVsZXZhdGlvbiI6MzAsInBvaW50c1NpemUiOjIuMiwidG9uZU1hcHBpbmciOnRydWUsImV4cG9zdXJlIjoxfX0=",
     name: "viewer-pointcloud",
   },
   {
-    url: "/viewer/demo/openmvs|scene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlsyLjM2NDcsLTIuMjM0MywxLjI3MjVdLCJ0YXJnZXQiOlszLjgxODIsMC42NjgsMy45NDExXSwidXAiOlswLjU5MjksLTAuNjg1NSwwLjQyMjZdLCJuZWFyIjowLjAwNywiZmFyIjoxMDAwfSwiY29uZmlnIjp7ImJhY2tncm91bmQiOiIjMTExMzE4IiwidGV4dHVyZXMiOnRydWUsIndpcmVmcmFtZSI6dHJ1ZSwiYmFja2ZhY2VzIjpmYWxzZSwibGlnaHRpbmciOnRydWUsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjMwLCJwb2ludHNTaXplIjoyLjIsInRvbmVNYXBwaW5nIjp0cnVlLCJleHBvc3VyZSI6MX19",
+    url: "/viewer/demo/openmvs%7Cscene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjQ0ODYsLTAuMzUyMywtMC4zNjI1XSwidGFyZ2V0IjpbLTAuNTE4NSwtMi41MjI2LDQuMzU4M10sInVwIjpbLTAuMTIzMiwtMC44OTE4LC0wLjQzNTJdLCJuZWFyIjowLjAwNzEsImZhciI6MTAwMH0sImNvbmZpZyI6eyJiYWNrZ3JvdW5kIjoiIzExMTMxOCIsInRleHR1cmVzIjp0cnVlLCJ3aXJlZnJhbWUiOnRydWUsImJhY2tmYWNlcyI6ZmFsc2UsImxpZ2h0aW5nIjp0cnVlLCJsaWdodEF6aW11dGgiOjAsImxpZ2h0RWxldmF0aW9uIjozMCwicG9pbnRzU2l6ZSI6Mi4yLCJ0b25lTWFwcGluZyI6dHJ1ZSwiZXhwb3N1cmUiOjF9fQ==",
     name: "viewer-textured-wireframe",
   },
   {
-    url: "/viewer/demo/openmvs|scene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlsyLjM2NDcsLTIuMjM0MywxLjI3MjVdLCJ0YXJnZXQiOlszLjgxODIsMC42NjgsMy45NDExXSwidXAiOlswLjU5MjksLTAuNjg1NSwwLjQyMjZdLCJuZWFyIjowLjAwNywiZmFyIjoxMDAwfSwiY29uZmlnIjp7ImJhY2tncm91bmQiOiIjMTExMzE4IiwidGV4dHVyZXMiOnRydWUsIndpcmVmcmFtZSI6ZmFsc2UsImJhY2tmYWNlcyI6ZmFsc2UsImxpZ2h0aW5nIjp0cnVlLCJsaWdodEF6aW11dGgiOjAsImxpZ2h0RWxldmF0aW9uIjozMCwicG9pbnRzU2l6ZSI6Mi4yLCJ0b25lTWFwcGluZyI6dHJ1ZSwiZXhwb3N1cmUiOjF9fQ==",
+    url: "/viewer/demo/openmvs%7Cscene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjQ0ODYsLTAuMzUyMywtMC4zNjI1XSwidGFyZ2V0IjpbLTAuNTE4NSwtMi41MjI2LDQuMzU4M10sInVwIjpbLTAuMTIzMiwtMC44OTE4LC0wLjQzNTJdLCJuZWFyIjowLjAwNzEsImZhciI6MTAwMH0sImNvbmZpZyI6eyJiYWNrZ3JvdW5kIjoiIzExMTMxOCIsInRleHR1cmVzIjp0cnVlLCJ3aXJlZnJhbWUiOmZhbHNlLCJiYWNrZmFjZXMiOmZhbHNlLCJsaWdodGluZyI6dHJ1ZSwibGlnaHRBemltdXRoIjowLCJsaWdodEVsZXZhdGlvbiI6MzAsInBvaW50c1NpemUiOjIuMiwidG9uZU1hcHBpbmciOnRydWUsImV4cG9zdXJlIjoxfX0=",
     name: "viewer-textured-mesh",
   },
 ];
@@ -146,12 +146,20 @@ async function waitForViewerModel(page, timeout = 60000) {
     const ready = await page.evaluate(() => {
       try {
         const v = window.__viewer3d_instance;
-        return !!(v && v.modelRoot && v.controls);
+        // Check that modelRoot exists AND has at least one child with
+        // geometry (vertices > 0).  This avoids false-positives where the
+        // viewer object exists but the model data never arrived or rendered.
+        if (!v || !v.modelRoot || !v.controls) return false;
+        const stats = v.stats || {};
+        if (stats.vertices === undefined || stats.vertices === 0) return false;
+        return true;
       } catch {
         return false;
       }
     });
     if (ready) {
+      // Give the renderer time to composite after the forced render + at
+      // least one animation frame.
       await page.waitForTimeout(2000);
       return true;
     }

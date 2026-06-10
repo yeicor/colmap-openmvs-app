@@ -48,4 +48,4 @@ Pipeline configuration and settings:
   <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-runtime.png" width="200" alt="Runtime settings" />
 </p>
 
-Screenshots are automatically captured from the latest [web demo](https://yeicor.github.io/colmap-openmvs-app/), which is rebuilt on every push to the `main` branch.
+Screenshots are automatically captured from the latest [web demo](https://yeicor.github.io/colmap-openmvs-app/), which is rebuilt on every push to `main`.
