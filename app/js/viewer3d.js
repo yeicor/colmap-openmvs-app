@@ -199,14 +199,22 @@ export class Viewer3D {
     this._filePath = opts.filePath || "";
     this._onStateChange = opts.onStateChange || null;
 
-    // Merge initial state from URL hash or options, falling back to saved prefs
+    // Merge state from: theme-aware defaults → saved prefs → URL/options.
+    // DEFAULT_STATE provides the theme-appropriate background colour
+    // (via getDefaultBackground() which respects data-theme).  URL config
+    // may still override it, but the background property should normally
+    // be left out so the theme choice stays in one place.
     const saved = loadPrefs();
-    this.state = { ...saved, ...(opts.initialConfig || {}) };
+    this.state = { ...DEFAULT_STATE, ...saved, ...(opts.initialConfig || {}) };
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(this.state.background);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    // preserveDrawingBuffer is required so that Playwright / headless
+    // Chromium can capture the WebGL canvas in a page screenshot.
+    // Without it the GPU drawing buffer is cleared after compositing and
+    // the screenshot comes back empty (just the background colour).
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;

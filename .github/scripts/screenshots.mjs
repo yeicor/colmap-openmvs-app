@@ -104,15 +104,15 @@ const routes = [
   { url: "/project/demo/logs", name: "project-demo-logs" },
   { url: "/project/demo/outputs", name: "project-demo-outputs" },
   {
-    url: "/viewer/demo/openmvs%7Cscene_dense.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjQ0ODYsLTAuMzUyMywtMC4zNjI1XSwidGFyZ2V0IjpbLTAuNTE4NSwtMi41MjI2LDQuMzU4M10sInVwIjpbLTAuMTIzMiwtMC44OTE4LC0wLjQzNTJdLCJuZWFyIjowLjAwNzEsImZhciI6MTAwMH0sImNvbmZpZyI6eyJiYWNrZ3JvdW5kIjoiIzExMTMxOCIsInRleHR1cmVzIjp0cnVlLCJ3aXJlZnJhbWUiOmZhbHNlLCJiYWNrZmFjZXMiOmZhbHNlLCJsaWdodGluZyI6dHJ1ZSwibGlnaHRBemltdXRoIjowLCJsaWdodEVsZXZhdGlvbiI6MzAsInBvaW50c1NpemUiOjIuMiwidG9uZU1hcHBpbmciOnRydWUsImV4cG9zdXJlIjoxfX0=",
+    url: "/viewer/demo/openmvs%7Cscene_dense.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjQ0ODYsLTAuMzUyMywtMC4zNjI1XSwidGFyZ2V0IjpbLTAuNTE4NSwtMi41MjI2LDQuMzU4M10sInVwIjpbLTAuMTIzMiwtMC44OTE4LC0wLjQzNTJdLCJuZWFyIjowLjAwNzEsImZhciI6MTAwMH0sImNvbmZpZyI6eyJ0ZXh0dXJlcyI6dHJ1ZSwiYmFja2ZhY2VzIjpmYWxzZSwibGlnaHRpbmciOnRydWUsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjMwLCJwb2ludHNTaXplIjoyLjIsInRvbmVNYXBwaW5nIjp0cnVlLCJleHBvc3VyZSI6MSwid2lyZWZyYW1lIjpmYWxzZX19",
     name: "viewer-pointcloud",
   },
   {
-    url: "/viewer/demo/openmvs%7Cscene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjQ0ODYsLTAuMzUyMywtMC4zNjI1XSwidGFyZ2V0IjpbLTAuNTE4NSwtMi41MjI2LDQuMzU4M10sInVwIjpbLTAuMTIzMiwtMC44OTE4LC0wLjQzNTJdLCJuZWFyIjowLjAwNzEsImZhciI6MTAwMH0sImNvbmZpZyI6eyJiYWNrZ3JvdW5kIjoiIzExMTMxOCIsInRleHR1cmVzIjp0cnVlLCJ3aXJlZnJhbWUiOnRydWUsImJhY2tmYWNlcyI6ZmFsc2UsImxpZ2h0aW5nIjp0cnVlLCJsaWdodEF6aW11dGgiOjAsImxpZ2h0RWxldmF0aW9uIjozMCwicG9pbnRzU2l6ZSI6Mi4yLCJ0b25lTWFwcGluZyI6dHJ1ZSwiZXhwb3N1cmUiOjF9fQ==",
+    url: "/viewer/demo/openmvs%7Cscene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjQ0ODYsLTAuMzUyMywtMC4zNjI1XSwidGFyZ2V0IjpbLTAuNTE4NSwtMi41MjI2LDQuMzU4M10sInVwIjpbLTAuMTIzMiwtMC44OTE4LC0wLjQzNTJdLCJuZWFyIjowLjAwNzEsImZhciI6MTAwMH0sImNvbmZpZyI6eyJ0ZXh0dXJlcyI6dHJ1ZSwiYmFja2ZhY2VzIjpmYWxzZSwibGlnaHRpbmciOnRydWUsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjMwLCJwb2ludHNTaXplIjoyLjIsInRvbmVNYXBwaW5nIjp0cnVlLCJleHBvc3VyZSI6MSwid2lyZWZyYW1lIjp0cnVlfX0=",
     name: "viewer-textured-wireframe",
   },
   {
-    url: "/viewer/demo/openmvs%7Cscene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjQ0ODYsLTAuMzUyMywtMC4zNjI1XSwidGFyZ2V0IjpbLTAuNTE4NSwtMi41MjI2LDQuMzU4M10sInVwIjpbLTAuMTIzMiwtMC44OTE4LC0wLjQzNTJdLCJuZWFyIjowLjAwNzEsImZhciI6MTAwMH0sImNvbmZpZyI6eyJiYWNrZ3JvdW5kIjoiIzExMTMxOCIsInRleHR1cmVzIjp0cnVlLCJ3aXJlZnJhbWUiOmZhbHNlLCJiYWNrZmFjZXMiOmZhbHNlLCJsaWdodGluZyI6dHJ1ZSwibGlnaHRBemltdXRoIjowLCJsaWdodEVsZXZhdGlvbiI6MzAsInBvaW50c1NpemUiOjIuMiwidG9uZU1hcHBpbmciOnRydWUsImV4cG9zdXJlIjoxfX0=",
+    url: "/viewer/demo/openmvs%7Cscene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjQ0ODYsLTAuMzUyMywtMC4zNjI1XSwidGFyZ2V0IjpbLTAuNTE4NSwtMi41MjI2LDQuMzU4M10sInVwIjpbLTAuMTIzMiwtMC44OTE4LC0wLjQzNTJdLCJuZWFyIjowLjAwNzEsImZhciI6MTAwMH0sImNvbmZpZyI6eyJ0ZXh0dXJlcyI6dHJ1ZSwiYmFja2ZhY2VzIjpmYWxzZSwibGlnaHRpbmciOnRydWUsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjMwLCJwb2ludHNTaXplIjoyLjIsInRvbmVNYXBwaW5nIjp0cnVlLCJleHBvc3VyZSI6MSwid2lyZWZyYW1lIjpmYWxzZX19",
     name: "viewer-textured-mesh",
   },
 ];
@@ -185,7 +185,20 @@ async function main() {
 
   const browser = await chromium.launch({
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--use-gl=angle", "--use-angle=swiftshader-webgl"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      // Use ANGLE for WebGL rendering (industry standard for Three.js
+      // headless screenshots).  Let ANGLE auto-detect the best backend
+      // (typically Mesa/llvmpipe on Ubuntu CI, or SwiftShader as fallback).
+      //
+      // Avoid --use-angle=swiftshader-webgl specifically — that backend
+      // variant is known to silently drop Three.js model geometry while
+      // still rendering UI overlays (arcball controls etc.).
+      "--use-gl=angle",
+      "--ignore-gpu-blocklist",
+      "--enable-unsafe-swiftshader", // fallback for environments without Mesa
+    ],
   });
 
   const context = await browser.newContext({
@@ -209,6 +222,14 @@ async function main() {
         // leaving WebGL/WASM state stale between routes).
         await page.goto("about:blank");
         await page.goto(fullUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+
+        // The demo manifest has dark_mode:null, so the app does not set
+        // data-theme on its own and leaves it to the browser's
+        // prefers-color-scheme media query (which defaults to dark in some
+        // headless environments).  Force light mode so the viewer page CSS
+        // (html[data-theme="light"] .viewer-page) takes effect.
+        await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
+
         const viewerReady = await waitForViewerModel(page);
         console.log(viewerReady ? "  🎯 Model loaded" : "  ⚠ Model not loaded");
       } else {
@@ -217,9 +238,34 @@ async function main() {
       }
 
       const outputPath = path.join(outputDir, `${route.name}.png`);
-      await page.screenshot({ path: outputPath });
-      const stats = fs.statSync(outputPath);
-      console.log(`  ✅ ${route.name}.png  (${(stats.size / 1024).toFixed(1)} KB)`);
+
+      if (route.url.startsWith("/viewer/")) {
+        // Playwright's page.screenshot() does not reliably capture WebGL
+        // canvas content rendered with SwiftShader on headless CI runners.
+        // The GPU compositing pipeline may skip the canvas, producing a
+        // near-empty image (\u223c10 KB) instead of the actual 3D content
+        // (\u226550 KB).
+        //
+        // We work around this by taking a Playwright element screenshot of
+        // the <canvas> itself — this reads from the already-composited
+        // layer at the GPU level rather than through the page compositor.
+        const canvas = page.locator(".viewer-canvas-container canvas, #viewer3d-container canvas").first();
+        const canvasCount = await canvas.count();
+        if (canvasCount > 0) {
+          await canvas.screenshot({ path: outputPath });
+          const stats = fs.statSync(outputPath);
+          console.log(`  \u2705 ${route.name}.png  (element-screenshot, ${(stats.size / 1024).toFixed(1)} KB)`);
+        } else {
+          // No dedicated canvas found — grab the full page as a fallback.
+          await page.screenshot({ path: outputPath });
+          const stats = fs.statSync(outputPath);
+          console.log(`  \u2705 ${route.name}.png  (full-page-fallback, ${(stats.size / 1024).toFixed(1)} KB)`);
+        }
+      } else {
+        await page.screenshot({ path: outputPath });
+        const stats = fs.statSync(outputPath);
+        console.log(`  \u2705 ${route.name}.png  (${(stats.size / 1024).toFixed(1)} KB)`);
+      }
       results.push({ ...route, success: true });
     } catch (err) {
       console.error(`  ❌ ${err.message}`);
