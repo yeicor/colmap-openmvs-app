@@ -83,7 +83,7 @@ clap = { version = "4", features = ["derive", "env"] }
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-jni = { version = "0.21" }
+jni = { version = "0.22" }
 ndk-context = { version = "0.1" }
 
 [build-dependencies]
