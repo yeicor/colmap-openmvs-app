@@ -323,7 +323,7 @@ async fn trigger_zip_download(zip_bytes: Vec<u8>, zip_name: &str) {
     let arr = Array::new();
     arr.push(uint8_view.as_ref());
 
-    let mut opts = web_sys::BlobPropertyBag::new();
+    let opts = web_sys::BlobPropertyBag::new();
     opts.set_type("application/zip");
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(arr.as_ref(), &opts)
         .expect("Failed to create Blob from ZIP bytes");
