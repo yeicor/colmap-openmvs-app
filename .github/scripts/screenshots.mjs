@@ -235,6 +235,20 @@ async function main() {
 
         const viewerReady = await waitForViewerModel(page);
         console.log(viewerReady ? "  🎯 Model loaded" : "  ⚠ Model not loaded");
+
+        // Log the actual camera state after restoration for cross-environment
+        // comparison (helps debug CI-vs-local camera transform differences).
+        const camState = await page.evaluate(() => {
+          const v = window.__viewer3d_instance;
+          if (!v) return null;
+          const s = v._getCameraState();
+          return { position: s.position, target: s.target, up: s.up };
+        });
+        if (camState) {
+          console.log(
+            `  camera: pos=[${camState.position.map((v) => v.toFixed(4)).join(", ")}] target=[${camState.target.map((v) => v.toFixed(4)).join(", ")}] up=[${camState.up.map((v) => v.toFixed(4)).join(", ")}]`,
+          );
+        }
       } else {
         await page.goto(fullUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
 
