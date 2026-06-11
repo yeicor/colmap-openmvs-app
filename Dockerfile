@@ -13,7 +13,7 @@ FROM chef AS builder
 ARG BUILD_TYPE
 
 RUN apt-get update && apt-get install -y \
-    curl unzip nodejs npm pkg-config libwayland-dev \
+    curl unzip nodejs npm pkg-config libwayland-dev git \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -L --proto '=https' --tlsv1.2 -sSf \
