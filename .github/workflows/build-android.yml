@@ -223,65 +223,11 @@ jobs:
           name: build-android-apk-${{ matrix.target }}
           path: apk-collect/
 
-  # ─── F-Droid metadata ──────────────────────────────────────────────
-  # Generates fastlane-compatible metadata and F-Droid YAML metadata.
-  metadata:
-    needs: [check-image-updates, build]
-    if: needs.check-image-updates.outputs.should-build == 'true'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-
-      - shell: bash
-        run: |
-          set -euo pipefail
-
-          VERSION=$(grep '"version"' package.json | head -1 | cut -d'"' -f4)
-          VERSION_CODE=$(date +%Y%m%d)
-
-          mkdir -p fastlane/metadata/android/en-US/changelogs
-
-          echo "COLMAP OpenMVS App" > fastlane/metadata/android/en-US/title.txt
-          echo "3D reconstruction from images" > fastlane/metadata/android/en-US/short_description.txt
-
-          # Extract first ~20 lines of readable content from README
-          if [ -f README.md ]; then
-            sed -n '/^[A-Za-z]/,/^$/{/^$/q; /^$/!p}' README.md \
-              > fastlane/metadata/android/en-US/full_description.txt 2>/dev/null || true
-          fi
-          if [ ! -s fastlane/metadata/android/en-US/full_description.txt ]; then
-            echo "A comprehensive photogrammetry and 3D reconstruction application." \
-              > fastlane/metadata/android/en-US/full_description.txt
-          fi
-
-          # Simple changelog from git
-          git log --oneline -10 2>/dev/null \
-            > fastlane/metadata/android/en-US/changelogs/${VERSION_CODE}.txt || \
-            echo "Version ${VERSION} (${VERSION_CODE})" \
-            > fastlane/metadata/android/en-US/changelogs/${VERSION_CODE}.txt
-
-          echo "📦 Fastlane metadata:"
-          find fastlane -type f
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: fdroid-metadata
-          path: fastlane/
-
-  # ─── Deploy orchestration (standalone triggers only) ──────────────
-  # When triggered by schedule or workflow_dispatch (not from ci.yml),
-  # also run the full deployment.
-  deploy-orchestration:
-    needs: [check-image-updates, build, metadata]
-    if: needs.check-image-updates.outputs.should-build == 'true' && github.event_name != 'workflow_call'
-    uses: ./.github/workflows/deploy-android.yml
-    secrets: inherit
-
   # ─── Save source digest ─────────────────────────────────────────────
-  # Only on standalone triggers, after the deploy completes, so the next
+  # Only on standalone triggers, after the build completes, so the next
   # cron check skips this image revision.
   save-digest:
-    needs: [check-image-updates, build, metadata, deploy-orchestration]
+    needs: [check-image-updates, build]
     if: needs.check-image-updates.outputs.should-build == 'true' && github.event_name != 'workflow_call'
     runs-on: ubuntu-24.04
     steps:
