@@ -8,9 +8,9 @@
 //!   <base-path>    Base path prefix used in asset URLs (default: /colmap-openmvs-app)
 //!                  Pass "/" (or empty) for local builds without a base_path set.
 //!
-//! Requires: playwright (install with: npx playwright install firefox)
+//! Requires: playwright (install with: npx playwright install chromium)
 
-import { firefox } from "playwright";
+import { chromium } from "playwright";
 import http from "http";
 import fs from "fs";
 import path from "path";
@@ -183,9 +183,16 @@ async function main() {
     server.on("error", reject);
   });
 
-  const browser = await firefox.launch({
+  const browser = await chromium.launch({
     headless: true,
-    args: ["--no-sandbox"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--ignore-gpu-blocklist",
+      "--enable-unsafe-swiftshader",
+    ],
   });
 
   const context = await browser.newContext({
@@ -195,22 +202,10 @@ async function main() {
 
   const page = await context.newPage();
 
-  // Relay browser console messages and errors for debuggability, especially
+  // Relay ALL browser console messages for debuggability, especially
   // useful for diagnosing 3D viewer / WebGL failures on headless CI.
   page.on("console", (msg) => {
-    const type = msg.type();
-    // Only relay messages that indicate problems or viewer activity.
-    if (type === "error" || type === "warning" || type === "assert") {
-      const text = msg.text();
-      // Skip noise from Dioxus internals / devtools.
-      if (text.includes("dioxus") || text.includes("Dioxus") || text.includes("eruda")) return;
-      console.log(`  [browser:${type}] ${text}`);
-    }
-    // Also surface any message mentioning "viewer" or "3d" (case-insensitive).
-    const text = msg.text();
-    if (/viewer|3d|three/i.test(text)) {
-      console.log(`  [browser:${type}] ${text}`);
-    }
+    console.log(`  [browser:${msg.type()}] ${msg.text()}`);
   });
   page.on("pageerror", (err) => {
     console.log(`  [browser:uncaught] ${err.message}`);

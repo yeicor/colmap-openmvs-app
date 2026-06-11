@@ -213,7 +213,7 @@ jobs:
       - name: Install Playwright
         run: |
           npm install --no-save --no-package-lock playwright
-          npx playwright install firefox
+          npx playwright install chromium
       - name: Take screenshots
         run: |
           node .github/scripts/screenshots.mjs web-artifact web-artifact/screenshots /${{ github.event.repository.name }}
