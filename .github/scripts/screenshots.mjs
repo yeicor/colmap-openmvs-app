@@ -104,15 +104,15 @@ const routes = [
   { url: "/project/demo/logs", name: "project-demo-logs" },
   { url: "/project/demo/outputs", name: "project-demo-outputs" },
   {
-    url: "/viewer/demo/openmvs%7Cscene_dense.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjg1NTgsLTAuMzg2NCwtMS40MTY0XSwidGFyZ2V0IjpbMC4wMDgzLC0yLjQ3MTQsNC4zMzc3XSwidXAiOlstMC4xMDYxLC0wLjkyOTgsLTAuMzUyNV0sIm5lYXIiOjAuMDA2OCwiZmFyIjoxMDAwfSwiY29uZmlnIjp7ImJhY2tncm91bmQiOiIjMTExMzE4IiwidGV4dHVyZXMiOnRydWUsIndpcmVmcmFtZSI6ZmFsc2UsImJhY2tmYWNlcyI6ZmFsc2UsImxpZ2h0aW5nIjp0cnVlLCJsaWdodEF6aW11dGgiOjAsImxpZ2h0RWxldmF0aW9uIjozMCwicG9pbnRzU2l6ZSI6Mi4yLCJ0b25lTWFwcGluZyI6dHJ1ZSwiZXhwb3N1cmUiOjF9fQ==",
+    url: "/viewer/demo/openmvs|scene_dense.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjYzNTcsLTAuMzgzNSwtMi4xMzhdLCJ0YXJnZXQiOlswLjAwODMsLTIuNDcxNCw0LjMzNzddLCJ1cCI6Wy0wLjA5NDUsLTAuOTQ0OCwtMC4zMTM4XSwibmVhciI6MC4wMDY4LCJmYXIiOjEwMDB9LCJjb25maWciOnsiYmFja2dyb3VuZCI6IiMxMTEzMTgiLCJ0ZXh0dXJlcyI6dHJ1ZSwid2lyZWZyYW1lIjpmYWxzZSwiYmFja2ZhY2VzIjpmYWxzZSwibGlnaHRpbmciOnRydWUsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjMwLCJwb2ludHNTaXplIjoyLjIsInRvbmVNYXBwaW5nIjp0cnVlLCJleHBvc3VyZSI6MX19",
     name: "viewer-pointcloud",
   },
   {
-    url: "/viewer/demo/openmvs%7Cscene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjg1NTgsLTAuMzg2NCwtMS40MTY0XSwidGFyZ2V0IjpbMC4wMDgzLC0yLjQ3MTQsNC4zMzc3XSwidXAiOlstMC4xMDYxLC0wLjkyOTgsLTAuMzUyNV0sIm5lYXIiOjAuMDA2OCwiZmFyIjoxMDAwfSwiY29uZmlnIjp7ImJhY2tncm91bmQiOiIjMTExMzE4IiwidGV4dHVyZXMiOnRydWUsIndpcmVmcmFtZSI6dHJ1ZSwiYmFja2ZhY2VzIjpmYWxzZSwibGlnaHRpbmciOnRydWUsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjMwLCJwb2ludHNTaXplIjoyLjIsInRvbmVNYXBwaW5nIjp0cnVlLCJleHBvc3VyZSI6MX19",
+    url: "/viewer/demo/openmvs|scene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjYzNTcsLTAuMzgzNSwtMi4xMzhdLCJ0YXJnZXQiOlswLjAwODMsLTIuNDcxNCw0LjMzNzddLCJ1cCI6Wy0wLjA5NDUsLTAuOTQ0OCwtMC4zMTM4XSwibmVhciI6MC4wMDY4LCJmYXIiOjEwMDB9LCJjb25maWciOnsiYmFja2dyb3VuZCI6IiMxMTEzMTgiLCJ0ZXh0dXJlcyI6dHJ1ZSwid2lyZWZyYW1lIjp0cnVlLCJiYWNrZmFjZXMiOmZhbHNlLCJsaWdodGluZyI6dHJ1ZSwibGlnaHRBemltdXRoIjowLCJsaWdodEVsZXZhdGlvbiI6MzAsInBvaW50c1NpemUiOjIuMiwidG9uZU1hcHBpbmciOnRydWUsImV4cG9zdXJlIjoxfX0=",
     name: "viewer-textured-wireframe",
   },
   {
-    url: "/viewer/demo/openmvs%7Cscene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjg1NTgsLTAuMzg2NCwtMS40MTY0XSwidGFyZ2V0IjpbMC4wMDgzLC0yLjQ3MTQsNC4zMzc3XSwidXAiOlstMC4xMDYxLC0wLjkyOTgsLTAuMzUyNV0sIm5lYXIiOjAuMDA2OCwiZmFyIjoxMDAwfSwiY29uZmlnIjp7ImJhY2tncm91bmQiOiIjMTExMzE4IiwidGV4dHVyZXMiOnRydWUsIndpcmVmcmFtZSI6ZmFsc2UsImJhY2tmYWNlcyI6ZmFsc2UsImxpZ2h0aW5nIjp0cnVlLCJsaWdodEF6aW11dGgiOjAsImxpZ2h0RWxldmF0aW9uIjozMCwicG9pbnRzU2l6ZSI6Mi4yLCJ0b25lTWFwcGluZyI6dHJ1ZSwiZXhwb3N1cmUiOjF9fQ==",
+    url: "/viewer/demo/openmvs|scene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjYzNTcsLTAuMzgzNSwtMi4xMzhdLCJ0YXJnZXQiOlswLjAwODMsLTIuNDcxNCw0LjMzNzddLCJ1cCI6Wy0wLjA5NDUsLTAuOTQ0OCwtMC4zMTM4XSwibmVhciI6MC4wMDY4LCJmYXIiOjEwMDB9LCJjb25maWciOnsiYmFja2dyb3VuZCI6IiMxMTEzMTgiLCJ0ZXh0dXJlcyI6dHJ1ZSwid2lyZWZyYW1lIjpmYWxzZSwiYmFja2ZhY2VzIjpmYWxzZSwibGlnaHRpbmciOnRydWUsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjMwLCJwb2ludHNTaXplIjoyLjIsInRvbmVNYXBwaW5nIjp0cnVlLCJleHBvc3VyZSI6MX19",
     name: "viewer-textured-mesh",
   },
 ];
@@ -197,7 +197,6 @@ async function main() {
 
   const context = await browser.newContext({
     viewport: { width: VIEWPORT_W, height: VIEWPORT_H },
-    deviceScaleFactor: 1,
   });
 
   const page = await context.newPage();
@@ -267,8 +266,8 @@ async function main() {
         // Playwright's page.screenshot() does not reliably capture WebGL
         // canvas content rendered with SwiftShader on headless CI runners.
         // The GPU compositing pipeline may skip the canvas, producing a
-        // near-empty image (\u223c10 KB) instead of the actual 3D content
-        // (\u226550 KB).
+        // near-empty image (10-20 KB) instead of the actual 3D content
+        // (>=50 KB).
         //
         // We work around this by taking a Playwright element screenshot of
         // the <canvas> itself — this reads from the already-composited
