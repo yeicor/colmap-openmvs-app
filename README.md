@@ -1,24 +1,74 @@
 # Photos to 3D Model Offline
 
-**One-click photogrammetry.** Turn photos into 3D models using the latest COLMAP + OpenMVS — no command line needed.
-
 
 ## Features
 
-* **🚀 One-click photogrammetry**: Turn photos into 3D models with a single click. Feature extraction, matching, sparse reconstruction, dense reconstruction, meshing, and texturing are fully automated using the latest COLMAP and OpenMVS.
-* **📦 Zero-install, fully offline**: COLMAP and OpenMVS come prepackaged in a container image, with no manual compilation or dependency setup required. Works entirely offline after the initial image download.
-* **🖥️ Runs anywhere**: Desktop (Windows, macOS, Linux), Web, and Android — the same app, UI, and reconstruction pipeline across all platforms.
-* **🐳 Flexible container runtimes**: Supports both Docker and PRoot. Docker provides the best performance on desktops and servers, while PRoot runs without special privileges and can be downloaded and managed automatically by the app.
-* **🖱️ Interactive 3D viewer**: Inspect point clouds, meshes, and textured models directly in your browser. Includes orbit controls, measurement tools (distance and area), wireframe mode, and adjustable lighting.
-* **⏱️ Real-time progress tracking**: Follow every reconstruction stage with live logs and progress bars. Tasks continue running even if you navigate away from the page.
-* **📂 Built-in output browser**: Explore and export reconstruction results with a tree-based file browser and 3D previews.
-* **⚙️ Fully configurable pipeline**: Adjust COLMAP and OpenMVS parameters through a UI generated from each tool’s `--help` output, or inject custom Bash scripts for advanced workflows.
-* **🖼️ Image management tools**: Upload photos from any device, batch-resize datasets before processing, and download sample datasets.
-* **🔄 Always up to date**: Update to the latest COLMAP and OpenMVS builds with a single click. Nightly container images are published automatically.
-* **🐳 Docker-in-Docker support**: Run the app inside a container while transparently orchestrating reconstruction pipelines on the host system.
-* **🔒 Privacy-first**: All processing happens locally. Your photos and models never leave your device. The **[web demo](https://yeicor.github.io/colmap-openmvs-app/)** uses pre-reconstructed data and requires no uploads.
-* **🆓 Open source**: Released under the MIT License. Contributions are welcome.
-* **📄 Precompiled binaries for all platforms**: Just download the [latest release](https://github.com/yeicor/colmap-openmvs-app/releases/latest) or the [nightly builds](https://github.com/yeicor/colmap-openmvs-app/actions/workflows/ci.yml).
+### 🚀 Photogrammetry Pipeline
+
+- **One-click reconstruction** — Automate the full pipeline: feature extraction, matching, sparse reconstruction, dense reconstruction, meshing, and texturing. Powered by **COLMAP** (state-of-the-art SfM) and **OpenMVS** (multi-view stereo).
+- **Live progress tracking** — Follow every stage with real-time logs and progress bars. Pipelines keep running even if you navigate away, and you can cancel at any time.
+- **Smart caching** — Completed pipeline stages are automatically cached. Re-run with confidence — only the changed steps are recomputed.
+- **Dry-run & log recovery** — Replay logs from a previous run without re-executing, useful for debugging or sharing results.
+
+### 🖱️ 3D Viewer
+
+- **In-browser model inspection** — View point clouds, meshes, and textured models directly without external tools.
+- **Full interaction** — Orbit, pan, zoom controls, distance and area measurement tools, wireframe overlay, and adjustable lighting.
+- **Auto-conversion** — PLY point clouds and meshes are automatically converted to glTF/GLB for seamless browser rendering.
+- **Deep linking** — Link directly to a specific model with a viewport camera preset.
+
+### ⚙️ Pipeline Configuration
+
+- **Visual parameter editor** — A UI generated automatically from each tool's `--help` output lets you tweak every COLMAP and OpenMVS parameter without touching the command line.
+- **Custom scripts** — Inject arbitrary Bash code before or instead of the pipeline for advanced workflows.
+- **Low-resource presets** — Android devices get conservative defaults tuned for stability on mobile hardware.
+
+### 🖼️ Image Management
+
+- **Upload from anywhere** — Add photos from any device via the browser's file picker.
+- **Batch resize** — Resize all images in a project to a max dimension in one click, keeping file sizes manageable.
+- **Sample datasets** — Download built-in demo datasets (ET, Kermit) to test the pipeline immediately.
+- **Thumbnail gallery** — Browse project images with cached thumbnail previews.
+
+### 📁 Output Browser & Export
+
+- **Tree-based file explorer** — Navigate COLMAP's directory structure (sparse models, dense point clouds, meshes, textures) with a familiar tree view.
+- **3D preview** — Click any viewable file (`.ply`, `points3D.bin`) to inspect it instantly in the 3D viewer.
+- **ZIP backup & restore** — Download any output folder as a ZIP archive, or upload one to restore.
+- **Selective cleanup** — Delete individual files or clear all outputs (preserving images and config) with a single click.
+
+### 🐳 Deployment & Runtime
+
+- **Zero-install COLMAP/OpenMVS** — Both tools come pre-packaged in a container image. No compilation or dependency setup needed.
+- **Container runtimes:**
+  - **Docker** — Best performance on desktops and servers, but requires the Docker daemon to be installed and running.
+  - **PRoot** — No special privileges required. Auto-downloaded and managed by the app; ideal for Android and restricted environments.
+- **Hardware support:**
+  - **CPU** — Runs the full pipeline end-to-end on any system.
+  - **CUDA** — Mount host GPU drivers for hardware-accelerated reconstruction.
+- **Docker-in-Docker** — Run the app inside a container while it transparently orchestrates pipelines on the host.
+- **Auto-update** — Update to the latest COLMAP and OpenMVS builds with one click. Nightly container images are published automatically.
+
+### 🖥️ Cross-Platform
+
+- **Desktop** — Native bundles for Windows (`.exe`), macOS (`.dmg`), and Linux (`.AppImage`).
+- **Web** — Full-stack web app, deployable behind any reverse proxy.
+- **Android** — APK builds with automatic PRoot runtime setup.
+- **Same code, same UI** — The exact same application runs everywhere.
+
+### 🔧 System Tools
+
+- **Background task manager** — A persistent side panel shows all running, completed, and failed tasks with expandable logs and progress bars.
+- **Settings UI** — Configure projects folder, runtime paths, default container image, custom mounts, and theme override from an in-app settings page.
+- **System startup** — Platform-specific initialization (Android runtime setup, path validation) runs automatically on boot.
+- **Dark/light theme** — Automatic theme detection with manual override.
+- **Separable back-end** — The frontend can connect to a remote server by configuring the backend URL.
+
+### 🔒 Privacy & Licensing
+
+- **100% offline** — After the initial container image download, all processing is local. Your photos and models never leave your device.
+- **Web demo** — The live demo uses pre-reconstructed data and requires no uploads. See [screenshots](#screenshots) below or [simply try it out](https://yeicor.github.io/colmap-openmvs-app/).
+- **MIT License** — Free to use, modify, and distribute. Contributions welcome.
 
 
 ## Screenshots
@@ -26,26 +76,66 @@
 Project management:
 
 <p align="center">
-  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/projects-page.png" width="200" alt="Projects page" />
-  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-images.png" width="200" alt="Project images" />
-  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-logs.png" width="200" alt="Real-time logs" />
-  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-outputs.png" width="200" alt="Project outputs" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/projects-page-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/projects-page-light.png" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/projects-page-light.png" width="200" alt="Projects page" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-images-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-images-light.png" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-images-light.png" width="200" alt="Project images" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-logs-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-logs-light.png" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-logs-light.png" width="200" alt="Real-time logs" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-outputs-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-outputs-light.png" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-outputs-light.png" width="200" alt="Project outputs" />
+  </picture>
 </p>
 
 3D viewer:
 
 <p align="center">
-  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-pointcloud.png" width="200" alt="Point cloud" />
-  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-wireframe.png" width="200" alt="Textured wireframe" />
-  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-mesh.png" width="200" alt="Textured mesh" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-pointcloud-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-pointcloud-light.png" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-pointcloud-light.png" width="200" alt="Point cloud" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-wireframe-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-wireframe-light.png" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-wireframe-light.png" width="200" alt="Textured wireframe" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-mesh-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-mesh-light.png" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-mesh-light.png" width="200" alt="Textured mesh" />
+  </picture>
 </p>
 
 Pipeline configuration and settings:
 
 <p align="center">
-  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-config.png" width="200" alt="Pipeline config" />
-  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-general.png" width="200" alt="Settings" />
-  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-runtime.png" width="200" alt="Runtime settings" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-config-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-config-light.png" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-config-light.png" width="200" alt="Pipeline config" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-general-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-general-light.png" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-general-light.png" width="200" alt="Settings" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-runtime-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-runtime-light.png" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-runtime-light.png" width="200" alt="Runtime settings" />
+  </picture>
 </p>
 
 Screenshots are automatically captured from the latest [web demo](https://yeicor.github.io/colmap-openmvs-app/), which is rebuilt on every push to `main`.

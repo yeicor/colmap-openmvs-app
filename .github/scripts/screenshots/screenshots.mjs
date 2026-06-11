@@ -127,6 +127,18 @@ const routes = [
 
 // ── Wait helpers ─────────────────────────────────────────────────────────
 
+async function forceTheme(page, theme) {
+  const themeValue = theme === "dark" ? "dark" : "light";
+  await page.evaluate((t) => {
+    document.documentElement.setAttribute("data-theme", t);
+    // Also override prefers-color-scheme for any media-query-based logic.
+    // This ensures the browser's color scheme matches even if the app
+    // queries it outside of data-theme.
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    Object.defineProperty(mq, "matches", { get: () => t === "dark" });
+  }, themeValue);
+}
+
 async function waitForAppReady(page, timeout = 25000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
@@ -177,6 +189,90 @@ async function waitForViewerModel(page, timeout = 60000) {
   return false;
 }
 
+// ── Screenshot capture ──────────────────────────────────────────────────
+
+async function captureForTheme(page, route, theme) {
+  const suffix = theme === "dark" ? "-dark" : "-light";
+  const outputFilename = `${route.name}${suffix}.png`;
+  const outputPath = path.join(outputDir, outputFilename);
+  const fullUrl = `http://localhost:${PORT}${basePath}/index.html#${route.url}`;
+
+  console.log(`  🎨 ${theme} …`);
+
+  try {
+    if (route.url.startsWith("/viewer/")) {
+      // Viewer pages: navigate from about:blank so the browser performs a
+      // full page load (hash-only navigation is ignored by the 3D viewer,
+      // leaving WebGL/WASM state stale between routes).
+      await page.goto("about:blank");
+      await page.goto(fullUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+
+      await forceTheme(page, theme);
+
+      const viewerReady = await waitForViewerModel(page);
+      console.log(viewerReady ? `  🎯 Model loaded` : `  ⚠ Model not loaded`);
+
+      // Log the actual camera state after restoration for cross-environment
+      // comparison (helps debug CI-vs-local camera transform differences).
+      const camState = await page.evaluate(() => {
+        const v = window.__viewer3d_instance;
+        if (!v) return null;
+        const s = v._getCameraState();
+        return { position: s.position, target: s.target, up: s.up };
+      });
+      if (camState) {
+        console.log(
+          `  camera: pos=[${camState.position.map((v) => v.toFixed(4)).join(", ")}] target=[${camState.target.map((v) => v.toFixed(4)).join(", ")}] up=[${camState.up.map((v) => v.toFixed(4)).join(", ")}]`,
+        );
+      }
+    } else {
+      await page.goto(fullUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+
+      await forceTheme(page, theme);
+
+      await waitForAppReady(page);
+    }
+
+    if (route.url.startsWith("/viewer/")) {
+      // Playwright's page.screenshot() does not reliably capture WebGL
+      // canvas content rendered with SwiftShader on headless CI runners.
+      // The GPU compositing pipeline may skip the canvas, producing a
+      // near-empty image (10-20 KB) instead of the actual 3D content
+      // (>=50 KB).
+      //
+      // We work around this by taking a Playwright element screenshot of
+      // the <canvas> itself — this reads from the already-composited
+      // layer at the GPU level rather than through the page compositor.
+      const canvas = page.locator(".viewer-canvas-container canvas, #viewer3d-container canvas").first();
+      const canvasCount = await canvas.count();
+      if (canvasCount > 0) {
+        await canvas.screenshot({ path: outputPath });
+        const stats = fs.statSync(outputPath);
+        console.log(`  ✅ ${outputFilename}  (element-screenshot, ${(stats.size / 1024).toFixed(1)} KB)`);
+      } else {
+        // No dedicated canvas found — grab the full page as a fallback.
+        await page.screenshot({ path: outputPath });
+        const stats = fs.statSync(outputPath);
+        console.log(`  ✅ ${outputFilename}  (full-page-fallback, ${(stats.size / 1024).toFixed(1)} KB)`);
+      }
+    } else {
+      await page.screenshot({ path: outputPath });
+      const stats = fs.statSync(outputPath);
+      console.log(`  ✅ ${outputFilename}  (${(stats.size / 1024).toFixed(1)} KB)`);
+    }
+  } catch (err) {
+    // Save a debug screenshot on failure to help diagnose the issue.
+    try {
+      const debugPath = path.join(outputDir, `${route.name}${suffix}-debug.png`);
+      await page.screenshot({ path: debugPath });
+      console.log(`  📸 Debug screenshot saved as ${path.basename(debugPath)}`);
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -205,6 +301,10 @@ async function main() {
 
   const context = await browser.newContext({
     viewport: { width: VIEWPORT_W, height: VIEWPORT_H },
+    // Override the browser-level prefers-color-scheme so initial renders
+    // match the theme we'll set via data-theme. This avoids a flash of
+    // wrong-themed content before the JS-based forceTheme() runs.
+    colorScheme: "light",
   });
 
   const page = await context.newPage();
@@ -223,90 +323,12 @@ async function main() {
   for (const route of routes) {
     console.log(`\n📸 ${route.name} …`);
 
-    const fullUrl = `http://localhost:${PORT}${basePath}/index.html#${route.url}`;
-
     try {
-      if (route.url.startsWith("/viewer/")) {
-        // Viewer pages: navigate from about:blank so the browser performs a
-        // full page load (hash-only navigation is ignored by the 3D viewer,
-        // leaving WebGL/WASM state stale between routes).
-        await page.goto("about:blank");
-        await page.goto(fullUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
-
-        // The demo manifest has dark_mode:null, so the app does not set
-        // data-theme on its own and leaves it to the browser's
-        // prefers-color-scheme media query (which defaults to dark in some
-        // headless environments).  Force light mode so the viewer page CSS
-        // (html[data-theme="light"] .viewer-page) takes effect.
-        await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
-
-        const viewerReady = await waitForViewerModel(page);
-        console.log(viewerReady ? "  🎯 Model loaded" : "  ⚠ Model not loaded");
-
-        // Log the actual camera state after restoration for cross-environment
-        // comparison (helps debug CI-vs-local camera transform differences).
-        const camState = await page.evaluate(() => {
-          const v = window.__viewer3d_instance;
-          if (!v) return null;
-          const s = v._getCameraState();
-          return { position: s.position, target: s.target, up: s.up };
-        });
-        if (camState) {
-          console.log(
-            `  camera: pos=[${camState.position.map((v) => v.toFixed(4)).join(", ")}] target=[${camState.target.map((v) => v.toFixed(4)).join(", ")}] up=[${camState.up.map((v) => v.toFixed(4)).join(", ")}]`,
-          );
-        }
-      } else {
-        await page.goto(fullUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
-
-        // The demo manifest has dark_mode:null, so the app does not set
-        // data-theme on its own and leaves it to the browser's
-        // prefers-color-scheme media query (which defaults to dark in some
-        // headless environments).  Force light mode for consistent screenshots.
-        await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
-
-        await waitForAppReady(page);
-      }
-
-      const outputPath = path.join(outputDir, `${route.name}.png`);
-
-      if (route.url.startsWith("/viewer/")) {
-        // Playwright's page.screenshot() does not reliably capture WebGL
-        // canvas content rendered with SwiftShader on headless CI runners.
-        // The GPU compositing pipeline may skip the canvas, producing a
-        // near-empty image (10-20 KB) instead of the actual 3D content
-        // (>=50 KB).
-        //
-        // We work around this by taking a Playwright element screenshot of
-        // the <canvas> itself — this reads from the already-composited
-        // layer at the GPU level rather than through the page compositor.
-        const canvas = page.locator(".viewer-canvas-container canvas, #viewer3d-container canvas").first();
-        const canvasCount = await canvas.count();
-        if (canvasCount > 0) {
-          await canvas.screenshot({ path: outputPath });
-          const stats = fs.statSync(outputPath);
-          console.log(`  \u2705 ${route.name}.png  (element-screenshot, ${(stats.size / 1024).toFixed(1)} KB)`);
-        } else {
-          // No dedicated canvas found — grab the full page as a fallback.
-          await page.screenshot({ path: outputPath });
-          const stats = fs.statSync(outputPath);
-          console.log(`  \u2705 ${route.name}.png  (full-page-fallback, ${(stats.size / 1024).toFixed(1)} KB)`);
-        }
-      } else {
-        await page.screenshot({ path: outputPath });
-        const stats = fs.statSync(outputPath);
-        console.log(`  \u2705 ${route.name}.png  (${(stats.size / 1024).toFixed(1)} KB)`);
-      }
+      await captureForTheme(page, route, "light");
+      await captureForTheme(page, route, "dark");
       results.push({ ...route, success: true });
     } catch (err) {
       console.error(`  ❌ ${err.message}`);
-      try {
-        const outputPath = path.join(outputDir, `${route.name}.png`);
-        await page.screenshot({ path: outputPath });
-        console.log(`  📸 Debug screenshot saved`);
-      } catch {
-        /* ignore */
-      }
       results.push({ ...route, success: false, error: err.message });
     }
   }
@@ -316,7 +338,7 @@ async function main() {
 
   const ok = results.filter((r) => r.success).length;
   const fail = results.filter((r) => !r.success).length;
-  console.log(`\n${"─".repeat(40)}`);
+  console.log(`\n${`─`.repeat(40)}`);
   console.log(`📊 Screenshots: ${ok} succeeded, ${fail} failed`);
 
   if (fail > 0) {

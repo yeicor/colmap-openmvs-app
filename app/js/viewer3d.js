@@ -46,12 +46,19 @@ function debounce(fn, ms) {
   };
 }
 /**
- * Derive the default background colour from the app's data-theme attribute.
- * Returns a dark colour when the data-theme is "dark", and a
- * light colour when the data-theme is "light" (or missing).
+ * Derive the default background colour matching the app theme.
+ *
+ * When the server forces a theme it sets the data-theme attribute on
+ * <html>.  When data-theme is absent the server left the decision to
+ * the browser's prefers-color-scheme media query (the common case on
+ * non-Android platforms) — we mirror that via matchMedia to stay in
+ * sync with what the CSS actually renders.
  */
 function getDefaultBackground() {
   var theme = document.documentElement.getAttribute("data-theme");
+  if (!theme) {
+    theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
   return theme === "dark" ? "#111318" : "#e8ecf0";
 }
 
