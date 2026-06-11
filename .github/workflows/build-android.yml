@@ -1,4 +1,10 @@
-# This is not integrated with ci.yml since the whole docker image needs to be embedded into android builds (security limitation), so we want to regularly trigger only this workflow when the base image changes or when manually requested. Also called from ci.yml automatically on main branch.
+# This workflow is called from ci.yml on every build, and also runs on a
+# schedule / dispatch to auto-repackage APK/AAB files when the underlying
+# Docker pipeline image has been updated.
+#
+# The build runs in parallel with ci.yml's build-and-test jobs; deployment
+# is handled separately by android-deploy.yml (called either from ci.yml
+# or from the deploy-orchestration job here).
 
 on:
   workflow_dispatch:
@@ -24,15 +30,18 @@ permissions:
   contents: read
 
 jobs:
+  # ─── Check source-image updates ────────────────────────────────────
+  # When triggered standalone (schedule / dispatch) we compare the digest
+  # of the Docker pipeline image and only build when it has changed.
+  # From ci.yml the "force" input always triggers a build.
   check-image-updates:
     runs-on: ubuntu-24.04
     outputs:
       should-build: ${{ steps.check.outputs.should-build }}
-      digest: ${{ steps.check.outputs.digest }}
+      digest: ${{ steps.digest.outputs.digest }}
 
     steps:
-      - name: Get current digest
-        id: digest
+      - id: digest
         run: |
           DIGEST=$(docker buildx imagetools inspect \
             mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest \
@@ -42,20 +51,17 @@ jobs:
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
           echo "$DIGEST" > current-digest.txt
 
-      - name: Download previous digest artifact
-        id: previous
-        uses: dawidd6/action-download-artifact@v11
+      - uses: dawidd6/action-download-artifact@v11
         continue-on-error: true
         with:
-          workflow: android.yml
+          workflow: android-build.yml
           branch: main
           name: source-image-digest
           search_artifacts: true
           path: previous
           if_no_artifact_found: warn
 
-      - name: Compare digests
-        id: check
+      - id: check
         env:
           FORCE: ${{ inputs.force || false }}
           CURRENT_DIGEST: ${{ steps.digest.outputs.digest }}
@@ -136,9 +142,8 @@ jobs:
         run: |
           dx bundle --android --package-types ${{ matrix.package-type }} --features server --target ${{ matrix.target }} --release
 
-      - name: Sign Android packages (AAB)
+      - shell: bash
         if: matrix.package-type == 'aab'
-        shell: bash
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -151,9 +156,8 @@ jobs:
             jarsigner -keystore ks.jks -storepass "$ANDROID_KEYSTORE_PASSWORD" \
               -keypass "$ANDROID_KEY_PASSWORD" -signedjar {} {} "$ANDROID_KEY_ALIAS" \;
 
-      - name: Sign Android packages (APK)
+      - shell: bash
         if: matrix.package-type == 'apk'
-        shell: bash
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -173,21 +177,17 @@ jobs:
             echo "⚠️  zipalign/apksigner not found — skipping APK signing"
           fi
 
-      - name: Prepare artifact (AAB)
+      - shell: bash
         if: matrix.package-type == 'aab'
-        shell: bash
         run: |
           set -Eeuo pipefail
           mkdir -p android-output
-          # Copy AAB with target-specific name
           for aab in $(find target -type f -path '*/release/android/*/bundle/*.aab'); do
             cp "$aab" "android-output/app-release-${{ matrix.target }}.aab"
           done
-          # Copy mapping file with target-specific name
           for mapping in $(find target -type f -path '*/release/android/*/mapping.txt'); do
             cp "$mapping" "android-output/mapping-${{ matrix.target }}.txt"
           done
-          # Copy debug symbols keyed by ABI subdirectory (strip intermediate Gradle folders)
           for symbols_dir in $(find target -type d -path '*/release/android/*/merged_jni_libs/release/*/out'); do
             for abi_dir in "$symbols_dir"/*/; do
               [ -d "$abi_dir" ] || continue
@@ -199,9 +199,8 @@ jobs:
           echo "📦 Artifact contents:"
           find android-output -type f
 
-      - name: Prepare artifact (APK)
+      - shell: bash
         if: matrix.package-type == 'apk'
-        shell: bash
         run: |
           set -Eeuo pipefail
           mkdir -p apk-collect
@@ -224,55 +223,69 @@ jobs:
           name: build-android-apk-${{ matrix.target }}
           path: apk-collect/
 
-  # ─── Google Play Store ─────────────────────────────────────────────
-  # Publishes AABs to Google Play. On tag push (v*) deploys to
-  # production+beta+internal; on main branch deploys to beta+internal only.
-  deploy-googleplay:
+  # ─── F-Droid metadata ──────────────────────────────────────────────
+  # Generates fastlane-compatible metadata and F-Droid YAML metadata.
+  metadata:
     needs: [check-image-updates, build]
     if: needs.check-image-updates.outputs.should-build == 'true'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: build-android-aab-*
-          merge-multiple: true
-          path: android-artifacts
+      - uses: actions/checkout@v6
 
-      - id: upload-info
-        shell: bash
+      - shell: bash
         run: |
-          echo "release-files=$(find android-artifacts -type f -name '*.aab' | sort | tr '\n' ',')" >> "$GITHUB_OUTPUT"
-          if [ -d android-artifacts/debug-symbols ]; then
-            echo "debug-symbols-folder=$(pwd)/android-artifacts/debug-symbols" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+
+          VERSION=$(grep '"version"' package.json | head -1 | cut -d'"' -f4)
+          VERSION_CODE=$(date +%Y%m%d)
+
+          mkdir -p fastlane/metadata/android/en-US/changelogs
+
+          echo "COLMAP OpenMVS App" > fastlane/metadata/android/en-US/title.txt
+          echo "3D reconstruction from images" > fastlane/metadata/android/en-US/short_description.txt
+
+          # Extract first ~20 lines of readable content from README
+          if [ -f README.md ]; then
+            sed -n '/^[A-Za-z]/,/^$/{/^$/q; /^$/!p}' README.md \
+              > fastlane/metadata/android/en-US/full_description.txt 2>/dev/null || true
           fi
-          first_mapping=$(find android-artifacts -type f -name 'mapping-*.txt' | head -1)
-          if [ -n "$first_mapping" ]; then
-            echo "mapping-file=$first_mapping" >> "$GITHUB_OUTPUT"
-          fi
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "tracks=production,beta,internal" >> "$GITHUB_OUTPUT"
-          else
-            echo "tracks=beta,internal" >> "$GITHUB_OUTPUT"
+          if [ ! -s fastlane/metadata/android/en-US/full_description.txt ]; then
+            echo "A comprehensive photogrammetry and 3D reconstruction application." \
+              > fastlane/metadata/android/en-US/full_description.txt
           fi
 
-      - uses: r0adkll/upload-google-play@v1
+          # Simple changelog from git
+          git log --oneline -10 2>/dev/null \
+            > fastlane/metadata/android/en-US/changelogs/${VERSION_CODE}.txt || \
+            echo "Version ${VERSION} (${VERSION_CODE})" \
+            > fastlane/metadata/android/en-US/changelogs/${VERSION_CODE}.txt
+
+          echo "📦 Fastlane metadata:"
+          find fastlane -type f
+
+      - uses: actions/upload-artifact@v4
         with:
-          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: com.github.yeicor.colmap_openmvs_app
-          releaseFiles: ${{ steps.upload-info.outputs.release-files }}
-          tracks: ${{ steps.upload-info.outputs.tracks }}
-          debugSymbols: ${{ steps.upload-info.outputs.debug-symbols-folder || '' }}
-          mappingFile: ${{ steps.upload-info.outputs.mapping-file || '' }}
+          name: fdroid-metadata
+          path: fastlane/
 
-  # ─── Save source digest (runs after all deploy jobs complete) ──────
+  # ─── Deploy orchestration (standalone triggers only) ──────────────
+  # When triggered by schedule or workflow_dispatch (not from ci.yml),
+  # also run the full deployment.
+  deploy-orchestration:
+    needs: [check-image-updates, build, metadata]
+    if: needs.check-image-updates.outputs.should-build == 'true' && github.event_name != 'workflow_call'
+    uses: ./.github/workflows/android-deploy.yml
+    secrets: inherit
+
+  # ─── Save source digest ─────────────────────────────────────────────
+  # Only on standalone triggers, after the deploy completes, so the next
+  # cron check skips this image revision.
   save-digest:
-    needs: [check-image-updates, build, deploy-googleplay]
-    if: needs.check-image-updates.outputs.should-build == 'true'
+    needs: [check-image-updates, build, metadata, deploy-orchestration]
+    if: needs.check-image-updates.outputs.should-build == 'true' && github.event_name != 'workflow_call'
     runs-on: ubuntu-24.04
-
     steps:
-      - name: Save source digest
-        run: |
+      - run: |
           echo '${{ needs.check-image-updates.outputs.digest }}' > digest.txt
 
       - uses: actions/upload-artifact@v4

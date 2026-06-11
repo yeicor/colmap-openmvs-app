@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  build-and-test:
+  build-and-test-desktop-and-web:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -132,7 +132,65 @@ jobs:
           name: build-${{ matrix.build-type }}-${{ matrix.target || matrix.os }}
           path: artifact_out/*
 
+  # Runs in parallel with build-and-test-desktop-and-web — builds Docker images and
+  # pushes layer cache; does not push to target registries.
+  build-docker:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - cpu
+          - cuda
+        build-type:
+          - release
+          - debug
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ matrix.variant }}-${{ matrix.build-type }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          build-args: |
+            ${{ matrix.variant == 'cuda' && 'RUNTIME_IMAGE=nvidia/cuda:13.0.3-runtime-ubuntu24.04' || '' }}
+            BUILD_TYPE=${{ matrix.build-type }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
+        env:
+          DOCKER_BUILD_SUMMARY: "false"
+
+  # Runs in parallel with build-and-test-desktop-and-web — builds and signs Android
+  # APK/AAB packages and generates F-Droid metadata.
+  build-android:
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/build-android.yml
+    with:
+      force: true
+    secrets: inherit
+
+  # Gated on all build jobs — pushes to target registries using cached
+  # layers from the build-docker job.
   deploy-docker:
+    needs: [build-and-test-desktop-and-web, build-docker, build-android]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -184,17 +242,16 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
         env:
           DOCKER_BUILD_SUMMARY: "false"
 
   deploy-pages:
-    needs: build-and-test
+    needs: build-and-test-desktop-and-web
     runs-on: ubuntu-24.04
     permissions:
       pages: write
       id-token: write
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -214,11 +271,11 @@ jobs:
       # version of Playwright, Chromium, SwiftShader, and fonts so that
       # screenshots are identical on every run
       # (runner CI was making wrong screenshots for the 3D viewer before this)
-      - name: Build screenshot Docker image
+      - shell: bash
         run: |
           mkdir -p .github/scripts/screenshots/public && cp -r web-artifact/. .github/scripts/screenshots/public/
           docker build -t colmap-screenshots .github/scripts/screenshots
-      - name: Take screenshots
+      - shell: bash
         run: |
           docker run --rm \
             -v "$PWD/web-artifact/screenshots:/app/screenshots" \
@@ -230,18 +287,18 @@ jobs:
           path: web-artifact
       - uses: actions/deploy-pages@v4
 
+  # Gated on all build jobs — generates a self-hosted F-Droid
+  # repository from the signed APKs produced by build-android.
   deploy-android:
-    needs: build-and-test
+    needs: [build-and-test-desktop-and-web, build-docker, build-android]
     permissions:
       actions: read
       contents: read
-    uses: ./.github/workflows/android.yml
-    with:
-      force: true
+    uses: ./.github/workflows/android-deploy.yml
     secrets: inherit
 
   deploy-release:
-    needs: build-and-test
+    needs: [build-and-test-desktop-and-web, build-android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -292,7 +349,6 @@ jobs:
           files: release_out/*
           draft: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/v') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: liudonghua123/delete-release-action@v1 # Test that release would succeed, but delete it immediately if it's a non-tag push
@@ -303,16 +359,31 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ─── Success gate ─────────────────────────────────────────────────────
-  success:
+  success: # or retry on failure to mitigate transient CI issues (e.g. network blips, GitHub Actions flakiness)
     needs:
-      - build-and-test
-      - deploy-docker
+      - build-and-test-desktop-and-web
+      - build-docker
+      - build-android
       - deploy-pages
-      - deploy-android
       - deploy-release
+      - deploy-docker
+      - deploy-android
     if: "!cancelled()"
     runs-on: ubuntu-24.04
+    permissions:
+      actions: write
     steps:
-      - env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
-        run: echo "$NEEDS_JSON" | jq -e 'all(.[].result; . == "success" or . == "skipped")'
+      - shell: bash
+        if: contains(needs.*.result, 'failure') && fromJSON(github.run_attempt) < 3
+        run: |
+          set -ex
+          sleep $((RANDOM % 120 + 10))
+          gh workflow run retry-workflow.yml -F run_id=${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+      - shell: bash
+        if: contains(needs.*.result, 'failure') && fromJSON(github.run_attempt) >= 3
+        run: |
+          echo "Workflow failed. Please investigate."
+          exit 1
