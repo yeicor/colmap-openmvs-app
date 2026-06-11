@@ -126,8 +126,9 @@ async fn run_pipeline_task(
     // Build args: /work -v [--recover-logs]
     let mut args = vec!["/work".to_string(), "-v".to_string()];
     if recover_logs {
+        args.push("--dry-run".to_string());
         args.push("--recover-logs".to_string());
-        debug!("Added --recover-logs flag to container arguments");
+        debug!("Added --dry-run and --recover-logs flags to container arguments");
     }
     debug!(args = ?args, "Container arguments prepared");
 

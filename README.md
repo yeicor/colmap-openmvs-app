@@ -43,7 +43,7 @@ Project management:
 Pipeline configuration and settings:
 
 <p align="center">
-    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-config.png" width="200" alt="Pipeline config" />
+  <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-config.png" width="200" alt="Pipeline config" />
   <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-general.png" width="200" alt="Settings" />
   <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-runtime.png" width="200" alt="Runtime settings" />
 </p>
