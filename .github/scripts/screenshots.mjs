@@ -8,9 +8,9 @@
 //!   <base-path>    Base path prefix used in asset URLs (default: /colmap-openmvs-app)
 //!                  Pass "/" (or empty) for local builds without a base_path set.
 //!
-//! Requires: playwright (install with: npx playwright install chromium)
+//! Requires: playwright (install with: npx playwright install firefox)
 
-import { chromium } from "playwright";
+import { firefox } from "playwright";
 import http from "http";
 import fs from "fs";
 import path from "path";
@@ -183,22 +183,9 @@ async function main() {
     server.on("error", reject);
   });
 
-  const browser = await chromium.launch({
+  const browser = await firefox.launch({
     headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      // Use ANGLE for WebGL rendering (industry standard for Three.js
-      // headless screenshots).  Let ANGLE auto-detect the best backend
-      // (typically Mesa/llvmpipe on Ubuntu CI, or SwiftShader as fallback).
-      //
-      // Avoid --use-angle=swiftshader-webgl specifically — that backend
-      // variant is known to silently drop Three.js model geometry while
-      // still rendering UI overlays (arcball controls etc.).
-      "--use-gl=angle",
-      "--ignore-gpu-blocklist",
-      "--enable-unsafe-swiftshader", // fallback for environments without Mesa
-    ],
+    args: ["--no-sandbox"],
   });
 
   const context = await browser.newContext({
