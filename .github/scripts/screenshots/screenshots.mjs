@@ -1,7 +1,15 @@
 //! Take desktop-viewport screenshots of the web demo for the README.
 //!
-//! Usage:
-//!   node .github/scripts/screenshots.mjs <public-dir> <output-dir> [base-path]
+//! Usage (Docker - recommended):
+//!   docker build -t colmap-screenshots .github/scripts/screenshots
+//!   docker run --rm \
+//!     -v /path/to/public-dir:/public:ro \
+//!     -v /path/to/output-dir:/output \
+//!     colmap-screenshots \
+//!       /public /output /colmap-openmvs-app
+//!
+//! Usage (direct, requires playwright installed):
+//!   node .github/scripts/screenshots/screenshots.mjs <public-dir> <output-dir> [base-path]
 //!
 //!   <public-dir>   Path to the built web demo root (default: ./public)
 //!   <output-dir>   Directory to write screenshots (default: ./screenshots)
@@ -104,15 +112,15 @@ const routes = [
   { url: "/project/demo/logs", name: "project-demo-logs" },
   { url: "/project/demo/outputs", name: "project-demo-outputs" },
   {
-    url: "/viewer/demo/openmvs|scene_dense.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjYzNTcsLTAuMzgzNSwtMi4xMzhdLCJ0YXJnZXQiOlswLjAwODMsLTIuNDcxNCw0LjMzNzddLCJ1cCI6Wy0wLjA5NDUsLTAuOTQ0OCwtMC4zMTM4XSwibmVhciI6MC4wMDY4LCJmYXIiOjEwMDB9LCJjb25maWciOnsiYmFja2dyb3VuZCI6IiMxMTEzMTgiLCJ0ZXh0dXJlcyI6dHJ1ZSwid2lyZWZyYW1lIjpmYWxzZSwiYmFja2ZhY2VzIjpmYWxzZSwibGlnaHRpbmciOnRydWUsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjMwLCJwb2ludHNTaXplIjoyLjIsInRvbmVNYXBwaW5nIjp0cnVlLCJleHBvc3VyZSI6MX19",
+    url: "/viewer/demo/openmvs|scene_dense.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjYzNTcsLTAuMzgzNSwtMi4xMzhdLCJ0YXJnZXQiOlswLjAwODMsLTIuNDcxNCw0LjMzNzddLCJ1cCI6Wy0wLjA5NDUsLTAuOTQ0OCwtMC4zMTM4XSwibmVhciI6MC4wMDY4LCJmYXIiOjEwMDB9LCJjb25maWciOnsidGV4dHVyZXMiOnRydWUsIndpcmVmcmFtZSI6ZmFsc2UsImJhY2tmYWNlcyI6ZmFsc2UsImxpZ2h0aW5nIjpmYWxzZSwibGlnaHRBemltdXRoIjowLCJsaWdodEVsZXZhdGlvbiI6MzAsInBvaW50c1NpemUiOjEuNSwidG9uZU1hcHBpbmciOnRydWUsImV4cG9zdXJlIjowLjd9fQ==",
     name: "viewer-pointcloud",
   },
   {
-    url: "/viewer/demo/openmvs|scene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjYzNTcsLTAuMzgzNSwtMi4xMzhdLCJ0YXJnZXQiOlswLjAwODMsLTIuNDcxNCw0LjMzNzddLCJ1cCI6Wy0wLjA5NDUsLTAuOTQ0OCwtMC4zMTM4XSwibmVhciI6MC4wMDY4LCJmYXIiOjEwMDB9LCJjb25maWciOnsiYmFja2dyb3VuZCI6IiMxMTEzMTgiLCJ0ZXh0dXJlcyI6dHJ1ZSwid2lyZWZyYW1lIjp0cnVlLCJiYWNrZmFjZXMiOmZhbHNlLCJsaWdodGluZyI6dHJ1ZSwibGlnaHRBemltdXRoIjowLCJsaWdodEVsZXZhdGlvbiI6MzAsInBvaW50c1NpemUiOjIuMiwidG9uZU1hcHBpbmciOnRydWUsImV4cG9zdXJlIjoxfX0=",
+    url: "/viewer/demo/openmvs|scene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjYzNTcsLTAuMzgzNSwtMi4xMzhdLCJ0YXJnZXQiOlswLjAwODMsLTIuNDcxNCw0LjMzNzddLCJ1cCI6Wy0wLjA5NDUsLTAuOTQ0OCwtMC4zMTM4XSwibmVhciI6MC4wMDY4LCJmYXIiOjEwMDB9LCJjb25maWciOnsidGV4dHVyZXMiOnRydWUsIndpcmVmcmFtZSI6dHJ1ZSwiYmFja2ZhY2VzIjpmYWxzZSwibGlnaHRpbmciOnRydWUsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjMwLCJwb2ludHNTaXplIjoyLjIsInRvbmVNYXBwaW5nIjp0cnVlLCJleHBvc3VyZSI6MX19",
     name: "viewer-textured-wireframe",
   },
   {
-    url: "/viewer/demo/openmvs|scene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjYzNTcsLTAuMzgzNSwtMi4xMzhdLCJ0YXJnZXQiOlswLjAwODMsLTIuNDcxNCw0LjMzNzddLCJ1cCI6Wy0wLjA5NDUsLTAuOTQ0OCwtMC4zMTM4XSwibmVhciI6MC4wMDY4LCJmYXIiOjEwMDB9LCJjb25maWciOnsiYmFja2dyb3VuZCI6IiMxMTEzMTgiLCJ0ZXh0dXJlcyI6dHJ1ZSwid2lyZWZyYW1lIjpmYWxzZSwiYmFja2ZhY2VzIjpmYWxzZSwibGlnaHRpbmciOnRydWUsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjMwLCJwb2ludHNTaXplIjoyLjIsInRvbmVNYXBwaW5nIjp0cnVlLCJleHBvc3VyZSI6MX19",
+    url: "/viewer/demo/openmvs|scene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjYzNTcsLTAuMzgzNSwtMi4xMzhdLCJ0YXJnZXQiOlswLjAwODMsLTIuNDcxNCw0LjMzNzddLCJ1cCI6Wy0wLjA5NDUsLTAuOTQ0OCwtMC4zMTM4XSwibmVhciI6MC4wMDY4LCJmYXIiOjEwMDB9LCJjb25maWciOnsidGV4dHVyZXMiOnRydWUsIndpcmVmcmFtZSI6ZmFsc2UsImJhY2tmYWNlcyI6ZmFsc2UsImxpZ2h0aW5nIjp0cnVlLCJsaWdodEF6aW11dGgiOjAsImxpZ2h0RWxldmF0aW9uIjozMCwicG9pbnRzU2l6ZSI6Mi4yLCJ0b25lTWFwcGluZyI6dHJ1ZSwiZXhwb3N1cmUiOjF9fQ==",
     name: "viewer-textured-mesh",
   },
 ];

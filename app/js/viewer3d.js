@@ -47,16 +47,17 @@ function debounce(fn, ms) {
 }
 /**
  * Derive the default background colour from the app's data-theme attribute.
- * Returns a dark colour when the data-theme is "dark" (or missing), and a
- * light colour when the data-theme is "light".
+ * Returns a dark colour when the data-theme is "dark", and a
+ * light colour when the data-theme is "light" (or missing).
  */
 function getDefaultBackground() {
   var theme = document.documentElement.getAttribute("data-theme");
-  return theme === "light" ? "#e8ecf0" : "#111318";
+  return theme === "dark" ? "#111318" : "#e8ecf0";
 }
 
 const DEFAULT_STATE = {
-  background: getDefaultBackground(),
+  // background is set dynamically in the constructor so it reflects the
+  // current data-theme at render time rather than at module-load time.
   textures: true,
   wireframe: false,
   backfaces: false,
@@ -200,12 +201,13 @@ export class Viewer3D {
     this._onStateChange = opts.onStateChange || null;
 
     // Merge state from: theme-aware defaults → saved prefs → URL/options.
-    // DEFAULT_STATE provides the theme-appropriate background colour
-    // (via getDefaultBackground() which respects data-theme).  URL config
-    // may still override it, but the background property should normally
+    // DEFAULT_STATE (without background) provides the non-colour defaults.
+    // getDefaultBackground() is called here (not at module load time) so it
+    // picks up whatever data-theme is active when the viewer renders.
+    // URL config may still override the background, but it should normally
     // be left out so the theme choice stays in one place.
     const saved = loadPrefs();
-    this.state = { ...DEFAULT_STATE, ...saved, ...(opts.initialConfig || {}) };
+    this.state = { background: getDefaultBackground(), ...DEFAULT_STATE, ...saved, ...(opts.initialConfig || {}) };
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(this.state.background);

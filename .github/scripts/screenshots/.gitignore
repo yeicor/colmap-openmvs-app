@@ -1,0 +1,4 @@
+# The public/ directory is the built web demo (from `dx bundle`).
+# It is copied here temporarily during CI before building the Docker image,
+# and is already baked into the image.  Do not commit it.
+public/

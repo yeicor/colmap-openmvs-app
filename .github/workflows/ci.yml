@@ -210,13 +210,20 @@ jobs:
           path: web-artifact
 
       # ── Take phone-form-factor screenshots for the README ───────────
-      - name: Install Playwright
+      # The Docker image bakes in the exact web demo build plus a pinned
+      # version of Playwright, Chromium, SwiftShader, and fonts so that
+      # screenshots are identical on every run
+      # (runner CI was making wrong screenshots for the 3D viewer before this)
+      - name: Build screenshot Docker image
         run: |
-          npm install --no-save --no-package-lock playwright
-          npx playwright install chromium
+          mkdir -p .github/scripts/screenshots/public && cp -r web-artifact/. .github/scripts/screenshots/public/
+          docker build -t colmap-screenshots .github/scripts/screenshots
       - name: Take screenshots
         run: |
-          node .github/scripts/screenshots.mjs web-artifact web-artifact/screenshots /${{ github.event.repository.name }}
+          docker run --rm \
+            -v "$PWD/web-artifact/screenshots:/app/screenshots" \
+            colmap-screenshots \
+              /app/public /app/screenshots /${{ github.event.repository.name }}
 
       - uses: actions/upload-pages-artifact@v3
         with:
