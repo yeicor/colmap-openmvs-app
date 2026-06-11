@@ -86,7 +86,13 @@ fn main() {
     // ── 5. Copy icon into the Android project (if building for Android) ──────
     embed_android_icon_and_app_name(&manifest_dir, &app_name);
 
-    // ── 6. Generate demo assets if the demo feature is enabled ─────────────────
+    // ── 6. Patch Android version with exact values derived from Git ──────────
+    let git_tag = find_latest_tag().unwrap_or_else(|| "unknown".into());
+    let version_code = run("git", &["rev-list", "--count", "HEAD"]).unwrap_or_else(|| "1".into());
+    let version_name = git_tag.strip_prefix("v").unwrap_or(&git_tag).to_string();
+    embed_android_version(&manifest_dir, &version_name, &version_code);
+
+    // ── 7. Generate demo assets if the demo feature is enabled ─────────────────
     if std::env::var("CARGO_FEATURE_DEMO").is_ok() {
         generate_demo_assets(&manifest_dir);
     }
@@ -644,6 +650,77 @@ fn embed_android_icon_and_app_name(manifest_dir: &Path, app_name: &str) {
             eprintln!("cargo:warning=Failed to write {}: {e}", round_xml.display());
         }
         eprintln!("cargo:warning=Adaptive-icon XML updated — icon now respects mask shapes");
+    }
+}
+
+/// Patch the generated Android build.gradle and AndroidManifest.xml with the exact 
+/// version derived from git tags so that F-Droid metadata exactly matches the APK.
+fn embed_android_version(manifest_dir: &Path, version_name: &str, version_code: &str) {
+    let profile = std::env::var("PROFILE").unwrap_or_default();
+    let android_app = manifest_dir
+        .join("..")
+        .join("target")
+        .join("dx")
+        .join("colmap-openmvs-app")
+        .join(&profile)
+        .join("android")
+        .join("app")
+        .join("app");
+
+    if !android_app.is_dir() {
+        return;
+    }
+
+    // Patch build.gradle
+    let build_gradle = android_app.join("build.gradle");
+    if build_gradle.is_file() {
+        if let Ok(content) = fs::read_to_string(&build_gradle) {
+            let mut new_content = content.clone();
+            if let Some(start) = new_content.find("versionCode ") {
+                let after = &new_content[start + "versionCode ".len()..];
+                if let Some(end) = after.find('\n') {
+                    let old_val = &after[..end];
+                    new_content = new_content.replace(&format!("versionCode {}", old_val), &format!("versionCode {}", version_code));
+                }
+            }
+            if let Some(start) = new_content.find("versionName \"") {
+                let after = &new_content[start + "versionName \"".len()..];
+                if let Some(end) = after.find('"') {
+                    let old_val = &after[..end];
+                    new_content = new_content.replace(&format!("versionName \"{}\"", old_val), &format!("versionName \"{}\"", version_name));
+                }
+            }
+            if content != new_content {
+                fs::write(&build_gradle, &new_content).ok();
+                eprintln!("cargo:warning=Patched Android build.gradle with versionCode={} versionName={}", version_code, version_name);
+            }
+        }
+    }
+
+    // Patch AndroidManifest.xml
+    let android_manifest = android_app.join("src").join("main").join("AndroidManifest.xml");
+    if android_manifest.is_file() {
+        if let Ok(content) = fs::read_to_string(&android_manifest) {
+            let mut new_content = content.clone();
+            if let Some(start) = new_content.find("android:versionCode=\"") {
+                let after = &new_content[start + "android:versionCode=\"".len()..];
+                if let Some(end) = after.find('"') {
+                    let old_val = &after[..end];
+                    new_content = new_content.replace(&format!("android:versionCode=\"{}\"", old_val), &format!("android:versionCode=\"{}\"", version_code));
+                }
+            }
+            if let Some(start) = new_content.find("android:versionName=\"") {
+                let after = &new_content[start + "android:versionName=\"".len()..];
+                if let Some(end) = after.find('"') {
+                    let old_val = &after[..end];
+                    new_content = new_content.replace(&format!("android:versionName=\"{}\"", old_val), &format!("android:versionName=\"{}\"", version_name));
+                }
+            }
+            if content != new_content {
+                fs::write(&android_manifest, &new_content).ok();
+                eprintln!("cargo:warning=Patched AndroidManifest.xml with versionCode={} versionName={}", version_code, version_name);
+            }
+        }
     }
 }
 
