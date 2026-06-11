@@ -733,7 +733,7 @@ fn run_demo_data_generation(manifest_dir: &Path, demo_dir: &Path) {
     let _ = fs::remove_dir_all(&sandbox_target);
     fs::create_dir_all(&sandbox_target).expect("Failed to create sandbox CARGO_TARGET_DIR");
 
-    let status = Command::new("cargo")
+    let output = Command::new("cargo")
         .args([
             "test",
             "--test",
@@ -759,18 +759,23 @@ fn run_demo_data_generation(manifest_dir: &Path, demo_dir: &Path) {
             "DEMO_ASSETS_DIR",
             demo_dir.to_str().expect("non-UTF-8 demo path"),
         )
-        .status()
+        .output()
         .expect("Failed to execute cargo test for demo data generation");
 
     // Clean up sandbox target directory
     let _ = fs::remove_dir_all(&sandbox_target);
 
-    if !status.success() {
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         panic!(
             "Demo data generation command failed (exit code: {:?}).\n\
+             stdout:\n{}\nstderr:\n{}\n\n\
              Ensure Docker or PRoot is available, then run manually:\n\
              $ cargo test --test generate_demo_data -p colmap-openmvs-backend\n",
-            status.code(),
+            output.status.code(),
+            stdout,
+            stderr,
         );
     }
 }
