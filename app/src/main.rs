@@ -71,9 +71,9 @@ pub enum Route {
 
 #[component]
 pub fn App() -> Element {
-    info!("App component: initializing...");
     use crate::mycomponents::ToastContainer;
     use crate::task_manager::{StartupCtx, TasksCtx, TasksState};
+    use_effect(move || info!("App component: initializing..."));
     use_context_provider(|| Signal::new(TasksState::default()) as TasksCtx);
 
     // Global toast notification system (single container for all floating toasts).
@@ -83,7 +83,7 @@ pub fn App() -> Element {
     // finish within the 1-second grace window without ever showing the startup
     // page.  Components inside the router tree (ProjectsSidebar, StartupTasks)
     // consume this context to decide whether / where to redirect.
-    info!("App component: creating startup context...");
+    use_effect(move || info!("App component: creating startup context..."));
     let startup = StartupCtx::new();
     use_context_provider(|| startup);
 
@@ -92,7 +92,7 @@ pub fn App() -> Element {
 
     {
         // Start the startup task in background as early as possible.
-        info!("App component: spawning startup task...");
+        use_effect(move || info!("App component: spawning startup task..."));
         let mut task_id = startup.task_id;
         let mut is_completed = startup.is_completed;
         let mut task_state = startup.task_state;
@@ -158,13 +158,13 @@ pub fn App() -> Element {
     // queries correctly, so the server returns an explicit override (`Some`).
     // On other platforms the server returns `None` and we leave the `data-theme`
     // attribute untouched so the CSS media query continues to work normally.
-    info!("App component: setting up color-scheme resource...");
+    use_effect(move || info!("App component: setting up color-scheme resource..."));
     let dark_mode =
         use_resource(move || async move { crate::server::get_dark_mode().await.ok().flatten() });
     // Apply the resolved theme. This effect runs on both server (during SSR,
     // after `use_resource` is awaited) and client (hydration / WASM).
-    info!("App component: setting up color-scheme effect...");
     use_effect(move || {
+        info!("App component: setting up color-scheme effect...");
         if let Some(Some(is_dark)) = dark_mode() {
             let theme = if is_dark { "dark" } else { "light" };
             let _ = dioxus::document::eval(&format!(
@@ -173,7 +173,7 @@ pub fn App() -> Element {
         }
     });
 
-    info!("App component: rendering UI...");
+    use_effect(move || info!("App component: rendering UI..."));
     rsx! {
         document::Title { { env!("APP_NAME") } }
         document::Link { rel: "icon", type: "image/png", href: asset!("/assets/icon.png") }

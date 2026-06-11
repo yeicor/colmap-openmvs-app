@@ -22,7 +22,9 @@ use super::{PipelineCommandCtx, PipelineIsRunningCtx, PipelineProgressCtx};
 /// Each child route component only provides its own tab content via `Outlet`.
 #[component]
 pub fn ProjectPage() -> Element {
-    info!("Initializing project page");
+    // Log only once when the layout component first mounts, not on every re-render.
+    // `use_effect` without any signal reads runs once after the first render.
+    use_effect(move || info!("Initializing project page"));
 
     // ── Extract route params ──────────────────────────────────────────
     let route = use_route::<Route>();

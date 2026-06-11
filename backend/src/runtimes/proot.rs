@@ -88,7 +88,8 @@ async fn find_proot_binary(runtime_dir: &Path) -> RuntimeResult<String> {
 /// Set up a proot [`Command`] with no special environment variables.
 ///
 /// With patchelf setting RPATH=$ORIGIN, libproot.so will automatically find
-/// libtalloc.so in the same directory. No special LD_LIBRARY_PATH setup needed.
+/// libtalloc.so and libandroid-shmem.so in the same directory. No special
+/// LD_LIBRARY_PATH setup needed.
 fn setup_proot_command(proot_bin: &str) -> Command {
     let cmd = Command::new(proot_bin);
     info!(proot_bin = %proot_bin, "setup_proot_command: initializing");
@@ -276,6 +277,54 @@ impl PRoot {
             .ok_or_else(|| anyhow::anyhow!("No PRoot versions found in Termux repository"))
     }
 
+    async fn fetch_libandroid_shmem_version(&self) -> RuntimeResult<Vec<String>> {
+        debug!("fetch_libandroid_shmem_version: starting");
+        let url = "https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/";
+
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .user_agent("colmap-openmvs-app")
+            .build()
+            .into();
+
+        debug!(url = %url, "fetch_libandroid_shmem_version: fetching from Termux repository");
+        let html = agent
+            .get(url)
+            .call()
+            .map_err(|e| anyhow::anyhow!("Failed to fetch libandroid-shmem versions: {}", e))?
+            .into_body()
+            .read_to_string()
+            .map_err(|e| anyhow::anyhow!("Failed to read libandroid-shmem response: {}", e))?;
+
+        debug!(
+            html_length = html.len(),
+            "fetch_libandroid_shmem_version: received HTML"
+        );
+        let mut versions = Vec::new();
+        for line in html.lines() {
+            if let Some(start) = line.find("libandroid-shmem_") {
+                if let Some(end) = line[start..].find("_aarch64.deb") {
+                    let filename = &line[start..start + end];
+                    if let Some(version_part) = filename.strip_prefix("libandroid-shmem_") {
+                        trace!("fetch_libandroid_shmem_version: found version");
+                        versions.push(version_part.to_string());
+                    }
+                }
+            }
+        }
+
+        versions.sort();
+        versions.reverse();
+        versions.dedup();
+
+        debug!(versions = ?versions, "fetch_libandroid_shmem_version: parsed versions");
+        if versions.is_empty() {
+            debug!("fetch_libandroid_shmem_version: no versions found in Termux repository");
+        }
+        versions.into_iter().next().map(|v| vec![v]).ok_or_else(|| {
+            anyhow::anyhow!("No libandroid-shmem versions found in Termux repository")
+        })
+    }
+
     async fn fetch_libtalloc_version(&self) -> RuntimeResult<Vec<String>> {
         debug!("fetch_libtalloc_version: starting");
         let url = "https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/";
@@ -440,6 +489,26 @@ impl PRoot {
         self.download_and_extract_deb(&agent, &talloc_url, "libtalloc")
             .await?;
         debug!("download_android: libtalloc download completed");
+
+        // Fetch and download libandroid-shmem
+        debug!("download_android: fetching libandroid-shmem version");
+        let libandroid_shmem_versions = self.fetch_libandroid_shmem_version().await?;
+        let libandroid_shmem_version = libandroid_shmem_versions
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("No libandroid-shmem version found"))?
+            .clone();
+        debug!(libandroid_shmem_version = %libandroid_shmem_version, "download_android: libandroid-shmem version fetched");
+
+        let libandroid_shmem_base_url =
+            "https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/";
+        let shmem_url = format!(
+            "{}libandroid-shmem_{}_aarch64.deb",
+            libandroid_shmem_base_url, libandroid_shmem_version
+        );
+        info!(libandroid_shmem_version = %libandroid_shmem_version, url = %shmem_url, "download_android: downloading libandroid-shmem");
+        self.download_and_extract_deb(&agent, &shmem_url, "libandroid-shmem")
+            .await?;
+        debug!("download_android: libandroid-shmem download completed");
 
         info!(version = %version, "download_android: Android installation completed");
         Ok(())
@@ -1517,6 +1586,14 @@ fn extract_tar_xz_sync(
         } else if package_name == "libtalloc" && path_str.contains("usr/lib/libtalloc") {
             let dest = images_dir.join(path.file_name().unwrap_or_default());
             debug!(dest = %dest.display(), "extract_tar_xz_sync: extracting libtalloc library");
+            entry
+                .unpack(&dest)
+                .map_err(|e| anyhow::anyhow!("Failed to unpack library: {}", e))?;
+        } else if package_name == "libandroid-shmem"
+            && path_str.contains("usr/lib/libandroid-shmem.so")
+        {
+            let dest = images_dir.join("libandroid-shmem.so");
+            debug!(dest = %dest.display(), "extract_tar_xz_sync: extracting libandroid-shmem library");
             entry
                 .unpack(&dest)
                 .map_err(|e| anyhow::anyhow!("Failed to unpack library: {}", e))?;

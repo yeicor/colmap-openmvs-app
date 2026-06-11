@@ -224,11 +224,10 @@ jobs:
           path: apk-collect/
 
   # ─── Save source digest ─────────────────────────────────────────────
-  # Only on standalone triggers, after the build completes, so the next
-  # cron check skips this image revision.
+  # After the build completes, so the next cron check skips this image revision.
   save-digest:
     needs: [check-image-updates, build]
-    if: needs.check-image-updates.outputs.should-build == 'true' && github.event_name != 'workflow_call'
+    if: needs.check-image-updates.outputs.should-build == 'true'
     runs-on: ubuntu-24.04
     steps:
       - run: |

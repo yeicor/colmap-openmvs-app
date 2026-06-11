@@ -4,7 +4,7 @@
 ///   1. Exports a Docker image filesystem.
 ///   2. Splits files into ELF binaries (→ jniLibs as `librootfs-<hash16>.so`)
 ///      and non-ELF files (→ rootfs.zip embedded in the binary via `include_bytes!`)
-///   3. Downloads proot + loader + libtalloc from Termux
+///   3. Downloads proot + loader + libtalloc + libandroid-shmem from Termux
 ///   4. Applies patchelf to the proot binary (RPATH=$ORIGIN, libtalloc rename)
 ///      — auto-downloads patchelf if not available on the system.
 ///   5. Emits `EMBEDDED_IMAGE_TAG` so the app can read it at runtime
@@ -61,7 +61,7 @@ fn main() {
 
     let cache = CacheDir::new(&docker_image, docker_platform, &target);
 
-    // Step 1 – Download runtime prerequisites (proot, loader, libtalloc).
+    // Step 1 – Download runtime prerequisites (proot, loader, libtalloc, libandroid-shmem).
     download_prerequisites(&cache, termux_arch);
 
     // Step 2 – Pull and extract the Docker image directly to a directory.
@@ -134,7 +134,7 @@ struct CacheDir {
 impl CacheDir {
     fn new(image: &str, platform: &str, target: &str) -> Self {
         let digest = image_digest(image, platform);
-        let key = fnv1a_hex(&format!("{image}|{digest}|{platform}|{target}|v3"));
+        let key = fnv1a_hex(&format!("{image}|{digest}|{platform}|{target}|v4"));
         let root = project_root()
             .join("target")
             .join("android-cache")
@@ -151,6 +151,9 @@ impl CacheDir {
     }
     fn libtalloc(&self) -> PathBuf {
         self.root.join("libtalloc.so.2")
+    }
+    fn libandroid_shmem(&self) -> PathBuf {
+        self.root.join("libandroid-shmem.so")
     }
     fn rootfs_extracted_dir(&self) -> PathBuf {
         self.root.join("rootfs_extracted")
@@ -190,6 +193,14 @@ fn download_prerequisites(cache: &CacheDir, termux_arch: &str) {
         termux_arch,
         &cache.root,
         &cache.libtalloc(),
+        &PathBuf::new(),
+    );
+    download_and_extract_deb(
+        &format!("{base}/liba/libandroid-shmem/"),
+        "libandroid-shmem",
+        termux_arch,
+        &cache.root,
+        &cache.libandroid_shmem(),
         &PathBuf::new(),
     );
 
@@ -244,6 +255,15 @@ fn download_and_extract_deb(
                     if !entry.header().entry_type().is_symlink() {
                         entry.unpack(dest_bin).expect("extract libtalloc");
                         eprintln!("  [libtalloc] → libtalloc.so");
+                    }
+                }
+            }
+        } else if package == "libandroid-shmem" {
+            if let Some(name) = path.file_name() {
+                if name.to_string_lossy() == "libandroid-shmem.so" {
+                    if !entry.header().entry_type().is_symlink() {
+                        entry.unpack(dest_bin).expect("extract libandroid-shmem");
+                        eprintln!("  [libandroid-shmem] → libandroid-shmem.so");
                     }
                 }
             }
@@ -456,7 +476,7 @@ fn write_cache_marker(profile: &str, cache: &CacheDir) {
 ///   - versionName = git describe + hash
 ///   - AndroidManifest.xml gets extractNativeLibs="true"
 ///
-/// Asset delivery (proot, loader, libtalloc, ELF files → jniLibs) is handled
+/// Asset delivery (proot, loader, libtalloc, libandroid-shmem, ELF files → jniLibs) is handled
 /// by `copy_assets_to_jnilibs` called separately — no Gradle task needed.
 fn patch_gradle_project(profile: &str) {
     let app_dir = project_root()
@@ -594,7 +614,7 @@ fn patch_gradle_project(profile: &str) {
     }
 }
 
-/// Copy the cached rootfs assets (proot, loader, libtalloc, ELF binaries)
+/// Copy the cached rootfs assets (proot, loader, libtalloc, libandroid-shmem, ELF binaries)
 /// directly into the jniLibs directory so they end up in the APK.
 /// This replaces the old Gradle `copyRootfsToJniLibs` task approach.
 fn copy_assets_to_jnilibs(profile: &str, cache: &CacheDir) {
@@ -649,9 +669,10 @@ fn copy_assets_to_jnilibs(profile: &str, cache: &CacheDir) {
     // Map source cache files → target jniLibs file names
     #[rustfmt::skip]
     let mappings: &[(&str, &str)] = &[
-        ("proot",         "libproot.so"),
-        ("loader",        "libloader.so"),
-        ("libtalloc.so.2", "libtalloc.so"),
+        ("proot",              "libproot.so"),
+        ("loader",             "libloader.so"),
+        ("libtalloc.so.2",     "libtalloc.so"),
+        ("libandroid-shmem.so", "libandroid-shmem.so"),
     ];
 
     for (src_name, dst_name) in mappings {
@@ -713,7 +734,8 @@ fn copy_assets_to_jnilibs(profile: &str, cache: &CacheDir) {
 }
 
 /// If patchelf is available, apply it to the cached proot binary so that
-/// it finds libtalloc.so via RPATH=$ORIGIN instead of needing a symlink.
+/// it finds libtalloc.so and libandroid-shmem.so via RPATH=$ORIGIN instead
+/// of needing a symlink.
 /// If patchelf is not on the system, a static binary is auto-downloaded.
 fn patch_proot_binary(cache: &CacheDir) {
     let proot_path = cache.proot();

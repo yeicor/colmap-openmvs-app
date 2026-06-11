@@ -40,14 +40,14 @@
 ### 🐳 Deployment & Runtime
 
 - **Zero-install COLMAP/OpenMVS** — Both tools come pre-packaged in a container image. No compilation or dependency setup needed.
+  - **Automated updates** — Powered by [colmap-openmvs](https://github.com/yeicor-docker/colmap-openmvs), which automatically rebuilds container images whenever COLMAP or OpenMVS update.
 - **Container runtimes:**
   - **Docker** — Best performance on desktops and servers, but requires the Docker daemon to be installed and running.
+    - **Docker-in-Docker** — Run the app inside a container while it transparently orchestrates pipelines on the host.
   - **PRoot** — No special privileges required. Auto-downloaded and managed by the app; ideal for Android and restricted environments.
 - **Hardware support:**
   - **CPU** — Runs the full pipeline end-to-end on any system.
   - **CUDA** — Mount host GPU drivers for hardware-accelerated reconstruction.
-- **Docker-in-Docker** — Run the app inside a container while it transparently orchestrates pipelines on the host.
-- **Auto-update** — Update to the latest COLMAP and OpenMVS builds with one click. Nightly container images are published automatically.
 
 ### 🖥️ Cross-Platform
 
