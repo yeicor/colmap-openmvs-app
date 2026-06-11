@@ -3,7 +3,7 @@
 # Docker pipeline image has been updated.
 #
 # The build runs in parallel with ci.yml's build-and-test jobs; deployment
-# is handled separately by android-deploy.yml (called either from ci.yml
+# is handled separately by deploy-android.yml (called either from ci.yml
 # or from the deploy-orchestration job here).
 
 on:
@@ -54,7 +54,7 @@ jobs:
       - uses: dawidd6/action-download-artifact@v11
         continue-on-error: true
         with:
-          workflow: android-build.yml
+          workflow: build-android.yml
           branch: main
           name: source-image-digest
           search_artifacts: true
@@ -274,7 +274,7 @@ jobs:
   deploy-orchestration:
     needs: [check-image-updates, build, metadata]
     if: needs.check-image-updates.outputs.should-build == 'true' && github.event_name != 'workflow_call'
-    uses: ./.github/workflows/android-deploy.yml
+    uses: ./.github/workflows/deploy-android.yml
     secrets: inherit
 
   # ─── Save source digest ─────────────────────────────────────────────

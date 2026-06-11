@@ -1,6 +1,4 @@
 # https://medium.com/@aarne.laur/retry-failed-github-actions-8661e7601c66
-name: Retry workflow
-
 on:
   workflow_dispatch:
     inputs:
@@ -12,8 +10,7 @@ jobs:
     permissions:
       actions: write
     steps:
-      - name: rerun ${{ inputs.run_id }}
-        env:
+      - env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: |

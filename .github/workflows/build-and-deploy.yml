@@ -294,7 +294,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-    uses: ./.github/workflows/android-deploy.yml
+    uses: ./.github/workflows/deploy-android.yml
     secrets: inherit
 
   deploy-release:

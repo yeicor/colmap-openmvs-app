@@ -1,11 +1,9 @@
 # F-Droid deployment.  Downloads the signed APKs produced by
-# android-build.yml and assembles a self-hosted F-Droid repository.
+# build-android.yml and assembles a self-hosted F-Droid repository.
 #
 # Called from:
 #   - ci.yml (after all build jobs succeed)
-#   - android-build.yml (on schedule / dispatch, as deploy-orchestration)
-
-name: Android Deploy
+#   - build-android.yml (on schedule / dispatch, as deploy-orchestration)
 
 on:
   workflow_call:
