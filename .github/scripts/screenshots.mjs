@@ -165,7 +165,7 @@ async function waitForViewerModel(page, timeout = 60000) {
     }
     await page.waitForTimeout(500);
   }
-  console.warn(`  ⚠  3D viewer didn't load within ${timeout}ms — capturing anyway`);
+  console.warn(`  \u26a0  3D viewer didn't load within ${timeout}ms \u2014 capturing anyway`);
   return false;
 }
 
@@ -195,6 +195,27 @@ async function main() {
 
   const page = await context.newPage();
 
+  // Relay browser console messages and errors for debuggability, especially
+  // useful for diagnosing 3D viewer / WebGL failures on headless CI.
+  page.on("console", (msg) => {
+    const type = msg.type();
+    // Only relay messages that indicate problems or viewer activity.
+    if (type === "error" || type === "warning" || type === "assert") {
+      const text = msg.text();
+      // Skip noise from Dioxus internals / devtools.
+      if (text.includes("dioxus") || text.includes("Dioxus") || text.includes("eruda")) return;
+      console.log(`  [browser:${type}] ${text}`);
+    }
+    // Also surface any message mentioning "viewer" or "3d" (case-insensitive).
+    const text = msg.text();
+    if (/viewer|3d|three/i.test(text)) {
+      console.log(`  [browser:${type}] ${text}`);
+    }
+  });
+  page.on("pageerror", (err) => {
+    console.log(`  [browser:uncaught] ${err.message}`);
+  });
+
   const results = [];
 
   for (const route of routes) {
@@ -221,6 +242,13 @@ async function main() {
         console.log(viewerReady ? "  🎯 Model loaded" : "  ⚠ Model not loaded");
       } else {
         await page.goto(fullUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+
+        // The demo manifest has dark_mode:null, so the app does not set
+        // data-theme on its own and leaves it to the browser's
+        // prefers-color-scheme media query (which defaults to dark in some
+        // headless environments).  Force light mode for consistent screenshots.
+        await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
+
         await waitForAppReady(page);
       }
 
