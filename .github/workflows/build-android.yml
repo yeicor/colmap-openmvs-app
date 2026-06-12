@@ -51,7 +51,7 @@ jobs:
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
           echo "$DIGEST" > current-digest.txt
 
-      - uses: dawidd6/action-download-artifact@v11
+      - uses: dawidd6/action-download-artifact@v21
         continue-on-error: true
         with:
           workflow: build-android.yml
