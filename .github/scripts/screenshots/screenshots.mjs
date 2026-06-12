@@ -1,5 +1,10 @@
 //! Take desktop-viewport screenshots of the web demo for the README.
 //!
+//! Screenshots are captured at 1080x1920 with CSS zoom applied so content
+//! fills the frame.  Dark/light variants are written into dark/ and light/
+//! subdirectories.  All routes share a single capture path — only the wait
+//! method differs (app-ready vs viewer-model).
+//!
 //! Usage (Docker - recommended):
 //!   docker build -t colmap-screenshots .github/scripts/screenshots
 //!   docker run --rm \
@@ -28,8 +33,8 @@ const [, , publicDir = "./public", outputDir = "./screenshots", basePathArg = "/
 // Normalise base path: "/" and "" both mean "serve at root, no stripping".
 const basePath = basePathArg === "/" || basePathArg === "" ? "" : basePathArg;
 
-const VIEWPORT_W = 390;
-const VIEWPORT_H = 844;
+const VIEWPORT_W = 1080;
+const VIEWPORT_H = 1920;
 
 const PORT = 9876;
 
@@ -100,8 +105,6 @@ const server = http.createServer((req, res) => {
 
 // ── Routes ──────────────────────────────────────────────────────────────
 // Each route has a hash URL path and a screenshot filename (without extension).
-// Viewer page URLs embed the render config (base64-encoded JSON) after the model
-// path — no extra route properties needed.
 const routes = [
   // App pages
   { url: "/", name: "projects-page" },
@@ -132,14 +135,13 @@ async function forceTheme(page, theme) {
   await page.evaluate((t) => {
     document.documentElement.setAttribute("data-theme", t);
     // Also override prefers-color-scheme for any media-query-based logic.
-    // This ensures the browser's color scheme matches even if the app
-    // queries it outside of data-theme.
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     Object.defineProperty(mq, "matches", { get: () => t === "dark" });
   }, themeValue);
 }
 
-async function waitForAppReady(page, timeout = 25000) {
+// Increased timeouts for slow-CPU browser (e.g. CI / throttled environments)
+async function waitForAppReady(page, timeout = 60000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
     const markers = ["#dx-toast-template", "[data-dioxus-id]", "nav", "aside", "main", "button"];
@@ -160,7 +162,7 @@ async function waitForAppReady(page, timeout = 25000) {
   return false;
 }
 
-async function waitForViewerModel(page, timeout = 60000) {
+async function waitForViewerModel(page, timeout = 120000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
     const ready = await page.evaluate(() => {
@@ -185,30 +187,39 @@ async function waitForViewerModel(page, timeout = 60000) {
     }
     await page.waitForTimeout(500);
   }
-  console.warn(`  \u26a0  3D viewer didn't load within ${timeout}ms \u2014 capturing anyway`);
+  console.warn(`  ⚠  3D viewer didn't load within ${timeout}ms — capturing anyway`);
   return false;
 }
 
 // ── Screenshot capture ──────────────────────────────────────────────────
+// All routes share the same capture path: navigate from about:blank (to
+// force a fresh page load for hash-routed SPA pages), force the theme,
+// wait for content, scale up via CSS zoom, then take a full-page screenshot.
+// Only the wait method differs between viewer and non-viewer routes.
 
 async function captureForTheme(page, route, theme) {
-  const suffix = theme === "dark" ? "-dark" : "-light";
-  const outputFilename = `${route.name}${suffix}.png`;
-  const outputPath = path.join(outputDir, outputFilename);
+  const themeDir = theme === "dark" ? "dark" : "light";
+  const outputFilename = `${route.name}.jpg`;
+  const outputPath = path.join(outputDir, themeDir, outputFilename);
   const fullUrl = `http://localhost:${PORT}${basePath}/index.html#${route.url}`;
 
   console.log(`  🎨 ${theme} …`);
 
   try {
+    // Navigate from about:blank so hash-only route changes always perform a
+    // full page load — this avoids stale WASM/WebGL state between routes.
+    await page.goto("about:blank");
+    await page.goto(fullUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await forceTheme(page, theme);
+
+    // Scale content up to fill the larger viewport so screenshots
+    // are not mostly empty space.
+    await page.evaluate(() => {
+      const scale = Math.min(window.innerWidth / 390, window.innerHeight / 844);
+      document.documentElement.style.zoom = scale;
+    });
+
     if (route.url.startsWith("/viewer/")) {
-      // Viewer pages: navigate from about:blank so the browser performs a
-      // full page load (hash-only navigation is ignored by the 3D viewer,
-      // leaving WebGL/WASM state stale between routes).
-      await page.goto("about:blank");
-      await page.goto(fullUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
-
-      await forceTheme(page, theme);
-
       const viewerReady = await waitForViewerModel(page);
       console.log(viewerReady ? `  🎯 Model loaded` : `  ⚠ Model not loaded`);
 
@@ -226,45 +237,17 @@ async function captureForTheme(page, route, theme) {
         );
       }
     } else {
-      await page.goto(fullUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
-
-      await forceTheme(page, theme);
-
       await waitForAppReady(page);
     }
 
-    if (route.url.startsWith("/viewer/")) {
-      // Playwright's page.screenshot() does not reliably capture WebGL
-      // canvas content rendered with SwiftShader on headless CI runners.
-      // The GPU compositing pipeline may skip the canvas, producing a
-      // near-empty image (10-20 KB) instead of the actual 3D content
-      // (>=50 KB).
-      //
-      // We work around this by taking a Playwright element screenshot of
-      // the <canvas> itself — this reads from the already-composited
-      // layer at the GPU level rather than through the page compositor.
-      const canvas = page.locator(".viewer-canvas-container canvas, #viewer3d-container canvas").first();
-      const canvasCount = await canvas.count();
-      if (canvasCount > 0) {
-        await canvas.screenshot({ path: outputPath });
-        const stats = fs.statSync(outputPath);
-        console.log(`  ✅ ${outputFilename}  (element-screenshot, ${(stats.size / 1024).toFixed(1)} KB)`);
-      } else {
-        // No dedicated canvas found — grab the full page as a fallback.
-        await page.screenshot({ path: outputPath });
-        const stats = fs.statSync(outputPath);
-        console.log(`  ✅ ${outputFilename}  (full-page-fallback, ${(stats.size / 1024).toFixed(1)} KB)`);
-      }
-    } else {
-      await page.screenshot({ path: outputPath });
-      const stats = fs.statSync(outputPath);
-      console.log(`  ✅ ${outputFilename}  (${(stats.size / 1024).toFixed(1)} KB)`);
-    }
+    await page.screenshot({ path: outputPath, type: "jpeg", quality: 90 });
+    const stats = fs.statSync(outputPath);
+    console.log(`  ✅ ${outputFilename}  (${(stats.size / 1024).toFixed(1)} KB)`);
   } catch (err) {
     // Save a debug screenshot on failure to help diagnose the issue.
     try {
-      const debugPath = path.join(outputDir, `${route.name}${suffix}-debug.png`);
-      await page.screenshot({ path: debugPath });
+      const debugPath = path.join(outputDir, themeDir, `${route.name}-debug.png`);
+      await page.screenshot({ path: debugPath, type: "png" });
       console.log(`  📸 Debug screenshot saved as ${path.basename(debugPath)}`);
     } catch {
       /* ignore */
@@ -276,7 +259,8 @@ async function captureForTheme(page, route, theme) {
 // ── Main ─────────────────────────────────────────────────────────────────
 
 async function main() {
-  fs.mkdirSync(outputDir, { recursive: true });
+  fs.mkdirSync(path.join(outputDir, "dark"), { recursive: true });
+  fs.mkdirSync(path.join(outputDir, "light"), { recursive: true });
 
   await new Promise((resolve, reject) => {
     server.listen(PORT, () => {

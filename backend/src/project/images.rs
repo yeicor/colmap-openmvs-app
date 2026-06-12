@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Context};
-use dioxus::fullstack::body::Bytes;
 use dioxus::fullstack::ByteStream;
 use futures::stream::StreamExt;
 use image::{DynamicImage, ImageDecoder, ImageReader};
@@ -7,9 +6,16 @@ use once_cell::sync::Lazy;
 use tracing::{debug, error, info, warn};
 
 use std::collections::HashMap;
+use std::io;
 use std::path::Path;
+use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 use tokio::sync::Mutex;
+
+use dioxus::fullstack::body::Bytes;
+use futures::stream::Stream;
 
 use colmap_openmvs_api::TaskKind;
 use colmap_openmvs_api::{DemoProgressEvent, ResizeProgressEvent};
@@ -93,29 +99,132 @@ pub async fn get_project_images(project_name: String) -> dioxus::Result<Vec<Stri
     Ok(images)
 }
 
-/// Return the raw bytes of a project image as a streaming `ByteStream`.
+/// Determine the correct MIME type from a file extension.
 ///
-/// Unlike `get_project_image` (which streams via `FileStream` for direct HTTP
-/// access), this function returns a `ByteStream` so it can be called as a
-/// Dioxus server function from the client.  The bytes are then used to build a
-/// Blob URL in the browser without any hardcoded server URL.
+/// Dioxus's built-in `get_mime_from_ext` is broken: its `Some(_)` catch-all
+/// arm returns `text/html; charset=utf-8` for ANY unrecognised extension
+/// including `jpg`, `png`, `webp`, etc., causing image responses to be
+/// labelled as HTML.
+fn mime_type_for_file(ext: Option<&str>) -> &'static str {
+    match ext.map(|e| e.to_lowercase()).as_deref() {
+        // Image types
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("tiff") | Some("tif") => "image/tiff",
+        Some("bmp") => "image/bmp",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/vnd.microsoft.icon",
+        Some("heic") | Some("heif") => "image/heic",
+        Some("avif") => "image/avif",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("html") => "text/html; charset=utf-8",
+        Some("bin") | None => "application/octet-stream",
+        // Every other extension → octet-stream (NOT text/html)
+        Some(_) => "application/octet-stream",
+    }
+}
+
+/// Raw image data ready to be wrapped in a `FileStream`.
+/// The `server.rs` handler constructs the app-level `FileStream`
+/// from these components.
+pub struct ImageData {
+    pub name: String,
+    pub size: u64,
+    pub mime: String,
+    pub etag: String,
+    pub stream: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
+}
+
+/// Stream a project image from disk, returning its raw components.
+///
+/// The caller (`server.rs`) wraps the result in our caching-aware
+/// `FileStream` which handles ETag / 304 in its `IntoResponse`.
 pub async fn get_project_image_bytes(
     project_name: String,
     image_name: String,
-) -> dioxus::Result<ByteStream> {
-    debug!(project_name = %project_name, image_name = %image_name, "Retrieving project image bytes");
+) -> dioxus::Result<ImageData> {
+    use futures::StreamExt;
+    use tokio_util::io::ReaderStream as TokioReaderStream; // for .next() on ReaderStream
+
+    debug!(
+        project_name = %project_name,
+        image_name = %image_name,
+        "Streaming project image"
+    );
     let settings = crate::get_settings().await?;
     let images_path =
         crate::project::project_images_path(&project_name, &settings.projects_folder)?;
     let canonical_image = validate_and_canonicalize_image_path(&images_path, &image_name)?;
     let lock = lock_for_image_path(&canonical_image).await;
     let _guard = lock.lock().await;
-    let bytes = tokio::fs::read(&canonical_image)
+
+    let ext = canonical_image.extension().and_then(|s| s.to_str());
+    let mime = mime_type_for_file(ext);
+
+    // Stat (cheap, no handle) + ETag from mtime & size.
+    let metadata = tokio::fs::metadata(&canonical_image)
         .await
-        .map_err(|e| anyhow!("Failed to read image file: {}", e))?;
-    Ok(ByteStream::new(futures::stream::once(async move {
-        Bytes::from(bytes)
-    })))
+        .map_err(|e| anyhow!("Failed to stat {}: {}", canonical_image.display(), e))?;
+    let size = metadata.len();
+    let modified = metadata
+        .modified()
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let mtime = modified
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let etag = format!("\"{:x}-{:x}\"", mtime, size);
+
+    // Lazy file stream: `File::open` only happens on first poll, so a 304
+    // response that never reads the body avoids the file I/O entirely.
+    enum LazyFileState {
+        Closed(PathBuf),
+        Reading(tokio_util::io::ReaderStream<tokio::fs::File>),
+        Done,
+    }
+    let path = canonical_image.clone();
+    let open_fut = futures::stream::unfold(LazyFileState::Closed(path), |state| async move {
+        match state {
+            LazyFileState::Closed(p) => match tokio::fs::File::open(&p).await {
+                Ok(file) => {
+                    let mut inner = TokioReaderStream::new(file);
+                    // Try to read the first chunk immediately
+                    match inner.next().await {
+                        Some(Ok(chunk)) => {
+                            Some((Ok::<_, io::Error>(chunk), LazyFileState::Reading(inner)))
+                        }
+                        Some(Err(e)) => Some((Err(e), LazyFileState::Done)),
+                        None => None, // empty file
+                    }
+                }
+                Err(e) => Some((Err(e), LazyFileState::Done)),
+            },
+            LazyFileState::Reading(mut inner) => match inner.next().await {
+                Some(Ok(chunk)) => Some((Ok(chunk), LazyFileState::Reading(inner))),
+                Some(Err(e)) => Some((Err(e), LazyFileState::Done)),
+                None => None,
+            },
+            LazyFileState::Done => None,
+        }
+    });
+
+    let body: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> = Box::pin(open_fut);
+
+    Ok(ImageData {
+        name: canonical_image
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("image")
+            .to_string(),
+        size,
+        mime: mime.to_string(),
+        etag,
+        stream: body,
+    })
 }
 
 pub async fn add_project_image(

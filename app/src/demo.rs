@@ -83,9 +83,12 @@ pub async fn get_project_image_bytes(
     image_name: String,
 ) -> Result<ByteStream> {
     match demo_image_bytes(image_name.as_str()) {
-        Some(bytes) => Ok(ByteStream::new(futures::stream::once(async move {
-            body::Bytes::from(bytes.to_vec())
-        }))),
+        Some(bytes) => {
+            use futures::StreamExt;
+            let stream = futures::stream::once(futures::future::ready(bytes.to_vec()))
+                .map(|b| body::Bytes::from(b));
+            Ok(ByteStream::new(stream))
+        }
         None => Err(dioxus::CapturedError::msg("Image not found in demo data")),
     }
 }

@@ -18,7 +18,7 @@ pub use android_settings_validation::AndroidSettingsValidation;
 mod project;
 pub use project::{
     add_project_image, batch_resize_images, clear_project_images, delete_project_image,
-    download_demo_images, get_project_image_bytes, get_project_images,
+    download_demo_images, get_project_image_bytes, get_project_images, ImageData,
 };
 
 mod files;

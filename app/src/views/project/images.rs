@@ -8,6 +8,7 @@ use base64::Engine as _;
 use colmap_openmvs_api::TaskEvent;
 use colmap_openmvs_api::TaskKind;
 use colmap_openmvs_api::TaskState;
+use dioxus::core::use_drop;
 use dioxus::document::eval;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
@@ -15,8 +16,165 @@ use dioxus_free_icons::icons::bs_icons::{
     BsTextareaResize, BsTrash3, BsUpload, BsViewList, BsXCircle,
 };
 use dioxus_free_icons::Icon;
+use futures::StreamExt;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use tracing::{debug, error, info};
+
+// ---------------------------------------------------------------------------
+// Cancellable image-fetch helpers
+//
+// On WASM (web browsers) we use direct `fetch` requests with an `AbortController`
+// so every in-flight HTTP request is torn down the instant the user navigates
+// away — this keeps the browser's connection‑pool free for other server‑function
+// calls.  On desktop / Android the backend is localhost, so we simply use the
+// normal Dioxus server function and rely on Dioxus 0.7 dropping all spawned
+// scoped tasks on unmount.
+// ---------------------------------------------------------------------------
+
+/// Maximum concurrent image byte fetches.
+/// Keeps some room in the browser connection pool for other requests.
+const MAX_CONCURRENT_FETCHES: usize = 6;
+
+/// Platform‑specific fetch for a single image's bytes.
+///
+/// In demo mode, embedded byte data is returned directly — no HTTP request
+/// is made (no server exists in the static web build).
+/// `signal` is an `AbortSignal` on WASM (passed from the component‑level
+/// `AbortController` that gets aborted on unmount) and unused on other targets.
+#[cfg(target_arch = "wasm32")]
+async fn fetch_image_bytes_impl(
+    project_name: &str,
+    image_name: &str,
+    signal: &web_sys::AbortSignal,
+) -> Result<Vec<u8>, String> {
+    // In demo mode the embedded bytes are available at compile time — use
+    // them directly instead of making (doomed) HTTP requests to a static site.
+    #[cfg(feature = "demo")]
+    if let Some(bytes) = crate::demo::demo_image_bytes(image_name) {
+        return Ok(bytes.to_vec());
+    }
+    use js_sys::{Promise, Uint8Array};
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::wasm_bindgen::JsCast;
+
+    let window = web_sys::window().ok_or("No window available")?;
+    let prefix = crate::backend_url::BACKEND_URL
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let encoded_project = urlencoding::encode(project_name);
+    let encoded_image = urlencoding::encode(image_name);
+    let url = format!("{prefix}/api/projects/{encoded_project}/images/{encoded_image}/bytes");
+
+    let mut opts = web_sys::RequestInit::new();
+    opts.set_method("GET");
+    opts.set_signal(Some(signal));
+
+    let request = web_sys::Request::new_with_str_and_init(&url, &opts)
+        .map_err(|e| format!("Failed to create request: {e:?}"))?;
+
+    let response_promise: Promise = window.fetch_with_request(&request);
+    let response_val = JsFuture::from(response_promise)
+        .await
+        .map_err(|e| format!("Fetch failed: {e:?}"))?;
+
+    let response: web_sys::Response = response_val
+        .dyn_into()
+        .map_err(|_| "Response is not a Response object".to_string())?;
+
+    if !response.ok() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+
+    let array_buffer = response
+        .array_buffer()
+        .map_err(|e| format!("Failed to get array buffer: {e:?}"))?;
+    let buffer_val = JsFuture::from(array_buffer)
+        .await
+        .map_err(|e| format!("Failed to read array buffer: {e:?}"))?;
+
+    let uint8 = Uint8Array::new(&buffer_val);
+    let mut bytes = vec![0u8; uint8.length() as usize];
+    uint8.copy_to(&mut bytes);
+    Ok(bytes)
+}
+
+/// Non‑WASM fallback – uses the Dioxus server function.
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetch_image_bytes_impl(project_name: &str, image_name: &str) -> Result<Vec<u8>, String> {
+    match crate::server::get_project_image_bytes_stream(
+        project_name.to_string(),
+        image_name.to_string(),
+    )
+    .await
+    {
+        Ok(mut stream) => {
+            let mut bytes = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(data) => bytes.extend_from_slice(&data),
+                    Err(e) => {
+                        return Err(format!("Failed to read image stream: {e:?}"));
+                    }
+                }
+            }
+            Ok(bytes)
+        }
+        Err(e) => Err(format!("Failed to fetch image bytes: {e}")),
+    }
+}
+
+/// Fetch the `Content-Length` of an image via a HEAD request (WASM only).
+/// This avoids downloading any image bytes just to show a file size in list mode.
+#[cfg(target_arch = "wasm32")]
+async fn fetch_image_size_wasm(project_name: &str, image_name: &str) -> Result<u64, String> {
+    // In demo mode, return the embedded byte length directly.
+    #[cfg(feature = "demo")]
+    if let Some(bytes) = crate::demo::demo_image_bytes(image_name) {
+        return Ok(bytes.len() as u64);
+    }
+    use js_sys::Promise;
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::wasm_bindgen::JsCast;
+
+    let window = web_sys::window().ok_or("No window available")?;
+    let prefix = crate::backend_url::BACKEND_URL
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let encoded_project = urlencoding::encode(project_name);
+    let encoded_image = urlencoding::encode(image_name);
+    let url = format!("{prefix}/api/projects/{encoded_project}/images/{encoded_image}/bytes");
+
+    let mut opts = web_sys::RequestInit::new();
+    opts.set_method("HEAD");
+
+    let request = web_sys::Request::new_with_str_and_init(&url, &opts)
+        .map_err(|e| format!("Failed to create HEAD request: {e:?}"))?;
+
+    let response_promise: Promise = window.fetch_with_request(&request);
+    let response_val = JsFuture::from(response_promise)
+        .await
+        .map_err(|e| format!("HEAD request failed: {e:?}"))?;
+
+    let response: web_sys::Response = response_val
+        .dyn_into()
+        .map_err(|_| "Response is not a Response object".to_string())?;
+
+    if !response.ok() {
+        return Err(format!("HEAD returned HTTP {}", response.status()));
+    }
+
+    response
+        .headers()
+        .get("Content-Length")
+        .map_err(|e| format!("Failed to get Content-Length header: {e:?}"))?
+        .ok_or_else(|| "No Content-Length header in response".to_string())?
+        .parse::<u64>()
+        .map_err(|e| format!("Invalid Content-Length: {e}"))
+}
 
 // ---------------------------------------------------------------------------
 // Blob-URL helpers
@@ -170,6 +328,244 @@ fn build_resize_cb(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Async fetch helpers — extracted so the blob‑cache `use_effect` can branch
+// cleanly between gallery mode (full bytes) and list mode (sizes only).
+// ---------------------------------------------------------------------------
+
+/// Fetch full image bytes with bounded concurrency, populating `img_cache`.
+/// This is the gallery‑mode code path (the original behaviour).
+async fn fetch_all_bytes(
+    needs_fetch: Vec<String>,
+    project: String,
+    version: u64,
+    cancelled: Signal<bool>,
+    list_version: Signal<u64>,
+    mut img_cache: Signal<HashMap<String, (String, usize)>>,
+    #[cfg(target_arch = "wasm32")] abort_signal: Option<web_sys::AbortSignal>,
+) {
+    use futures::stream::FuturesUnordered;
+    use futures::StreamExt as _;
+
+    let mut results: Vec<(String, Result<Vec<u8>, String>)> = Vec::with_capacity(needs_fetch.len());
+    let mut in_flight: FuturesUnordered<
+        Pin<Box<dyn Future<Output = (String, Result<Vec<u8>, String>)>>>,
+    > = FuturesUnordered::new();
+    let mut iter = needs_fetch.into_iter();
+
+    #[cfg(target_arch = "wasm32")]
+    let signal = abort_signal;
+
+    macro_rules! push_fetch {
+        ($in_flight:expr, $project:expr, $name:expr $(,)?) => {{
+            let p = $project;
+            let n = $name;
+            #[cfg(target_arch = "wasm32")]
+            let sig = signal.clone();
+            $in_flight.push(Box::pin(async move {
+                let result = {
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        fetch_image_bytes_impl(
+                            &p,
+                            &n,
+                            sig.as_ref().expect("AbortSignal must exist on WASM"),
+                        )
+                        .await
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        fetch_image_bytes_impl(&p, &n).await
+                    }
+                };
+                (n, result)
+            }) as _)
+        }};
+    }
+
+    for _ in 0..MAX_CONCURRENT_FETCHES {
+        if let Some(name) = iter.next() {
+            push_fetch!(in_flight, project.clone(), name);
+        }
+    }
+
+    while let Some((name, result)) = in_flight.next().await {
+        if cancelled() || list_version() != version {
+            return;
+        }
+        results.push((name, result));
+        if let Some(name) = iter.next() {
+            push_fetch!(in_flight, project.clone(), name);
+        }
+    }
+
+    for (name, result) in results {
+        if cancelled() || list_version() != version {
+            break;
+        }
+        match result {
+            Ok(bytes) => {
+                let size = bytes.len();
+                let url = bytes_to_display_url(&bytes);
+                img_cache.write().insert(name, (url, size));
+            }
+            Err(e) => {
+                error!(image_name = %name, error = %e, "Failed to load image bytes");
+            }
+        }
+    }
+}
+
+/// Fetch only file sizes via HEAD requests (list mode).
+/// On WASM this issues cheap HEAD requests that return Content‑Length without
+/// any image body data.  On non‑WASM (desktop / Android) we use the full
+/// server function and discard the body — the data is local so bandwidth
+/// is not a concern.
+async fn fetch_all_sizes(
+    needs_fetch: Vec<String>,
+    project: String,
+    version: u64,
+    cancelled: Signal<bool>,
+    list_version: Signal<u64>,
+    mut file_sizes: Signal<HashMap<String, u64>>,
+) {
+    for name in &needs_fetch {
+        if cancelled() || list_version() != version {
+            break;
+        }
+
+        let size = {
+            #[cfg(target_arch = "wasm32")]
+            {
+                // HEAD request — downloads headers only, zero body bytes.
+                fetch_image_size_wasm(&project, name).await.ok()
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Non‑WASM: the function returns the full body, but since
+                // the server is localhost we accept the small overhead.
+                match crate::server::get_project_image_bytes_stream(project.clone(), name.clone())
+                    .await
+                {
+                    Ok(mut stream) => {
+                        let mut total: u64 = 0;
+                        while let Some(chunk) = stream.next().await {
+                            if cancelled() {
+                                break;
+                            }
+                            if let Ok(data) = chunk {
+                                total += data.len() as u64;
+                            }
+                        }
+                        Some(total)
+                    }
+                    Err(_) => None,
+                }
+            }
+        };
+
+        if let Some(s) = size {
+            file_sizes.write().insert(name.clone(), s);
+        }
+    }
+}
+
+/// Fetch a single image's bytes and store them in `img_cache`.
+/// Used by the fullscreen viewer when the image isn't cached yet
+/// (e.g. in list mode where we only fetch sizes).
+async fn fetch_and_cache_single(
+    name: String,
+    project: String,
+    mut img_cache: Signal<HashMap<String, (String, usize)>>,
+) {
+    let result = {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // On WASM we use the direct-fetch helper (no AbortSignal — the
+            // user consciously opened fullscreen so cancellation isn't needed).
+            fetch_image_bytes_wasm_fallback(&project, &name).await
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match crate::server::get_project_image_bytes_stream(project.clone(), name.clone()).await
+            {
+                Ok(mut stream) => {
+                    let mut bytes = Vec::new();
+                    while let Some(chunk) = stream.next().await {
+                        if let Ok(data) = chunk {
+                            bytes.extend_from_slice(&data);
+                        }
+                    }
+                    Ok(bytes)
+                }
+                Err(e) => Err(e.to_string()),
+            }
+        }
+    };
+
+    if let Ok(data) = result {
+        let size = data.len();
+        let url = bytes_to_display_url(&data);
+        img_cache.write().insert(name, (url, size));
+    }
+}
+
+/// WASM-only fallback: fetch image bytes via direct `fetch` without an
+/// AbortController (used by the fullscreen on‑demand fetch where
+/// cancellation does not apply).
+#[cfg(target_arch = "wasm32")]
+async fn fetch_image_bytes_wasm_fallback(
+    project_name: &str,
+    image_name: &str,
+) -> Result<Vec<u8>, String> {
+    // On WASM we bypass the Dioxus server function and issue a direct
+    // GET request so we don't need `backend` (which doesn't exist on WASM).
+    use js_sys::{Promise, Uint8Array};
+    use wasm_bindgen_futures::JsFuture;
+
+    let window = web_sys::window().ok_or("No window available")?;
+    let prefix = crate::backend_url::BACKEND_URL
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let encoded_project = urlencoding::encode(project_name);
+    let encoded_image = urlencoding::encode(image_name);
+    let url = format!("{prefix}/api/projects/{encoded_project}/images/{encoded_image}/bytes");
+
+    let mut opts = web_sys::RequestInit::new();
+    opts.set_method("GET");
+
+    let request = web_sys::Request::new_with_str_and_init(&url, &opts)
+        .map_err(|e| format!("Failed to create request: {e:?}"))?;
+
+    let response_val = wasm_bindgen_futures::JsFuture::from(
+        web_sys::window()
+            .ok_or("No window")?
+            .fetch_with_request(&request),
+    )
+    .await
+    .map_err(|e| format!("Fetch failed: {e:?}"))?;
+
+    let response: web_sys::Response = response_val.into();
+
+    if !response.ok() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+
+    let buffer_val = wasm_bindgen_futures::JsFuture::from(
+        response
+            .array_buffer()
+            .map_err(|e| format!("Failed to get array buffer: {e:?}"))?,
+    )
+    .await
+    .map_err(|e| format!("Failed to read array buffer: {e:?}"))?;
+
+    let uint8 = js_sys::Uint8Array::new(&buffer_val);
+    let mut bytes = vec![0u8; uint8.length() as usize];
+    uint8.copy_to(&mut bytes);
+    Ok(bytes)
+}
+
 #[component]
 pub fn ImagesTab(project_name: String) -> Element {
     debug!(project_name = %project_name, "Initializing images tab");
@@ -193,7 +589,63 @@ pub fn ImagesTab(project_name: String) -> Element {
     let mut info_message = use_signal::<Option<String>>(|| None);
     let mut fullscreen_image = use_signal::<Option<String>>(|| None);
     let mut uploading = use_signal(|| false);
-    let mut show_images = use_signal(|| cfg!(not(target_os = "android")));
+    let mut show_images = use_signal(|| cfg!(feature = "demo"));
+
+    // Size-only cache for list mode (populated via HEAD requests on WASM
+    // so we never download full image bytes just to show a file size).
+    let file_sizes: Signal<HashMap<String, u64>> = use_signal(HashMap::new);
+
+    // ── Route-change cancellation ──────────────────────────────────────────
+    // Set to `true` when the component unmounts (user navigates away).  All
+    // spawned tasks check this flag before starting new work or processing
+    // results, preventing stale signal writes after the UI is gone.
+    let cancelled = use_signal(|| false);
+
+    // WASM: `AbortController` that aborts every in-flight `fetch` for image
+    // bytes the instant the component unmounts.  This keeps the browser's
+    // connection pool free for other server-function calls.
+    #[cfg(target_arch = "wasm32")]
+    let mut abort_controller: Signal<Option<web_sys::AbortController>> = use_signal(|| None);
+
+    // Track task IDs so we can cancel demo downloads / resize tasks on unmount.
+    let demo_task_id: Signal<Option<String>> = use_signal(|| None);
+    let resize_task_id: Signal<Option<String>> = use_signal(|| None);
+
+    // ── Unmount cleanup (runs when component is removed from the tree) ───────
+    // `use_drop` is a Dioxus 0.7 hook that schedules a closure to run when
+    // the component unmounts (route change away from the Images tab).
+    {
+        let mut cancelled = cancelled;
+        #[cfg(target_arch = "wasm32")]
+        let mut ac = abort_controller;
+        let mut demo_id = demo_task_id;
+        let mut resize_id = resize_task_id;
+        use_drop(move || {
+            // 1. Prevent any further processing in spawned tasks.
+            cancelled.set(true);
+
+            // 2. Abort all in-flight HTTP requests for image bytes.
+            #[cfg(target_arch = "wasm32")]
+            if let Some(ctrl) = ac.write().take() {
+                tracing::debug!("ImagesTab unmount: aborting in-flight image byte fetches");
+                ctrl.abort();
+            }
+
+            // 3. Cancel any running server-side tasks (demo download, resize).
+            if let Some(id) = demo_id.write().take() {
+                tracing::debug!(task_id = %id, "ImagesTab unmount: cancelling demo download");
+                spawn(async move {
+                    let _ = crate::server::cancel_task(id).await;
+                });
+            }
+            if let Some(id) = resize_id.write().take() {
+                tracing::debug!(task_id = %id, "ImagesTab unmount: cancelling resize task");
+                spawn(async move {
+                    let _ = crate::server::cancel_task(id).await;
+                });
+            }
+        });
+    }
 
     // ── Load image list on mount + reconnect any running task ────────────
     let project_name_clone = project_name.clone();
@@ -285,13 +737,18 @@ pub fn ImagesTab(project_name: String) -> Element {
         });
     });
 
-    // ── Blob-URL cache management ─────────────────────────────────────────
+    // ── Blob-URL cache management (with cancellation support) ─────────────
     // Incrementally updates the cache: removes entries for deleted images,
     // fetches display URLs only for newly added ones, and leaves existing
     // entries untouched.  Callers that modify byte content (e.g. resize)
     // must clear `img_cache` before bumping `image_paths` to force a re-fetch.
     let project_name_cache = project_name.clone();
     use_effect(move || {
+        // ── 1. Skip if unmounted ────────────────────────────────────────
+        if cancelled() {
+            return;
+        }
+
         let paths = image_paths();
         let version = list_version();
 
@@ -319,46 +776,48 @@ pub fn ImagesTab(project_name: String) -> Element {
             return;
         }
 
-        let project = project_name_cache.clone();
-        spawn(async move {
-            let fetches: Vec<_> = needs_fetch
-                .iter()
-                .map(|name| {
-                    let p = project.clone();
-                    let n = name.clone();
-                    async move {
-                        let result = crate::server::get_project_image_bytes(p, n.clone()).await;
-                        (n, result)
-                    }
-                })
-                .collect();
-            for (name, result) in futures::future::join_all(fetches).await {
-                if list_version() != version {
-                    break;
-                }
-                match result {
-                    Ok(stream) => {
-                        let mut bytes = Vec::new();
-                        let mut s = stream;
-                        while let Some(chunk) = s.next().await {
-                            match chunk {
-                                Ok(data) => bytes.extend_from_slice(&data),
-                                Err(e) => {
-                                    error!(image_name = %name, error = %e, "Failed to read image stream");
-                                    break;
-                                }
-                            }
-                        }
-                        let size = bytes.len();
-                        let url = bytes_to_display_url(&bytes);
-                        img_cache.write().insert(name, (url, size));
-                    }
-                    Err(e) => {
-                        error!(image_name = %name, error = %e, "Failed to load image bytes");
-                    }
-                }
+        // ── 2. Create a fresh AbortController for this batch (WASM only) ─
+        #[cfg(target_arch = "wasm32")]
+        let abort_signal: Option<web_sys::AbortSignal> = {
+            // Abort any controller from a previous batch.
+            if let Some(old) = abort_controller.write().take() {
+                old.abort();
             }
-        });
+            let ctrl = web_sys::AbortController::new().ok();
+            let sig = ctrl.as_ref().map(|c| c.signal());
+            *abort_controller.write() = ctrl;
+            sig
+        };
+
+        // ── 3. Check view mode ────────────────────────────────────────
+        // In gallery mode we fetch full image bytes as before.  In list mode
+        // we only fetch file sizes (via HEAD on WASM) so we never download
+        // multi-GB image data just to show a size column.
+        if show_images() {
+            // ── Gallery mode: fetch full image bytes ────────────────────
+            let project = project_name_cache.clone();
+            spawn(fetch_all_bytes(
+                needs_fetch,
+                project,
+                version,
+                cancelled,
+                list_version,
+                img_cache,
+                #[cfg(target_arch = "wasm32")]
+                abort_signal,
+            ));
+        } else {
+            // ── List mode: only fetch sizes ────────────────────────────
+            let project = project_name_cache.clone();
+            spawn(fetch_all_sizes(
+                needs_fetch,
+                project,
+                version,
+                cancelled,
+                list_version,
+                file_sizes,
+            ));
+        }
     });
 
     let on_delete_selected = {
@@ -395,6 +854,7 @@ pub fn ImagesTab(project_name: String) -> Element {
             demo_dialog_open.set(false);
             info_message.set(Some(format!("Starting {} dataset download…", source_id)));
             let project_name = project_name.clone();
+            let mut demo_id = demo_task_id;
             let cb = build_demo_cb(
                 project_name.clone(),
                 image_paths,
@@ -417,6 +877,8 @@ pub fn ImagesTab(project_name: String) -> Element {
                         return;
                     }
                 };
+                // Store so we can cancel this task on unmount.
+                demo_id.set(Some(task_id.clone()));
                 let label = format!("Demo: {}", project_name);
                 start_task(task_id, label, TaskKind::DownloadDemo, tasks_ctx, cb);
             });
@@ -460,6 +922,7 @@ pub fn ImagesTab(project_name: String) -> Element {
             info_message.set(Some("Starting batch resize...".to_string()));
             let project_name = project_name.clone();
             let max_dimension = resize_max_dimension();
+            let mut resize_id = resize_task_id;
             let cb = build_resize_cb(
                 project_name.clone(),
                 image_paths,
@@ -481,6 +944,8 @@ pub fn ImagesTab(project_name: String) -> Element {
                             return;
                         }
                     };
+                // Store so we can cancel this task on unmount.
+                resize_id.set(Some(task_id.clone()));
                 let label = format!("Resize: {}", project_name);
                 start_task(task_id, label, TaskKind::BatchResize, tasks_ctx, cb);
             });
@@ -628,19 +1093,47 @@ pub fn ImagesTab(project_name: String) -> Element {
                 }
             }
 
-            // ── Fullscreen image viewer ───────────────────────────────────────
+            // ── Fullscreen image viewer (on‑demand fetch) ──────────────────
+            //
+            // When the user opens fullscreen for an image that isn't cached
+            // (e.g. in list mode where we only fetch sizes), we fetch its bytes
+            // on demand and store them in `img_cache` so both list and gallery
+            // modes share the same rendering path.
             {
                 if let Some(fullscreen_name) = fullscreen_image() {
-                    // Reuse the cached Blob / data URL — no extra network request.
+                    // On‑demand fetch: if the image isn't cached yet (list mode
+                    // cold cache), use_resource fires and populates img_cache.
                     let cache_entry = img_cache().get(&fullscreen_name).cloned();
-                    let (full_image_url, size_bytes) =
-                        cache_entry.unwrap_or_else(|| (String::new(), 0));
-                    let size_mb = size_bytes as f64 / 1024.0 / 1024.0;
+                    let (full_image_url, size_bytes) = cache_entry.unwrap_or_else(|| (String::new(), 0));
+
                     let img_id = format!("fullscreen-img-{}", fullscreen_name);
                     let metadata_id = format!("metadata-fullscreen-{}", fullscreen_name);
                     let img_id_onload = img_id.clone();
                     let metadata_id_onload = metadata_id.clone();
                     let fname_onload = fullscreen_name.clone();
+                    let cached_size = size_bytes;
+
+                    // Trigger fetch for uncached images.
+                    let fullscreen_img_cache = img_cache;
+                    let fullscreen_fetch_project = project_name.clone();
+                    let fname_for_fetch = fullscreen_name.clone();
+                    let _ = use_resource(move || {
+                        // Clone FnMut captures so the closure stays reusable.
+                        let name = fname_for_fetch.clone();
+                        let project = fullscreen_fetch_project.clone();
+                        async move {
+                            if !fullscreen_img_cache.read().contains_key(&name) {
+                                fetch_and_cache_single(
+                                    name.clone(),
+                                    project.clone(),
+                                    fullscreen_img_cache,
+                                )
+                                .await;
+                            }
+                        }
+                    });
+
+                    let size_mb = cached_size as f64 / 1024.0 / 1024.0;
                     rsx! {
                         div {
                             class: "fullscreen-modal",
@@ -669,7 +1162,6 @@ pub fn ImagesTab(project_name: String) -> Element {
                                         class: "fullscreen-image",
                                         id: img_id.clone(),
                                         onload: move |_| {
-                                            // Size is known from bytes; only read dimensions from the DOM.
                                             eval(&format!(
                                                 r#"const img = document.getElementById('{id}');
                                                    const meta = document.getElementById('{mid}');
@@ -993,7 +1485,15 @@ pub fn ImagesTab(project_name: String) -> Element {
                                 }
                                 span { class: "item-size",
                                     {
-                                        let sz = img_cache().get(&image_name).map(|(_, s)| *s);
+                                        // In list mode we populate `file_sizes`
+                                        // via HEAD requests so we never
+                                        // download full image bytes just for
+                                        // a size column.
+                                        let sz_from_size_cache =
+                                            file_sizes().get(&image_name).copied();
+                                        let sz_from_img_cache =
+                                            img_cache().get(&image_name).map(|(_, s)| *s as u64);
+                                        let sz = sz_from_size_cache.or(sz_from_img_cache);
                                         match sz {
                                             Some(s) => format!("{:.2} MB", s as f64 / 1048576.0),
                                             None => String::new(),

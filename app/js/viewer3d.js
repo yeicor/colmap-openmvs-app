@@ -188,13 +188,13 @@ function injectViewerStyles() {
 .v3d-toast-content { padding:12px;font-size:13px;line-height:1.45; }
 .v3d-measure-line { color:#9cc2ff; }
 canvas { touch-action:none; }
-@media (max-width:720px) {
-  .v3d-toolbar { gap:8px; }
-  .v3d-btn-label { display:none; }
-  .v3d-toolbar-section { padding:4px; }
-  .v3d-btn { padding:10px; }
-  .v3d-panel { width:calc(100vw - 24px);left:12px !important;right:12px;max-width:none; }
-}`;
+/* Label visibility is now handled by JS (_updateToolbarLabels) so it
+   accounts for CSS zoom (e.g. from Playwright screenshots). */
+.v3d-compact .v3d-toolbar { gap:8px; }
+.v3d-compact .v3d-btn-label { display:none; }
+.v3d-compact .v3d-toolbar-section { padding:4px; }
+.v3d-compact .v3d-btn { padding:10px; }
+.v3d-compact .v3d-panel { width:calc(100vw - 24px);left:12px !important;right:12px;max-width:none; }`;
   document.head.appendChild(css);
 }
 
@@ -281,6 +281,11 @@ export class Viewer3D {
     injectViewerStyles();
     this.bind();
     this.animate();
+
+    // Zoom-aware toolbar label hiding (matches sidebar breakpoint logic)
+    this._updateToolbarLabels();
+    this._resizeLabels = () => this._updateToolbarLabels();
+    window.addEventListener("resize", this._resizeLabels);
   }
 
   // ── Environment ──────────────────────────────────────────────────────────
@@ -636,7 +641,19 @@ export class Viewer3D {
     });
   }
 
+  _updateToolbarLabels() {
+    // Same zoom-aware check as the sidebar: divide viewport width by the
+    // CSS zoom factor so labels don't spill offscreen on zoomed viewports.
+    const zoom = parseFloat(document.documentElement.style.zoom) || 1;
+    const compact = window.innerWidth / zoom < 720;
+    if (this.container) {
+      document.documentElement.classList.toggle("v3d-compact", compact);
+    }
+  }
+
   dispose() {
+    document.documentElement.classList.remove("v3d-compact");
+    window.removeEventListener("resize", this._resizeLabels);
     if (this._resizeObs) this._resizeObs.disconnect();
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keydown", this._onEscapePanel);

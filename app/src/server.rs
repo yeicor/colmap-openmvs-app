@@ -3,7 +3,7 @@
 
 use dioxus::prelude::*;
 
-use crate::fullstack_compat::ByteStream;
+use crate::fullstack_compat::{ByteStream, StreamingError};
 
 use colmap_openmvs_api::{
     ConfigSchema, ImageTagInfo, LoadedProjectConfig, OutputFile, PreparedImageInfo, Project,
@@ -15,6 +15,32 @@ use colmap_openmvs_backend as backend;
 
 #[cfg(feature = "demo")]
 use crate::demo as backend;
+
+/// Minimal stub so the `#[get]` handler compiles on WASM (no server).
+/// The macro replaces the body; this is never actually called.
+#[cfg(not(any(feature = "server", feature = "demo")))]
+mod backend {
+    use bytes::Bytes;
+    use futures::stream::Stream;
+    use std::io;
+    use std::pin::Pin;
+
+    #[allow(dead_code)]
+    pub struct ImageData {
+        pub stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>>,
+        pub name: String,
+        pub size: u64,
+        pub mime: String,
+        pub etag: String,
+    }
+
+    pub async fn get_project_image_bytes(
+        _project: String,
+        _image: String,
+    ) -> dioxus::Result<ImageData> {
+        unimplemented!()
+    }
+}
 
 #[cfg_attr(not(feature = "demo"), post("/api/startup"))]
 pub async fn startup() -> Result<String> {
@@ -56,11 +82,15 @@ pub async fn get_project_images(project_name: String) -> Result<Vec<String>> {
     backend::get_project_images(project_name).await
 }
 
-/// Fetch an image as raw bytes via the Dioxus default-function protocol.
-///
-/// Prefer this over constructing a URL manually — the framework routes the
-/// request through the configured default URL regardless of deployment topology
-/// (bundled desktop, web behind a custom origin, etc.).
+/// Use `dioxus::http::Response<Body>` on fullstack builds (proper HTTP caching,
+/// 304 support).  On demo / non-fullstack builds fall back to `ByteStream` since
+/// the function is never called over HTTP anyway (the `#[get]` is cfg'd out).
+#[cfg(feature = "fullstack")]
+type ImgResponse = dioxus::fullstack::http::Response<dioxus::fullstack::body::Body>;
+#[cfg(not(feature = "fullstack"))]
+type ImgResponse = ByteStream;
+
+/// Stream a project image with automatic HTTP caching (`ETag` + `304`).
 #[cfg_attr(
     not(feature = "demo"),
     get("/api/projects/{project_name}/images/{image_name}/bytes")
@@ -68,8 +98,88 @@ pub async fn get_project_images(project_name: String) -> Result<Vec<String>> {
 pub async fn get_project_image_bytes(
     project_name: String,
     image_name: String,
+) -> Result<ImgResponse> {
+    #[cfg(feature = "fullstack")]
+    {
+        use dioxus::fullstack::body::Body;
+        use dioxus::fullstack::http::Response;
+        use futures::StreamExt as _;
+
+        let data = backend::get_project_image_bytes(project_name, image_name).await?;
+
+        // ── Check If-None-Match ────────────────────────────────────
+        let is_match = dioxus::fullstack::FullstackContext::current()
+            .map(|ctx| {
+                let parts = ctx.parts_mut();
+                parts
+                    .headers
+                    .get(http::header::IF_NONE_MATCH)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|inm| inm == &data.etag)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+
+        if is_match {
+            let mut resp = Response::new(Body::empty());
+            *resp.status_mut() = http::StatusCode::NOT_MODIFIED;
+            resp.headers_mut().insert(
+                http::header::CACHE_CONTROL,
+                "public, no-cache".parse().unwrap(),
+            );
+            resp.headers_mut()
+                .insert(http::header::ETAG, data.etag.parse().unwrap());
+            resp.headers_mut()
+                .insert(http::header::CONTENT_TYPE, data.mime.parse().unwrap());
+            return Ok(resp);
+        }
+
+        // ── 200 OK with streaming body ─────────────────────────────
+        let mapped = data
+            .stream
+            .map(|r| r.map_err(|e| std::io::Error::other(e.to_string())));
+        let mut resp = Response::new(Body::from_stream(mapped));
+        resp.headers_mut().insert(
+            http::header::CACHE_CONTROL,
+            "public, no-cache".parse().unwrap(),
+        );
+        resp.headers_mut()
+            .insert(http::header::ETAG, data.etag.parse().unwrap());
+        resp.headers_mut()
+            .insert(http::header::CONTENT_TYPE, data.mime.parse().unwrap());
+        resp.headers_mut().insert(
+            http::header::CONTENT_LENGTH,
+            data.size.to_string().parse().unwrap(),
+        );
+        Ok(resp)
+    }
+
+    #[cfg(not(feature = "fullstack"))]
+    {
+        // Demo / non-fullstack: dead code, return empty.
+        backend::get_project_image_bytes(project_name, image_name).await
+    }
+}
+
+/// Return image bytes as a stream — used by internal client code that
+/// needs a `ByteStream` (images.rs callers). Not a `#[get]` endpoint.
+/// In demo mode this delegates directly to the demo backend.
+pub async fn get_project_image_bytes_stream(
+    project_name: String,
+    image_name: String,
 ) -> Result<ByteStream> {
-    backend::get_project_image_bytes(project_name, image_name).await
+    #[cfg(feature = "fullstack")]
+    {
+        let data = backend::get_project_image_bytes(project_name, image_name).await?;
+        use futures::StreamExt;
+        let stream = data.stream.filter_map(|r| async move { r.ok() });
+        Ok(ByteStream::new(stream))
+    }
+    #[cfg(not(feature = "fullstack"))]
+    {
+        // Demo mode: backend returns ByteStream directly.
+        backend::get_project_image_bytes(project_name, image_name).await
+    }
 }
 
 #[cfg_attr(
@@ -265,12 +375,6 @@ pub async fn list_project_outputs(project_name: String) -> Result<Vec<OutputFile
     backend::list_project_outputs(project_name).await
 }
 
-/// Return the raw bytes of an output file (used for download links).
-
-/// Fetch an output file as raw bytes via the Dioxus default-function protocol.
-///
-/// Prefer this over constructing a URL — the framework routes the request
-/// through the configured default URL regardless of deployment topology.
 #[cfg_attr(
     not(feature = "demo"),
     get("/api/projects/{project_name}/outputs/bytes?relative_path")
@@ -282,7 +386,6 @@ pub async fn get_project_output_bytes(
     backend::get_project_output_bytes(project_name, relative_path).await
 }
 
-/// Delete an output file or directory.
 #[cfg_attr(
     not(feature = "demo"),
     post("/api/projects/{project_name}/outputs/delete")
@@ -291,7 +394,6 @@ pub async fn delete_project_output(project_name: String, relative_path: String) 
     backend::delete_project_output(project_name, relative_path).await
 }
 
-/// Write an output file (bytes uploaded from the client).
 #[cfg_attr(
     not(feature = "demo"),
     post("/api/projects/{project_name}/outputs/write?relative_path")
@@ -304,7 +406,6 @@ pub async fn write_project_output(
     backend::write_project_output(project_name, relative_path, body).await
 }
 
-/// Delete all output files/directories, preserving only `images/` and `config.sh`.
 #[cfg_attr(
     not(feature = "demo"),
     post("/api/projects/{project_name}/outputs/clear")
@@ -317,16 +418,6 @@ pub async fn clear_project_outputs(project_name: String) -> Result<()> {
 // Theme / color-scheme detection
 // ---------------------------------------------------------------------------
 
-/// Returns the default-side color-scheme preference.
-///
-/// * `None`        – no override; let the browser's `prefers-color-scheme`
-///                   CSS media query decide.
-/// * `Some(false)` – force light mode.
-/// * `Some(true)`  – force dark mode.
-///
-/// On Android the WebView may not propagate `prefers-color-scheme` reliably,
-/// so the default probes the system UI mode.  Currently defaults to
-/// `Some(false)` (light) on Android until JNI detection is wired up.
 #[cfg_attr(not(feature = "demo"), get("/api/theme/dark-mode"))]
 pub async fn get_dark_mode() -> Result<Option<bool>> {
     backend::get_dark_mode().await

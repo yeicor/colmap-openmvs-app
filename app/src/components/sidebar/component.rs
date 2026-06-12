@@ -137,7 +137,11 @@ pub fn use_is_mobile() -> Signal<bool> {
             let js_code = format!(
                 r#"
                 function checkMobile() {{
-                    return window.innerWidth < {MOBILE_BREAKPOINT};
+                    // Account for CSS zoom (e.g. from Playwright screenshots) so the
+                    // sidebar collapses on effectively small viewports rather than
+                    // overflowing content offscreen.
+                    const zoom = parseFloat(document.documentElement.style.zoom) || 1;
+                    return (window.innerWidth / zoom) < {MOBILE_BREAKPOINT};
                 }}
                 function handleResize() {{
                     dioxus.send(checkMobile());

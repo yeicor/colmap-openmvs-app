@@ -228,8 +228,9 @@ async fn test_generate_demo_data() {
         let stream = backend::get_project_image_bytes("demo".to_string(), img.clone())
             .await
             .unwrap();
+        // ImageData has a `.stream` field carrying the byte stream.
         let bytes: Vec<u8> = stream
-            .into_inner()
+            .stream
             .filter_map(|r| async move { r.ok() })
             .collect::<Vec<_>>()
             .await

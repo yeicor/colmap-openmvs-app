@@ -1271,7 +1271,7 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                         let label = display_label(&tag);
                         let item_class = if official { "tags-item tag-official" } else { "tags-item" };
                         rsx! {
-                            li { key: "{remove_id}", class: "{item_class}",
+                            li { key: "{tag}-{remove_id}", class: "{item_class}",
                                 div { class: "tags-item-top",
                                     span { class: "tag-name", title: "{tag}", "{label}" }
                                     if official {

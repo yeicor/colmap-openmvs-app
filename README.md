@@ -77,24 +77,24 @@ Project management:
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/projects-page-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/projects-page-light.png" />
-    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/projects-page-light.png" width="200" alt="Projects page" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/dark/projects-page.jpg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/projects-page.jpg" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/projects-page.jpg" width="200" alt="Projects page" />
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-images-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-images-light.png" />
-    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-images-light.png" width="200" alt="Project images" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/dark/project-demo-images.jpg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/project-demo-images.jpg" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/project-demo-images.jpg" width="200" alt="Project images" />
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-logs-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-logs-light.png" />
-    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-logs-light.png" width="200" alt="Real-time logs" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/dark/project-demo-logs.jpg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/project-demo-logs.jpg" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/project-demo-logs.jpg" width="200" alt="Real-time logs" />
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-outputs-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-outputs-light.png" />
-    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-outputs-light.png" width="200" alt="Project outputs" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/dark/project-demo-outputs.jpg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/project-demo-outputs.jpg" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/project-demo-outputs.jpg" width="200" alt="Project outputs" />
   </picture>
 </p>
 
@@ -102,19 +102,19 @@ Project management:
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-pointcloud-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-pointcloud-light.png" />
-    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-pointcloud-light.png" width="200" alt="Point cloud" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/dark/viewer-pointcloud.jpg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/viewer-pointcloud.jpg" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/viewer-pointcloud.jpg" width="200" alt="Point cloud" />
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-wireframe-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-wireframe-light.png" />
-    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-wireframe-light.png" width="200" alt="Textured wireframe" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/dark/viewer-textured-wireframe.jpg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/viewer-textured-wireframe.jpg" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/viewer-textured-wireframe.jpg" width="200" alt="Textured wireframe" />
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-mesh-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-mesh-light.png" />
-    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/viewer-textured-mesh-light.png" width="200" alt="Textured mesh" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/dark/viewer-textured-mesh.jpg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/viewer-textured-mesh.jpg" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/viewer-textured-mesh.jpg" width="200" alt="Textured mesh" />
   </picture>
 </p>
 
@@ -122,19 +122,19 @@ Pipeline configuration and settings:
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-config-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-config-light.png" />
-    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/project-demo-config-light.png" width="200" alt="Pipeline config" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/dark/project-demo-config.jpg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/project-demo-config.jpg" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/project-demo-config.jpg" width="200" alt="Pipeline config" />
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-general-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-general-light.png" />
-    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-general-light.png" width="200" alt="Settings" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/dark/settings-general.jpg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/settings-general.jpg" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/settings-general.jpg" width="200" alt="Settings" />
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-runtime-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-runtime-light.png" />
-    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/settings-runtime-light.png" width="200" alt="Runtime settings" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/dark/settings-runtime.jpg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/settings-runtime.jpg" />
+    <img src="https://yeicor.github.io/colmap-openmvs-app/screenshots/light/settings-runtime.jpg" width="200" alt="Runtime settings" />
   </picture>
 </p>
 
