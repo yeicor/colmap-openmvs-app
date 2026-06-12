@@ -16,7 +16,6 @@ use dioxus_free_icons::icons::bs_icons::{
     BsTextareaResize, BsTrash3, BsUpload, BsViewList, BsXCircle,
 };
 use dioxus_free_icons::Icon;
-use futures::StreamExt;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;

@@ -3,7 +3,7 @@
 
 use dioxus::prelude::*;
 
-use crate::fullstack_compat::{ByteStream, StreamingError};
+use crate::fullstack_compat::ByteStream;
 
 use colmap_openmvs_api::{
     ConfigSchema, ImageTagInfo, LoadedProjectConfig, OutputFile, PreparedImageInfo, Project,
