@@ -371,7 +371,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
       - shell: bash
-        if: contains(needs.*.result, 'failure') && fromJSON(github.run_attempt) >= 3
+        if: contains(needs.*.result, 'failure') # Fail even on retries to avoid auto-merge based on this job to succeed
         run: |
           echo "Workflow failed. Please investigate."
           exit 1
