@@ -142,43 +142,6 @@ pub enum PrepareProgress {
     },
 }
 
-/// A configuration parameter parsed from tool help output
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ConfigParameter {
-    /// Full parameter name including prefix (e.g., "--focal-length" or "--Mapper.min_num_matches")
-    pub name: String,
-    /// Parameter description/help text
-    pub description: String,
-    /// Default value if specified in help
-    pub default_value: Option<String>,
-    /// Possible enum values if the parameter is an enum type
-    pub enum_values: Vec<String>,
-}
-
-/// Configuration for a specific tool extracted from its help output
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ToolConfig {
-    /// Tool name (e.g., "colmap", "openmvs")
-    pub tool: String,
-    /// Sub-command name (e.g., "mapper", "feature_extractor")
-    pub command: String,
-    /// All configuration parameters for this command
-    pub parameters: Vec<ConfigParameter>,
-    /// Environment variables that affect this command
-    pub environment_variables: Vec<String>,
-}
-
-/// Complete configuration schema for all tools in an image
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ImageConfigSchema {
-    /// Image tag this schema is from
-    pub image_tag: String,
-    /// Build date of the image
-    pub build_date: Option<String>,
-    /// All tools and their configurations
-    pub tools: Vec<ToolConfig>,
-}
-
 /// User-configured environment variable for saving to config.sh
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EnvVarConfig {
@@ -204,8 +167,6 @@ pub struct ConfigSchema {
     pub image_tag: String,
     /// Build date of the image
     pub build_date: Option<String>,
-    /// All tools and their configurations
-    pub tools: Vec<ToolConfig>,
     /// Top-level environment variables (in order) with optional help text
     pub environment_variables: Vec<EnvVarWithHelp>,
 }
