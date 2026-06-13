@@ -282,7 +282,7 @@ jobs:
             colmap-screenshots \
               /app/public /app/screenshots /${{ github.event.repository.name }}
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: web-artifact
       - uses: actions/deploy-pages@v5
