@@ -285,7 +285,7 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web-artifact
-      - uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@v5
 
   deploy-release:
     needs: [build-and-test-desktop-and-web, build-android, build-docker]
