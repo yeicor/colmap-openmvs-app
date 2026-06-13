@@ -67,7 +67,7 @@ async fn fetch_image_bytes_impl(
     let encoded_image = urlencoding::encode(image_name);
     let url = format!("{prefix}/api/projects/{encoded_project}/images/{encoded_image}/bytes");
 
-    let mut opts = web_sys::RequestInit::new();
+    let opts = web_sys::RequestInit::new();
     opts.set_method("GET");
     opts.set_signal(Some(signal));
 
@@ -147,7 +147,7 @@ async fn fetch_image_size_wasm(project_name: &str, image_name: &str) -> Result<u
     let encoded_image = urlencoding::encode(image_name);
     let url = format!("{prefix}/api/projects/{encoded_project}/images/{encoded_image}/bytes");
 
-    let mut opts = web_sys::RequestInit::new();
+    let opts = web_sys::RequestInit::new();
     opts.set_method("HEAD");
 
     let request = web_sys::Request::new_with_str_and_init(&url, &opts)
@@ -519,8 +519,6 @@ async fn fetch_image_bytes_wasm_fallback(
 ) -> Result<Vec<u8>, String> {
     // On WASM we bypass the Dioxus server function and issue a direct
     // GET request so we don't need `backend` (which doesn't exist on WASM).
-    use js_sys::{Promise, Uint8Array};
-    use wasm_bindgen_futures::JsFuture;
 
     let window = web_sys::window().ok_or("No window available")?;
     let prefix = crate::backend_url::BACKEND_URL
@@ -531,19 +529,15 @@ async fn fetch_image_bytes_wasm_fallback(
     let encoded_image = urlencoding::encode(image_name);
     let url = format!("{prefix}/api/projects/{encoded_project}/images/{encoded_image}/bytes");
 
-    let mut opts = web_sys::RequestInit::new();
+    let opts = web_sys::RequestInit::new();
     opts.set_method("GET");
 
     let request = web_sys::Request::new_with_str_and_init(&url, &opts)
         .map_err(|e| format!("Failed to create request: {e:?}"))?;
 
-    let response_val = wasm_bindgen_futures::JsFuture::from(
-        web_sys::window()
-            .ok_or("No window")?
-            .fetch_with_request(&request),
-    )
-    .await
-    .map_err(|e| format!("Fetch failed: {e:?}"))?;
+    let response_val = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("Fetch failed: {e:?}"))?;
 
     let response: web_sys::Response = response_val.into();
 

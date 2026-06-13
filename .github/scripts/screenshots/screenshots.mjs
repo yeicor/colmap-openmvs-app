@@ -174,6 +174,12 @@ async function waitForViewerModel(page, timeout = 120000) {
         if (!v || !v.modelRoot || !v.controls) return false;
         const stats = v.stats || {};
         if (stats.vertices === undefined || stats.vertices === 0) return false;
+        // Also verify that _initUrlPersistence() has completed — this
+        // gates all URL persistence and is the last step of setModel().
+        // Once true, camera is restored, toolbar is populated, the
+        // change listener is installed, data-ready is signalled, and
+        // an immediate render has been submitted.
+        if (!v._initialized) return false;
         return true;
       } catch {
         return false;

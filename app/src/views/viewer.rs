@@ -72,6 +72,12 @@ pub fn Viewer(name: String, file_encoded: String, cfg: String) -> Element {
     let name_for_effect = name.clone();
     let file_for_effect = file_decoded.clone();
 
+    // ── Guard against duplicate spawns (component may re-render while
+    //     the async fetch is in flight, e.g. when toggling the info
+    //     overlay, which would cause use_effect to re-run and spawn
+    //     another task, ultimately mounting duplicate viewers).
+    let mut spawn_guard: Signal<bool> = use_signal(|| false);
+
     // ── Fetch model & mount viewer ──────────────────────────────────
     use_effect(move || {
         let fp = file_for_effect.clone();
@@ -81,11 +87,18 @@ pub fn Viewer(name: String, file_encoded: String, cfg: String) -> Element {
         if !loading() {
             return;
         }
+        // Prevent duplicate spawns if use_effect re-runs while a
+        // previous fetch is still in flight.
+        if spawn_guard() {
+            return;
+        }
+        spawn_guard.set(true);
 
         let pn = name_for_effect.clone();
         let fp_clone = fp.clone();
         let mut loading = loading.clone();
         let mut err = error_msg.clone();
+        let mut guard = spawn_guard.clone();
         let container_id = container_id_for_effect.clone();
         let ic_val = initial_cam.clone();
         let icfg_val = initial_cfg.clone();
@@ -147,11 +160,13 @@ import(_viewerAbsUrl).then(async function(mod) {{
 
                     let _ = dioxus::document::eval(&js);
                     loading.set(false);
+                    guard.set(false);
                 }
                 Err(e) => {
                     error!(file = %fp_clone, error = %e, "Failed to load output for viewer");
                     loading.set(false);
                     err.set(Some(format!("Failed to load model: {e}")));
+                    guard.set(false);
                 }
             }
         });

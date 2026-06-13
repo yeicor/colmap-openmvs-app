@@ -252,7 +252,15 @@ export class Viewer3D {
     this.controls.target.set(0, 0, 0);
 
     this._queuedCameraState = opts.initialCamera || null;
+    // URL persistence must be gated behind _initialized so that stray
+    // change events during setup (e.g. from ArcballControls internal
+    // updates) cannot overwrite the original URL camera params with
+    // the default (2,2,2) camera before setModel restores the URL
+    // camera.  The flag is set to true in _initUrlPersistence(), which
+    // is called from setModel after the camera has been restored.
+    this._initialized = false;
     this._debouncedPersistUrl = debounce(() => {
+      if (!this._initialized) return;
       this._persistUrlState();
       if (this._onStateChange) {
         const cam = this._getCameraState();
@@ -634,8 +642,23 @@ export class Viewer3D {
       }
     };
     window.addEventListener("keydown", this._onEscapePanel);
+  }
 
-    // Track camera changes → persist to URL hash (debounced)
+  /**
+   * Initialise URL persistence: register the camera change listener and
+   * mark the viewer as fully initialised.  Must be called after
+   * homeCamera restores the queued camera state (i.e. at the end of
+   * setModel).  Until this is called, _debouncedPersistUrl is a no-op
+   * so stray change events cannot corrupt the URL.
+   */
+  _initUrlPersistence() {
+    if (this._initialized) return;
+    this._initialized = true;
+    // Signal to any polling consumer (e.g. screenshot script,
+    // Playwright, Rust-mounted-data-ready watcher) that the viewer
+    // is fully initialised — camera restored, toolbar created,
+    // change listener installed, and first render submitted.
+    this.container.dataset.ready = "true";
     this.controls.addEventListener("change", () => {
       this._debouncedPersistUrl();
     });
@@ -748,6 +771,11 @@ export class Viewer3D {
       this._queuedCameraState = initialCamera;
     }
     this.homeCamera(false);
+
+    // Now that camera has been restored (or computed from bounding box),
+    // enable URL persistence so subsequent user interactions update the
+    // URL correctly.
+    this._initUrlPersistence();
 
     // Force an immediate render so there is at least one frame before the
     // animation loop (driven by requestAnimationFrame) kicks in.  This is
