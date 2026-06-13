@@ -51,7 +51,7 @@ jobs:
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
           echo "$DIGEST" > current-digest.txt
 
-      - uses: dawidd6/action-download-artifact@v11
+      - uses: dawidd6/action-download-artifact@v21
         continue-on-error: true
         with:
           workflow: build-android.yml
@@ -211,13 +211,13 @@ jobs:
           echo "📦 Artifact contents:"
           find apk-collect -type f
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: matrix.package-type == 'aab'
         with:
           name: build-android-aab-${{ matrix.target }}
           path: android-output/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: matrix.package-type == 'apk'
         with:
           name: build-android-apk-${{ matrix.target }}
@@ -233,7 +233,7 @@ jobs:
       - run: |
           echo '${{ needs.check-image-updates.outputs.digest }}' > digest.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: source-image-digest
           path: digest.txt
