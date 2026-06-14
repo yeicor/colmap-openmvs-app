@@ -805,6 +805,7 @@ dependencies = [
  "futures",
  "futures-util",
  "glob",
+ "http",
  "image",
  "indexmap",
  "jni 0.22.4",

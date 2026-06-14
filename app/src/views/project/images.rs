@@ -100,29 +100,46 @@ async fn fetch_image_bytes_impl(
     Ok(bytes)
 }
 
-/// Non‑WASM fallback – uses the Dioxus server function.
+/// Non‑WASM fallback — reads image bytes from the local backend.
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetch_image_bytes_vec(project_name: &str, image_name: &str) -> Result<Vec<u8>, String> {
+    #[cfg(all(feature = "server", not(feature = "demo")))]
+    {
+        let data = colmap_openmvs_backend::get_project_image_bytes(
+            project_name.to_string(),
+            image_name.to_string(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        let mut stream = data.into_byte_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            if let Ok(b) = chunk {
+                bytes.extend_from_slice(&b);
+            }
+        }
+        Ok(bytes)
+    }
+
+    #[cfg(feature = "demo")]
+    {
+        let mut stream =
+            crate::demo::get_project_image_bytes(project_name.to_string(), image_name.to_string())
+                .await
+                .map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            if let Ok(b) = chunk {
+                bytes.extend_from_slice(&b);
+            }
+        }
+        Ok(bytes)
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 async fn fetch_image_bytes_impl(project_name: &str, image_name: &str) -> Result<Vec<u8>, String> {
-    match crate::server::get_project_image_bytes_stream(
-        project_name.to_string(),
-        image_name.to_string(),
-    )
-    .await
-    {
-        Ok(mut stream) => {
-            let mut bytes = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                match chunk {
-                    Ok(data) => bytes.extend_from_slice(&data),
-                    Err(e) => {
-                        return Err(format!("Failed to read image stream: {e:?}"));
-                    }
-                }
-            }
-            Ok(bytes)
-        }
-        Err(e) => Err(format!("Failed to fetch image bytes: {e}")),
-    }
+    fetch_image_bytes_vec(project_name, image_name).await
 }
 
 /// Fetch the `Content-Length` of an image via a HEAD request (WASM only).
@@ -441,25 +458,11 @@ async fn fetch_all_sizes(
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
-                // Non‑WASM: the function returns the full body, but since
-                // the server is localhost we accept the small overhead.
-                match crate::server::get_project_image_bytes_stream(project.clone(), name.clone())
+                // Non‑WASM: fetch full bytes (local backend, small overhead).
+                fetch_image_bytes_vec(&project, name)
                     .await
-                {
-                    Ok(mut stream) => {
-                        let mut total: u64 = 0;
-                        while let Some(chunk) = stream.next().await {
-                            if cancelled() {
-                                break;
-                            }
-                            if let Ok(data) = chunk {
-                                total += data.len() as u64;
-                            }
-                        }
-                        Some(total)
-                    }
-                    Err(_) => None,
-                }
+                    .ok()
+                    .map(|b| b.len() as u64)
             }
         };
 
@@ -486,19 +489,7 @@ async fn fetch_and_cache_single(
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            match crate::server::get_project_image_bytes_stream(project.clone(), name.clone()).await
-            {
-                Ok(mut stream) => {
-                    let mut bytes = Vec::new();
-                    while let Some(chunk) = stream.next().await {
-                        if let Ok(data) = chunk {
-                            bytes.extend_from_slice(&data);
-                        }
-                    }
-                    Ok(bytes)
-                }
-                Err(e) => Err(e.to_string()),
-            }
+            fetch_image_bytes_vec(&project, &name).await
         }
     };
 

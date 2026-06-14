@@ -225,11 +225,12 @@ async fn test_generate_demo_data() {
 
     // 7. Copy generated files to assets/demo
     for img in &images {
-        let stream = backend::get_project_image_bytes("demo".to_string(), img.clone())
+        use futures::StreamExt;
+        let data = backend::get_project_image_bytes("demo".to_string(), img.clone())
             .await
             .unwrap();
-        // ImageData has a `.stream` field carrying the byte stream.
-        let bytes: Vec<u8> = stream
+        // ImageStream has a `.stream` field carrying the raw byte stream.
+        let bytes: Vec<u8> = data
             .stream
             .filter_map(|r| async move { r.ok() })
             .collect::<Vec<_>>()

@@ -6,8 +6,9 @@ use crate::components::sheet::{
 use crate::components::tooltip::{Tooltip, TooltipContent, TooltipTrigger};
 use dioxus::core::use_drop;
 use dioxus::prelude::*;
+use dioxus_free_icons::icons::bs_icons::BsLayoutSidebar;
+use dioxus_free_icons::Icon;
 use dioxus_primitives::dioxus_attributes::attributes;
-use dioxus_primitives::icon;
 use dioxus_primitives::merge_attributes;
 use dioxus_primitives::use_controlled;
 
@@ -374,19 +375,12 @@ pub fn SidebarTrigger(
                 ctx.toggle();
             },
             attributes: merged,
-            icon::Icon {
-                class: "dx-sidebar-trigger-icon",
-                width: "1rem",
-                height: "1rem",
-                rect {
-                    x: "3",
-                    y: "3",
-                    width: "18",
-                    height: "18",
-                    rx: "2",
-                }
-                path { d: "M9 3v18" }
-            }
+            Icon {
+                            icon: BsLayoutSidebar,
+                            class: "dx-sidebar-trigger-icon",
+                            width: 16,
+                            height: 16,
+                        }
             span { class: "dx-sr-only", "Toggle Sidebar" }
         }
     }
