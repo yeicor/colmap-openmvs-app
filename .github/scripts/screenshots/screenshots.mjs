@@ -164,37 +164,45 @@ async function waitForAppReady(page, timeout = 60000) {
 
 async function waitForViewerModel(page, timeout = 120000) {
   const started = Date.now();
+
+  // ── Phase 1: wait until the viewer object and model data exist ────
   while (Date.now() - started < timeout) {
     const ready = await page.evaluate(() => {
       try {
         const v = window.__viewer3d_instance;
-        // Check that modelRoot exists AND has at least one child with
-        // geometry (vertices > 0).  This avoids false-positives where the
-        // viewer object exists but the model data never arrived or rendered.
         if (!v || !v.modelRoot || !v.controls) return false;
         const stats = v.stats || {};
         if (stats.vertices === undefined || stats.vertices === 0) return false;
-        // Also verify that _initUrlPersistence() has completed — this
-        // gates all URL persistence and is the last step of setModel().
-        // Once true, camera is restored, toolbar is populated, the
-        // change listener is installed, data-ready is signalled, and
-        // an immediate render has been submitted.
+        // _initialized is set at the end of setModel(), after the first
+        // render has been submitted.
         if (!v._initialized) return false;
+        // Container readiness is set independently by both the viewer
+        // class and the Rust-mounted JS.
+        if (v.container && v.container.dataset.ready !== "true") return false;
         return true;
       } catch {
         return false;
       }
     });
-    if (ready) {
-      // Give the renderer time to composite after the forced render + at
-      // least one animation frame.
-      await page.waitForTimeout(2000);
-      return true;
-    }
+    if (ready) break;
     await page.waitForTimeout(500);
   }
-  console.warn(`  ⚠  3D viewer didn't load within ${timeout}ms — capturing anyway`);
-  return false;
+
+  if (Date.now() - started >= timeout) {
+    console.warn(`  ⚠  3D viewer didn't load within ${timeout}ms — capturing anyway`);
+    return false;
+  }
+
+  // ── Phase 2: guarantee at least one fully-composited frame ────────
+  // requestAnimationFrame only fires after the browser has composited
+  // the *previous* frame.  So waiting for two consecutive rAFs proves
+  // that the forced render from setModel() and at least one subsequent
+  // rAF-driven render have been fully composited on the GPU.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+  // Small safety margin for any in-flight presentation work.
+  await page.waitForTimeout(500);
+  return true;
 }
 
 // ── Screenshot capture ──────────────────────────────────────────────────

@@ -746,11 +746,14 @@ export class Viewer3D {
     }
     this.homeCamera(false);
 
-    this._initUrlPersistence();
-
     // Force an immediate render so there is at least one frame before the
     // animation loop kicks in.
     this.renderer.render(this.scene, this.camera);
+
+    // Signal that the viewer is fully initialised — only after the first
+    // render has been submitted.  The screenshot script polls this flag
+    // before capturing, so it must only become true once a frame is drawn.
+    this._initUrlPersistence();
   }
 
   detectCapabilities(): void {
