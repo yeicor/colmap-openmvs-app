@@ -2,16 +2,12 @@
 /target/
 /devstorage/
 
+# Generated assets (produced by app/build.rs, not for committing)
+/app/assets/viewer3d.bundle.*
+/app/assets/lib/
+/app/assets/demo/
+/app/gen/
+
 # npm — populated by `npm install` (run automatically by app/build.rs)
 /node_modules/
 /.build-rs-hash
-
-# Generated JS assets (produced by app/build.rs, not for committing)
-/app/assets/viewer3d.bundle.*
-/app/assets/lib/
-
-# Generated demo assets (produced by backend tests)
-/app/assets/demo/
-
-# Generated demo assets stub (produced by app/build.rs)
-/app/gen/

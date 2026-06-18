@@ -10,7 +10,7 @@ colmap-openmvs-backend = { path = "../backend", optional = true }
 # UI Framework
 dioxus = { version = "0.7.9", features = ["router"] }
 dioxus-free-icons = { version = "0.10.0", features = ["bootstrap"] }
-dioxus-primitives = { git = "https://github.com/DioxusLabs/components", rev = "203824b", default-features = false }
+dioxus-primitives = { git = "https://github.com/DioxusLabs/components", rev = "02801f2", default-features = false }
 
 # Async runtime (needed for Android startup on server feature)
 tokio = { version = "1.35", features = ["sync"], optional = true }

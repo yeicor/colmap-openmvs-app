@@ -2,10 +2,12 @@
 /target/
 /devstorage/
 
-# npm — node_modules is populated by `npm install` (run automatically by app/build.rs)
-/node_modules/
-/.build-rs-hash
-
-# Vendored JS assets — downloaded automatically by app/build.rs on build
+# Generated assets (produced by app/build.rs, not for committing)
 /app/assets/viewer3d.bundle.*
 /app/assets/lib/
+/app/assets/demo/
+/app/gen/
+
+# npm — populated by `npm install` (run automatically by app/build.rs)
+/node_modules/
+/.build-rs-hash
