@@ -73,7 +73,7 @@ pub async fn get_project_image_bytes(
     project_name: String,
     image_name: String,
 ) -> Result<ImgResponse> {
-    #[cfg(feature = "fullstack")]
+    #[cfg(all(feature = "fullstack", not(feature = "demo")))]
     {
         use dioxus::fullstack::body::Body;
         use dioxus::fullstack::http::Response;
@@ -126,6 +126,15 @@ pub async fn get_project_image_bytes(
             data.size.to_string().parse().unwrap(),
         );
         Ok(resp)
+    }
+
+    #[cfg(all(feature = "fullstack", feature = "demo"))]
+    {
+        // demo + fullstack is not a valid combination; return an error.
+        let _ = (&project_name, &image_name);
+        Err(dioxus::CapturedError::msg(
+            "fullstack + demo is not a valid combination of features.",
+        ))
     }
 
     #[cfg(not(feature = "fullstack"))]

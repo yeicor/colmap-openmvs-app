@@ -721,7 +721,6 @@ pub fn OutputsTab(project_name: String) -> Element {
     let mut clearing_all = use_signal(|| false);
     let restoring = use_signal(|| false);
     let downloading_folder = use_signal(|| Option::<String>::None);
-    let restore_folder = use_signal(|| Option::<String>::None);
     let mut download_modal = use_signal(|| Option::<(String, String, bool)>::None);
 
     let project_name_res = project_name.clone();
@@ -1015,40 +1014,6 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                             },
                                                             Icon { icon: BsDownload }
                                                             span { class: "btn-label", " Backup" }
-                                                        }
-
-                                                        // Folder restore (non-virtual dirs only)
-                                                        if !is_virtual {
-                                                            button {
-                                                                class: "outputs-btn outputs-restore-btn",
-                                                                disabled: restoring(),
-                                                                title: "Restore folder contents from ZIP",
-                                                                onclick: {
-                                                                    let pn = project_name.clone();
-                                                                    let fp = rel_path.clone();
-                                                                    let mut rst = restoring;
-                                                                    let rc = refresh_counter;
-                                                                    let mut rst_f = restore_folder;
-                                                                    let tc = toast_ctx;
-                                                                    move |_| {
-                                                                        rst_f.set(Some(fp.clone()));
-                                                                        rst.set(true);
-                                                                        let pn2 = pn.clone();
-                                                                        let fp2 = fp.clone();
-                                                                        let mut rst2 = rst.clone();
-                                                                        let mut rst_f2 = rst_f.clone();
-                                                                        let rc2 = rc.clone();
-                                                                        let tc2 = tc.clone();
-                                                                        spawn(async move {
-                                                                            restore_files(&pn2, &fp2, rc2, tc2).await;
-                                                                            rst2.set(false);
-                                                                            rst_f2.set(None);
-                                                                        });
-                                                                    }
-                                                                },
-                                                                Icon { icon: BsUpload }
-                                                                span { class: "btn-label", " Restore" }
-                                                            }
                                                         }
                                                     }
 

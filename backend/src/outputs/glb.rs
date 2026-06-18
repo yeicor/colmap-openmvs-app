@@ -6,6 +6,14 @@
 //!   - Textured mesh  (xyz, face vertex_indices + per-face texcoord, companion PNG)
 //!   - COLMAP points3D.bin  → GLB point cloud
 //!
+//! COLMAP/OpenMVS use a world coordinate system where Y points DOWN and Z
+//! points FORWARD (camera look direction).  glTF/GLB mandates a right-handed
+//! Y-UP coordinate system (X right, Y up, Z backward toward the viewer).
+//!
+//! This module applies the rotation `(x, y, z) → (x, -y, -z)` (a 180° rotation
+//! around the X axis) to convert from the COLMAP world space into the
+//! GLB Y-up coordinate system before building the binary glTF payload.
+//!
 //! Provides [`generate_glb`] for server-side GLB generation.
 
 use anyhow::anyhow;
@@ -32,6 +40,35 @@ pub fn ply_texture_file_names(ply_bytes: &[u8]) -> Vec<String> {
     names
 }
 
+/// Rotation that converts from the COLMAP / OpenMVS world coordinate
+/// system (X right, Y down, Z forward) to the glTF / GLB Y-up system
+/// (X right, Y up, Z backward).
+///
+/// The transformation is a 180° rotation around the X axis which
+/// preserves right-handedness:
+///
+/// ```text
+/// x' =  x
+/// y' = -y   (down  →  up)
+/// z' = -z   (forward → backward / toward viewer)
+/// ```
+fn transform_colmap_to_glb(point: &mut [f32; 3]) {
+    point[1] = -point[1];
+    point[2] = -point[2];
+}
+
+/// Apply [`transform_colmap_to_glb`] to all positions and normals in a
+/// [`ParsedPly`], converting the mesh / point cloud from COLMAP world
+/// coordinates to the GLB Y-up coordinate system.
+fn apply_colmap_to_glb_transform(parsed: &mut ParsedPly) {
+    for p in &mut parsed.positions {
+        transform_colmap_to_glb(p);
+    }
+    for n in &mut parsed.normals_from_file {
+        transform_colmap_to_glb(n);
+    }
+}
+
 /// Generate a GLB file on disk by reading a PLY or points3D.bin output file.
 ///
 /// * `file_name` — relative path of the file within the project
@@ -49,7 +86,7 @@ pub fn generate_glb(file_name: &str, project_path: &std::path::Path) -> anyhow::
         || lower.ends_with("\\points3d.bin")
     {
         let (positions, colors) = parse_points3d_bin(&raw_bytes)?;
-        let parsed = ParsedPly {
+        let mut parsed = ParsedPly {
             positions,
             normals_from_file: vec![],
             colors: colors.unwrap_or_default(),
@@ -58,6 +95,7 @@ pub fn generate_glb(file_name: &str, project_path: &std::path::Path) -> anyhow::
             texture_file: None,
             texture_groups: vec![],
         };
+        apply_colmap_to_glb_transform(&mut parsed);
         let glb = build_glb(parsed, vec![])?;
         tracing::info!(
             "generate_glb: converted points3D.bin to GLB ({} bytes)",
@@ -115,7 +153,8 @@ pub fn generate_glb(file_name: &str, project_path: &std::path::Path) -> anyhow::
     );
 
     // Build the GLB from the PLY
-    let parsed = parse_ply(&raw_bytes)?;
+    let mut parsed = parse_ply(&raw_bytes)?;
+    apply_colmap_to_glb_transform(&mut parsed);
     let glb = build_glb(parsed, textures)?;
 
     Ok(glb)

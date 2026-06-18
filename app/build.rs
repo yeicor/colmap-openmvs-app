@@ -1,6 +1,29 @@
+use base64::Engine as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Write a file only if its content has changed, preserving mtime to avoid
+/// triggering rebuild loops from file watchers (e.g. dioxus serve).
+fn write_if_changed(path: &Path, content: &str) {
+    if let Ok(existing) = fs::read_to_string(path) {
+        if existing == content {
+            return;
+        }
+    }
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    fs::write(path, content).unwrap();
+}
+
+/// Metadata for a single embedded binary file (image or output).
+struct DemoFile {
+    match_key: String,
+    ident: String,
+    b64_include_path: String,
+}
 
 #[cfg(target_family = "windows")]
 const SHELL: &str = "cmd.exe";
@@ -94,23 +117,34 @@ fn main() {
     // ── 5. Copy icon into the Android project (if building for Android) ──────
     embed_android_icon_and_app_name(&manifest_dir, &app_name);
 
-    // ── 6. Generate demo assets if the demo feature is enabled ─────────────────
+    // ── 6. Generate demo assets (always, so the LSP can find the file) ──────
     if std::env::var("CARGO_FEATURE_DEMO").is_ok() {
         generate_demo_assets(&manifest_dir);
+    } else {
+        generate_demo_assets_stub(&manifest_dir);
     }
 }
 
 // ── Generate demo assets ──────────────────────────────────────────────────────
 
 fn generate_demo_assets(manifest_dir: &Path) {
-    let out_dir = std::env::var("OUT_DIR").unwrap();
-    let dest_path = Path::new(&out_dir).join("demo_assets.rs");
+    let gen_dir = manifest_dir.join("gen");
+    fs::create_dir_all(&gen_dir).ok();
+    let dest_path = gen_dir.join("demo_assets_gen.rs");
+
+    let target_dir = manifest_dir.parent().unwrap().join("target");
 
     let demo_dir = manifest_dir.join("assets").join("demo");
     println!("cargo:rerun-if-changed={}", demo_dir.display());
 
     let images_dir = demo_dir.join("images");
     let outputs_dir = demo_dir.join("outputs");
+
+    // ── Base64 output directory (in target/, outside source tree to avoid rebuild loop) ─
+    let base64_dir = target_dir.join("demo_base64");
+    if base64_dir.exists() {
+        fs::remove_dir_all(&base64_dir).unwrap();
+    }
 
     // ── Auto-generate demo data if needed ───────────────────────────────
     let manifest_path = demo_dir.join("manifest.json");
@@ -129,9 +163,7 @@ fn generate_demo_assets(manifest_dir: &Path) {
         if let Err(e) = serde_json::from_str::<serde_json::Value>(&text) {
             let preview: String = text.chars().take(200).collect();
             panic!(
-                "Invalid JSON in {}: {}
-First 200 characters:
-{}",
+                "Invalid JSON in {}: {}\nFirst 200 characters:\n{}",
                 manifest_path.display(),
                 e,
                 preview,
@@ -208,11 +240,11 @@ First 200 characters:
         "[]".to_string()
     };
 
-    // ===== GENERATE RUST SOURCE =====
+    // ===== GENERATE RUST SOURCE (base64 + include_str!; no include_bytes!) =====
 
     let mut out = String::new();
 
-    // 6. Dynamic raw string delimiter - pick a safe number of # that doesn't appear in content
+    // Dynamic raw string delimiter - pick a safe number of # that doesn't appear in content
     let manifest_hashes = "#".repeat(safe_raw_delimiter(&manifest_str));
     let download_events_hashes = "#".repeat(safe_raw_delimiter(&download_events_str));
     let pipeline_events_hashes = "#".repeat(safe_raw_delimiter(&pipeline_events_str));
@@ -230,56 +262,186 @@ First 200 characters:
         pipeline_events_hashes, pipeline_events_str
     ));
 
-    // Images (flat directory, no subdirectories)
-    out.push_str("pub fn demo_image_bytes(name: &str) -> Option<&'static [u8]> {\n");
-    out.push_str("    match name {\n");
+    // ===== Process binary files: base64-encode and generate include_str! constants =====
+    // include_str! returns &str — the LSP handles this natively without size inference
+    // (unlike include_bytes! which returns &[u8; N] and triggers "type annotations needed").
+    // At runtime, OnceLock caches the decoded bytes. An init_demo_data() function pre-decodes
+    // everything at startup so there's no lazy-decode latency on first access.
+    let engine = base64::engine::general_purpose::STANDARD;
+
+    let mut image_files: Vec<DemoFile> = Vec::new();
+    let mut output_files: Vec<DemoFile> = Vec::new();
+
     if images_dir.exists() {
+        fs::create_dir_all(&base64_dir.join("images")).unwrap();
         for entry in fs::read_dir(&images_dir).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
             if path.is_file() {
-                let name = path.file_name().unwrap().to_str().unwrap();
-                let escaped_name = escape_path(name);
-                let abs_path = path.canonicalize().unwrap().to_string_lossy().into_owned();
-                let escaped_abs = escape_path(&abs_path);
-                out.push_str(&format!(
-                    "        \"{}\" => Some(include_bytes!(\"{}\")),\n",
-                    escaped_name, escaped_abs
-                ));
+                let name = path.file_name().unwrap().to_str().unwrap().to_string();
+                let escaped_name = escape_path(&name);
+                let ident = to_ident(&name);
+
+                let raw_bytes = fs::read(&path).unwrap();
+                let b64 = engine.encode(&raw_bytes);
+                let b64_filename = format!("{}.b64", name);
+                fs::write(base64_dir.join("images").join(&b64_filename), &b64).unwrap();
+
+                image_files.push(DemoFile {
+                    match_key: escaped_name,
+                    ident,
+                    b64_include_path: format!(
+                        "concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../target/demo_base64/images/{}\")",
+                        escape_path(&b64_filename)
+                    ),
+                });
             }
         }
+    }
+
+    if outputs_dir.exists() {
+        collect_output_statics(
+            &outputs_dir,
+            &outputs_dir,
+            &mut output_files,
+            &base64_dir,
+            &engine,
+        );
+    }
+
+    // ── Section 1: include_str! + concat!(CARGO_MANIFEST_DIR, ...) for each file ──
+    // concat! is evaluated at compile time to build an absolute path to the base64 file.
+    // This works regardless of whether the generated file is in OUT_DIR or the source tree.
+    for f in image_files.iter().chain(output_files.iter()) {
+        out.push_str(&format!(
+            "pub const {}_B64: &str = include_str!({});\n",
+            f.ident, f.b64_include_path
+        ));
+    }
+
+    // ── Section 2: OnceLock statics for each file ──────────────────────────
+    if !image_files.is_empty() || !output_files.is_empty() {
+        out.push_str("\n");
+    }
+    for f in image_files.iter().chain(output_files.iter()) {
+        out.push_str(&format!(
+            "#[allow(non_snake_case)]\nstatic {}: OnceLock<Vec<u8>> = OnceLock::new();\n",
+            f.ident
+        ));
+    }
+
+    // ── Section 3: Init function — decodes all data at startup ─────────────
+    if !image_files.is_empty() || !output_files.is_empty() {
+        out.push_str("\npub fn init_demo_data() {\n");
+        out.push_str("    use base64::Engine as _;\n");
+        out.push_str("    let engine = base64::engine::general_purpose::STANDARD;\n");
+        for f in image_files.iter().chain(output_files.iter()) {
+            out.push_str(&format!(
+                "    {}.get_or_init(|| engine.decode({}_B64).unwrap());\n",
+                f.ident, f.ident
+            ));
+        }
+        out.push_str("}\n");
+    }
+
+    // ── Section 4: Lookup functions ───────────────────────────────────────
+    out.push_str("\npub fn demo_image_bytes(name: &str) -> Option<&'static [u8]> {\n");
+    out.push_str("    use base64::Engine as _;\n");
+    out.push_str("    let engine = base64::engine::general_purpose::STANDARD;\n");
+    out.push_str("    match name {\n");
+    for f in &image_files {
+        out.push_str(&format!(
+            "        \"{}\" => Some({}.get_or_init(|| engine.decode({}_B64).unwrap()).as_slice()),\n",
+            f.match_key, f.ident, f.ident
+        ));
     }
     out.push_str("        _ => None,\n");
     out.push_str("    }\n}\n\n");
 
-    // Outputs (recursive, preserves relative directory structure)
     out.push_str("pub fn demo_output_bytes(path: &str) -> Option<&'static [u8]> {\n");
+    out.push_str("    use base64::Engine as _;\n");
+    out.push_str("    let engine = base64::engine::general_purpose::STANDARD;\n");
     out.push_str("    match path {\n");
-    if outputs_dir.exists() {
-        collect_files(&outputs_dir, &outputs_dir, &mut out);
+    for f in &output_files {
+        out.push_str(&format!(
+            "        \"{}\" => Some({}.get_or_init(|| engine.decode({}_B64).unwrap()).as_slice()),\n",
+            f.match_key, f.ident, f.ident
+        ));
     }
     out.push_str("        _ => None,\n");
     out.push_str("    }\n}\n");
 
-    fs::write(&dest_path, out).unwrap();
+    write_if_changed(&dest_path, &out);
 }
 
-fn collect_files(base: &Path, dir: &Path, out: &mut String) {
+/// Generate a minimal stub so the `include!` in demo.rs always resolves.
+fn generate_demo_assets_stub(manifest_dir: &Path) {
+    let gen_dir = manifest_dir.join("gen");
+    fs::create_dir_all(&gen_dir).ok();
+    let dest_path = gen_dir.join("demo_assets_gen.rs");
+    let content = r#"pub const DEMO_MANIFEST: &str = "{}";
+pub const DOWNLOAD_EVENTS_JSON: &str = "[]";
+pub const PIPELINE_EVENTS_JSON: &str = "[]";
+pub fn init_demo_data() {}
+pub fn demo_image_bytes(_name: &str) -> Option<&'static [u8]> { None }
+pub fn demo_output_bytes(_path: &str) -> Option<&'static [u8]> { None }"#;
+    write_if_changed(&dest_path, content);
+}
+
+fn to_ident(s: &str) -> String {
+    // Convert a filename to a valid Rust identifier (UPPER_CASE for static naming)
+    let mut result = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if ch.is_alphanumeric() || ch == '_' {
+            result.push(ch.to_ascii_uppercase());
+        } else {
+            result.push('_');
+        }
+    }
+    if result.is_empty() || result.starts_with(|c: char| c.is_numeric()) {
+        result.insert(0, '_');
+    }
+    result
+}
+
+fn collect_output_statics(
+    base: &Path,
+    dir: &Path,
+    files: &mut Vec<DemoFile>,
+    base64_dir: &Path,
+    engine: &base64::engine::general_purpose::GeneralPurpose,
+) {
     for entry in fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
         if path.is_dir() {
-            collect_files(base, &path, out);
+            collect_output_statics(base, &path, files, base64_dir, engine);
         } else if path.is_file() {
             let rel_path = path.strip_prefix(base).unwrap();
             let rel_str = rel_path.to_string_lossy().into_owned();
-            let abs_path = path.canonicalize().unwrap().to_string_lossy().into_owned();
             let escaped_rel = escape_path(&rel_str);
-            let escaped_abs = escape_path(&abs_path);
-            out.push_str(&format!(
-                "        \"{}\" => Some(include_bytes!(\"{}\")),\n",
-                escaped_rel, escaped_abs
-            ));
+            let ident = to_ident(&rel_str);
+
+            let raw_bytes = fs::read(&path).unwrap();
+            let b64 = engine.encode(&raw_bytes);
+
+            // Preserve subdirectory structure in the base64 output
+            let parent_rel = rel_path.parent().and_then(|p| p.to_str()).unwrap_or("");
+            let b64_subdir = base64_dir.join(parent_rel);
+            fs::create_dir_all(&b64_subdir).unwrap();
+
+            let filename = path.file_name().unwrap().to_str().unwrap();
+            let b64_filename = format!("{filename}.b64");
+            fs::write(b64_subdir.join(&b64_filename), &b64).unwrap();
+
+            files.push(DemoFile {
+                match_key: escaped_rel,
+                ident,
+                b64_include_path: format!(
+                    "concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../target/demo_base64/{}.b64\")",
+                    escape_path(&rel_str)
+                ),
+            });
         }
     }
 }

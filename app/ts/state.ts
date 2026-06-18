@@ -45,7 +45,7 @@ export function updateViewerUrl(projectName: string, filePath: string, cfgBlobB6
  */
 export function buildInitialState(initialConfig?: Partial<ConfigState> | null): ConfigState {
   // Strip legacy `background` from a URL-deserialised config blob too
-  const { background: _, ...initialClean } = initialConfig || {};
+  const { background: _, ...initialClean } = (initialConfig || {}) as Partial<ConfigState & { background?: unknown }>;
   return {
     ...DEFAULT_STATE,
     ...initialClean,

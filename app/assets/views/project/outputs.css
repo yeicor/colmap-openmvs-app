@@ -286,16 +286,6 @@
     background: color-mix(in srgb, var(--focused-border-color) 15%, var(--primary-color-4));
 }
 
-/* Restore: green (upload action) */
-.outputs-restore-btn {
-    color: var(--secondary-success-color);
-    border-color: var(--secondary-success-color);
-}
-
-.outputs-restore-btn:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--secondary-success-color) 15%, var(--primary-color-4));
-}
-
 /* View 3D: purple (distinct from backup blue) */
 .outputs-view-3d-btn {
     color: var(--view-3d-accent);

@@ -12,3 +12,6 @@
 
 # Generated demo assets (produced by backend tests)
 /app/assets/demo/
+
+# Generated demo assets stub (produced by app/build.rs)
+/app/gen/
