@@ -52,9 +52,17 @@ fn main() {
 
     // ── Rebuild triggers ─────────────────────────────────────────────────────
     let pkg_json_path = workspace_root.join("package.json");
-    let viewer_src = manifest_dir.join("js").join("viewer3d.js");
+    let viewer_src = manifest_dir.join("ts").join("index.ts");
     println!("cargo:rerun-if-changed={}", pkg_json_path.display());
-    println!("cargo:rerun-if-changed={}", viewer_src.display());
+    // Watch all TypeScript source files in the ts directory
+    if let Ok(entries) = std::fs::read_dir(manifest_dir.join("ts")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("ts") {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
+    }
 
     let bundle_out = manifest_dir.join("assets").join("viewer3d.bundle.js");
     println!("cargo:rerun-if-changed={}", bundle_out.display());
@@ -72,7 +80,7 @@ fn main() {
     // ── 1. npm install (cached by package.json content hash) ─────────────────
     npm_install_if_needed(&workspace_root, &pkg_json_path);
 
-    // ── 2. Bundle viewer3d.js → assets/viewer3d.bundle.js ───────────────────
+    // ── 2. Bundle app/ts/index.ts → assets/viewer3d.bundle.js ────────────────
     bundle_viewer(&workspace_root, &viewer_src, &bundle_out);
 
     // ── 3. Copy eruda (debug builds only) ────────────────────────────────────
@@ -324,8 +332,25 @@ fn npm_install_if_needed(workspace_root: &Path, pkg_json_path: &Path) {
 // ── esbuild bundle ────────────────────────────────────────────────────────────
 
 fn bundle_viewer(workspace_root: &Path, src: &Path, out: &Path) {
-    let src_bytes = fs::read(src).unwrap_or_else(|e| panic!("Cannot read {}: {e}", src.display()));
-    let hash = fnv64(&src_bytes);
+    // Hash ALL .ts source files (not just the entry point) so that editing
+    // any imported module like viewer3d-class.ts, state.ts, utils.ts, etc.
+    // invalidates the cached bundle and triggers a rebuild.
+    let mut combined = String::new();
+    let ts_dir = src.parent().expect("src has no parent directory");
+    if let Ok(entries) = std::fs::read_dir(ts_dir) {
+        let mut files: Vec<_> = entries
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|e| e.to_str()) == Some("ts"))
+            .collect();
+        // Sort for deterministic hash order across filesystem iterations.
+        files.sort_by_key(|e| e.file_name());
+        for entry in &files {
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                combined.push_str(&content);
+            }
+        }
+    }
+    let hash = fnv64(combined.as_bytes());
 
     let hash_file = out.with_extension("hash");
     if fs::read_to_string(&hash_file).unwrap_or_default().trim() == hash && out.exists() {

@@ -25,7 +25,7 @@ mod files;
 pub use files::init as init_files;
 
 mod outputs;
-pub use outputs::write_project_output;
+pub use outputs::{generate_glb, write_project_output};
 
 mod init;
 pub use init::startup;
@@ -63,6 +63,7 @@ use colmap_openmvs_api::OutputFile;
 use dioxus::fullstack::body::Bytes;
 use dioxus::fullstack::ByteStream;
 use dioxus::Result as DioxusResult;
+use std::io::{Read, Write};
 use tracing::debug;
 
 /// List output files in a project's work directory.
@@ -130,6 +131,7 @@ fn walk_for_outputs(
                 .replace('\\', "/");
 
             let is_viewable = name.ends_with(".ply") || name == "points3D.bin";
+            let glb_available = is_viewable;
 
             let modified_at = metadata
                 .modified()
@@ -143,6 +145,7 @@ fn walk_for_outputs(
                 name,
                 size: metadata.len(),
                 is_viewable,
+                glb_available,
                 modified_at,
             });
         }
@@ -165,6 +168,206 @@ pub async fn get_project_output_bytes(
         .map_err(|e| anyhow::anyhow!("Failed to read output file: {}", e))?;
     Ok(ByteStream::new(futures::stream::once(async move {
         Bytes::from(bytes)
+    })))
+}
+
+/// Stream all files under `folder_path` as a ZIP archive.
+pub async fn download_project_outputs_zip(
+    project_name: String,
+    folder_path: String,
+) -> DioxusResult<ByteStream> {
+    let project_path = project::resolve_project_path(&project_name).await?;
+    let folder_path_clone = folder_path.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let base = if folder_path_clone.is_empty() {
+            project_path.clone()
+        } else {
+            project_path.join(&folder_path_clone)
+        };
+
+        if !base.exists() || !base.is_dir() {
+            return Err(anyhow::anyhow!("Directory not found: {}", base.display()));
+        }
+
+        let mut zip_buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip_writer = zip::ZipWriter::new(&mut zip_buf);
+            collect_files_for_zip(&project_path, &base, &folder_path_clone, &mut zip_writer)?;
+            zip_writer
+                .finish()
+                .map_err(|e| anyhow::anyhow!("Failed to finalize ZIP: {}", e))?;
+        }
+        Ok::<_, anyhow::Error>(zip_buf.into_inner())
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("ZIP build task failed: {}", e))??;
+
+    Ok(ByteStream::new(futures::stream::once(async move {
+        Bytes::from(result)
+    })))
+}
+
+fn collect_files_for_zip(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    prefix: &str,
+    zip_writer: &mut zip::ZipWriter<&mut std::io::Cursor<Vec<u8>>>,
+) -> anyhow::Result<()> {
+    use zip::write::FileOptions;
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        // Compute ZIP entry path:
+        // - When prefix is empty (root backup): use relative path as-is
+        // - When prefix is non-empty (folder backup): use the relative path
+        //   with the folder name preserved as the root element, so that
+        //   restoring on the parent folder creates the folder with its contents.
+        //   Example: backing up "my_folder" yields entries like
+        //   "my_folder/file.txt", "my_folder/subdir/file2.txt"
+        let zip_entry = if prefix.is_empty() {
+            relative.clone()
+        } else {
+            let prefix_with_slash = format!("{}/", prefix);
+            relative
+                .strip_prefix(&prefix_with_slash)
+                .map(|stripped| format!("{}/{}", prefix, stripped))
+                .unwrap_or_else(|| relative.clone())
+        };
+
+        if path.is_dir() {
+            // Skip the images directory at the project root
+            if dir == root && name == "images" {
+                continue;
+            }
+            // Skip config/settings at root
+            if dir == root && (name == "config.sh" || name == "settings.json") {
+                continue;
+            }
+            // Add directory entry
+            let _ = zip_writer.add_directory::<&str, ()>(&zip_entry, FileOptions::default());
+            collect_files_for_zip(root, &path, prefix, zip_writer)?;
+        } else if path.is_file() {
+            if dir == root && (name == "config.sh" || name == "settings.json") {
+                continue;
+            }
+            let bytes = std::fs::read(&path)?;
+            let options: FileOptions<'_, ()> =
+                FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            zip_writer
+                .start_file(&zip_entry, options)
+                .map_err(|e| anyhow::anyhow!("ZIP entry '{}': {}", zip_entry, e))?;
+            zip_writer
+                .write_all(&bytes)
+                .map_err(|e| anyhow::anyhow!("ZIP write '{}': {}", zip_entry, e))?;
+        }
+    }
+    Ok(())
+}
+
+/// Restore files from a ZIP archive or single file upload into a project folder.
+pub async fn restore_project_outputs(
+    project_name: String,
+    folder_path: String,
+    body: ByteStream,
+) -> DioxusResult<()> {
+    let project_path = project::resolve_project_path(&project_name).await?;
+
+    // Read all bytes from the stream
+    let mut all_bytes = Vec::new();
+    let mut s = body;
+    while let Some(chunk) = s.next().await {
+        let chunk = chunk?;
+        all_bytes.extend_from_slice(&chunk);
+    }
+
+    // Detect if payload is a ZIP (magic bytes PK\x03\x04)
+    if all_bytes.len() >= 4
+        && all_bytes[0] == 0x50
+        && all_bytes[1] == 0x4B
+        && all_bytes[2] == 0x03
+        && all_bytes[3] == 0x04
+    {
+        // ZIP extraction
+        let cursor = std::io::Cursor::new(&all_bytes);
+        let mut archive =
+            zip::ZipArchive::new(cursor).map_err(|e| anyhow::anyhow!("Invalid ZIP: {}", e))?;
+
+        let target_dir = if folder_path.is_empty() {
+            project_path.clone()
+        } else {
+            project_path.join(&folder_path)
+        };
+
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i)?;
+            if entry.is_dir() {
+                continue;
+            }
+            let name = entry.name().to_string();
+            let target_path = target_dir.join(&name);
+            if let Some(parent) = target_path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Create dir: {}", e))?;
+            }
+            let mut entry_bytes = Vec::new();
+            entry
+                .read_to_end(&mut entry_bytes)
+                .map_err(|e| anyhow::anyhow!("Read ZIP entry '{}': {}", name, e))?;
+            tokio::fs::write(&target_path, &entry_bytes)
+                .await
+                .map_err(|e| anyhow::anyhow!("Write '{}': {}", target_path.display(), e))?;
+        }
+    } else {
+        // Single file: write directly
+        if folder_path.is_empty() {
+            return Err(anyhow::anyhow!("Single file upload requires a filename").into());
+        }
+        let target_path = project_path.join(&folder_path);
+        if let Some(parent) = target_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| anyhow::anyhow!("Create dir: {}", e))?;
+        }
+        tokio::fs::write(&target_path, &all_bytes)
+            .await
+            .map_err(|e| anyhow::anyhow!("Write file: {}", e))?;
+    }
+
+    Ok(())
+}
+
+/// Generate and stream a GLB version of an output file.
+pub async fn get_project_output_glb(
+    project_name: String,
+    relative_path: String,
+) -> DioxusResult<ByteStream> {
+    let project_path = project::resolve_project_path(&project_name).await?;
+    let relative_path_clone = relative_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        outputs::generate_glb(&relative_path_clone, &project_path)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("GLB generation task failed: {}", e))??;
+    Ok(ByteStream::new(futures::stream::once(async move {
+        Bytes::from(result)
     })))
 }
 

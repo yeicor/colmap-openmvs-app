@@ -98,6 +98,32 @@ pub enum ResizeProgressEvent {
     },
 }
 
+/// Events emitted during ZIP download of project outputs
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum ZipProgressEvent {
+    Packing {
+        completed: usize,
+        total: usize,
+        current_file: String,
+    },
+    Error {
+        message: String,
+    },
+}
+
+/// Events emitted during ZIP restore of project outputs
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum RestoreProgressEvent {
+    Extracting {
+        completed: usize,
+        total: usize,
+        current_file: String,
+    },
+    Error {
+        message: String,
+    },
+}
+
 /// Status information about the PRoot container runtime
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RuntimeInfo {
@@ -204,9 +230,21 @@ pub struct OutputFile {
     pub size: u64,
     /// Whether this file can be displayed in the 3D viewer
     pub is_viewable: bool,
+    /// Whether the file has a GLB version available for download/viewing
+    #[serde(default)]
+    pub glb_available: bool,
     /// Last-modified Unix timestamp in milliseconds (0 if unavailable)
     #[serde(default)]
     pub modified_at: u64,
+}
+
+/// Format options for downloading an output file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum GlbFormat {
+    #[serde(rename = "raw")]
+    Raw,
+    #[serde(rename = "glb")]
+    Glb,
 }
 
 /// Unique task identifier (UUID v4 string)
@@ -223,6 +261,10 @@ pub enum TaskKind {
     AndroidSettingsRepair,
     /// Generic system startup — runs all registered startup steps.
     Startup,
+    /// Zipping project outputs for download.
+    ZipOutputs,
+    /// Restoring project outputs from uploaded ZIP.
+    RestoreOutputs,
 }
 
 /// Status of a pipeline stage as reported by the `::group` marker
@@ -273,6 +315,10 @@ pub enum TaskEvent {
     DemoProgress(DemoProgressEvent),
     /// Progress during batch image resize
     ResizeProgress(ResizeProgressEvent),
+    /// Progress during ZIP download of project outputs
+    ZipProgress(ZipProgressEvent),
+    /// Progress during ZIP restore of project outputs
+    RestoreProgress(RestoreProgressEvent),
     /// A generic log message from a task
     Log(String),
     /// A log line from the pipeline

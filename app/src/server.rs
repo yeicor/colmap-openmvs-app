@@ -16,32 +16,6 @@ use colmap_openmvs_backend as backend;
 #[cfg(feature = "demo")]
 use crate::demo as backend;
 
-/// Minimal stub so the `#[get]` handler compiles on WASM (no server).
-/// The macro replaces the body; this is never actually called.
-#[cfg(not(any(feature = "server", feature = "demo")))]
-mod backend {
-    use bytes::Bytes;
-    use futures::stream::Stream;
-    use std::io;
-    use std::pin::Pin;
-
-    #[allow(dead_code)]
-    pub struct ImageData {
-        pub stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>>,
-        pub name: String,
-        pub size: u64,
-        pub mime: String,
-        pub etag: String,
-    }
-
-    pub async fn get_project_image_bytes(
-        _project: String,
-        _image: String,
-    ) -> dioxus::Result<ImageData> {
-        unimplemented!()
-    }
-}
-
 #[cfg_attr(not(feature = "demo"), post("/api/startup"))]
 pub async fn startup() -> Result<String> {
     backend::startup().await
@@ -168,17 +142,31 @@ pub async fn get_project_image_bytes_stream(
     project_name: String,
     image_name: String,
 ) -> Result<ByteStream> {
-    #[cfg(feature = "fullstack")]
+    // Guard: only call backend::get_project_image_bytes when we have a
+    // real backend (server or demo).  Without either, the stub backend
+    // would panic — return a graceful error instead.
+    #[cfg(any(feature = "server", feature = "demo"))]
     {
-        let data = backend::get_project_image_bytes(project_name, image_name).await?;
-        use futures::StreamExt;
-        let stream = data.stream.filter_map(|r| async move { r.ok() });
-        Ok(ByteStream::new(stream))
+        // Demo mode: backend returns ByteStream directly
+        #[cfg(feature = "demo")]
+        {
+            return backend::get_project_image_bytes(project_name, image_name).await;
+        }
+        // Non-demo: real backend returns ImageData with streaming fields
+        #[cfg(not(feature = "demo"))]
+        {
+            let data = backend::get_project_image_bytes(project_name, image_name).await?;
+            use futures::StreamExt;
+            let stream = data.stream.filter_map(|r| async move { r.ok() });
+            Ok(ByteStream::new(stream))
+        }
     }
-    #[cfg(not(feature = "fullstack"))]
+    #[cfg(not(any(feature = "server", feature = "demo")))]
     {
-        // Demo mode: backend returns ByteStream directly.
-        backend::get_project_image_bytes(project_name, image_name).await
+        let _ = (&project_name, &image_name);
+        Err(dioxus::CapturedError::msg(
+            "Image server not available. Run with --features server or --features demo.",
+        ))
     }
 }
 
@@ -384,6 +372,40 @@ pub async fn get_project_output_bytes(
     relative_path: String,
 ) -> Result<ByteStream> {
     backend::get_project_output_bytes(project_name, relative_path).await
+}
+
+#[cfg_attr(
+    not(feature = "demo"),
+    get("/api/projects/{project_name}/outputs/glb?relative_path")
+)]
+pub async fn get_project_output_glb(
+    project_name: String,
+    relative_path: String,
+) -> Result<ByteStream> {
+    backend::get_project_output_glb(project_name, relative_path).await
+}
+
+#[cfg_attr(
+    not(feature = "demo"),
+    get("/api/projects/{project_name}/outputs/zip?folder_path")
+)]
+pub async fn download_project_outputs_zip(
+    project_name: String,
+    folder_path: String,
+) -> Result<ByteStream> {
+    backend::download_project_outputs_zip(project_name, folder_path).await
+}
+
+#[cfg_attr(
+    not(feature = "demo"),
+    post("/api/projects/{project_name}/outputs/restore?folder_path")
+)]
+pub async fn restore_project_outputs(
+    project_name: String,
+    folder_path: String,
+    body: ByteStream,
+) -> Result<()> {
+    backend::restore_project_outputs(project_name, folder_path, body).await
 }
 
 #[cfg_attr(

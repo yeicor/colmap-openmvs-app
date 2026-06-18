@@ -9,6 +9,7 @@
 - **Live progress tracking** — Follow every stage with real-time logs and progress bars. Pipelines keep running even if you navigate away, and you can cancel at any time.
 - **Smart caching** — Completed pipeline stages are automatically cached. Re-run with confidence — only the changed steps are recomputed.
 - **Dry-run & log recovery** — Replay logs from a previous run without re-executing, useful for debugging or sharing results.
+- **Web demo** — The live demo uses pre-reconstructed data and requires no uploads. See [screenshots](#screenshots) below or [simply try it out](https://yeicor.github.io/colmap-openmvs-app/).
 
 ### 🖱️ 3D Viewer
 
@@ -67,7 +68,6 @@
 ### 🔒 Privacy & Licensing
 
 - **100% offline** — After the initial container image download, all processing is local. Your photos and models never leave your device.
-- **Web demo** — The live demo uses pre-reconstructed data and requires no uploads. See [screenshots](#screenshots) below or [simply try it out](https://yeicor.github.io/colmap-openmvs-app/).
 - **MIT License** — Free to use, modify, and distribute. Contributions welcome.
 
 

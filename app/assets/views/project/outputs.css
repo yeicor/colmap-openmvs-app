@@ -412,3 +412,131 @@
         transition: none;
     }
 }
+
+/* ============================================================================
+   Download format modal overlay
+   ============================================================================ */
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    animation: modal-fade-in 0.15s ease;
+}
+
+@keyframes modal-fade-in {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.modal-content {
+    background: var(--primary-color-1, #1e1e2e);
+    border: 1px solid var(--primary-color-6, #3a3a4e);
+    border-radius: 0.6rem;
+    padding: 1.25rem 1.5rem;
+    min-width: 260px;
+    max-width: 360px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    animation: modal-slide-up 0.15s ease;
+}
+
+@keyframes modal-slide-up {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.modal-content h3 {
+    margin: 0 0 0.3rem 0;
+    font-size: 0.95rem;
+    color: var(--secondary-color, #eef2ff);
+}
+
+.modal-content p {
+    margin: 0 0 1rem 0;
+    font-size: 0.8rem;
+    color: var(--secondary-color-5, #8890a8);
+}
+
+.download-options-vertical {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.download-option {
+    display: flex;
+    flex-direction: column;
+}
+
+.download-option-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.15rem;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.35rem;
+    border: 1px solid var(--primary-color-6, #3a3a4e);
+    background: var(--primary-color-4, #2a2a3e);
+    color: var(--secondary-color, #eef2ff);
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.1s ease;
+}
+
+.download-option-btn:hover {
+    background: var(--primary-color-3, #33334a);
+    border-color: var(--focused-border-color, #a78bfa);
+}
+
+.download-option-btn:active {
+    transform: scale(0.97);
+}
+
+.download-option-title {
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.download-option-desc {
+    font-size: 0.7rem;
+    color: var(--secondary-color-5, #8890a8);
+    line-height: 1.3;
+}
+
+.modal-cancel-btn {
+    background: transparent;
+    border: none;
+    color: var(--secondary-color-5, #8890a8);
+    cursor: pointer;
+    font-size: 0.78rem;
+    padding: 0.35rem 0.5rem;
+    border-radius: 0.3rem;
+    transition: color 0.1s ease;
+}
+
+.modal-cancel-btn:hover {
+    color: var(--secondary-color, #eef2ff);
+}
+
+.download-hint {
+    font-size: 0.72rem;
+    color: var(--secondary-color-5, #8890a8);
+    margin-top: 0.3rem;
+}

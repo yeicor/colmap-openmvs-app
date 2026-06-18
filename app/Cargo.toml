@@ -18,10 +18,7 @@ tokio = { version = "1.35", features = ["sync"], optional = true }
 # Utilities
 urlencoding = { version = "2.1" }
 
-# ZIP archive creation / extraction
-zip = { version = "8", default-features = false, features = ["deflate"] }
-
-# Error handling (used by viewer conversion)
+# Error handling
 anyhow = { workspace = true }
 bytes = { version = "1" }
 base64 = { version = "0.22" }

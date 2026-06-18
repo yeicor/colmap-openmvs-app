@@ -1,7 +1,8 @@
 use crate::mycomponents::{add_toast, remove_toast, update_toast, ToastType};
 use crate::server::{
-    clear_project_outputs, delete_project_output, get_project_output_bytes, list_project_outputs,
-    write_project_output,
+    clear_project_outputs, delete_project_output, download_project_outputs_zip,
+    get_project_output_bytes, get_project_output_glb, list_project_outputs,
+    restore_project_outputs,
 };
 use base64::Engine as _;
 use colmap_openmvs_api::OutputFile;
@@ -12,13 +13,74 @@ use dioxus_free_icons::icons::bs_icons::{
     BsTrash3, BsUpload, BsX,
 };
 use dioxus_free_icons::Icon;
-use std::collections::{HashMap, HashSet};
-use std::io::{Read, Write};
+use std::collections::HashSet;
 use tracing::{debug, error, info};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Try to save `data` to a known public download directory (SD card on Android)
+/// and return the path where it was saved.
+///
+/// On non-Android targets this always returns `None` so callers fall through
+/// to the base64 + eval `<a>`-tag download path.
+fn save_bytes_to_downloads(data: &[u8], filename: &str) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "android")]
+    {
+        let candidates = [
+            "/storage/emulated/0/Download",
+            "/sdcard/Download",
+            "/storage/emulated/0",
+            "/sdcard",
+        ];
+        for base in &candidates {
+            let dir = std::path::Path::new(base);
+            if dir.exists() && dir.is_dir() {
+                let path = dir.join(filename);
+                // Avoid overwriting by appending a suffix if the file exists.
+                let path = if path.exists() {
+                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+                    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                    let mut counter = 1u32;
+                    loop {
+                        let candidate = if ext.is_empty() {
+                            dir.join(format!("{}_{}", stem, counter))
+                        } else {
+                            dir.join(format!("{}_{}.{}", stem, counter, ext))
+                        };
+                        if !candidate.exists() {
+                            break candidate;
+                        }
+                        counter += 1;
+                    }
+                } else {
+                    path
+                };
+                match std::fs::write(&path, data) {
+                    Ok(()) => {
+                        tracing::info!(saved_to = %path.display(), "Download saved to SD card");
+                        return Some(path);
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            path = %path.display(),
+                            error = %e,
+                            "Cannot write to candidate download dir, trying next"
+                        );
+                    }
+                }
+            }
+        }
+        tracing::warn!("No writable download directory found on Android");
+        None
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (data, filename);
+        None
+    }
+}
 
 fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -57,25 +119,166 @@ fn format_date(unix_millis: u64) -> String {
     }
 }
 
+/// Trigger a browser download of a file by fetching from a server URL directly.
+///
+/// On non-demo builds this avoids copying large files through the Rust ↔ JS
+/// bridge: JS fetches the bytes directly as a Blob and triggers the save-as
+/// dialog. On demo builds we fall back to the old base64 approach since no
+/// real HTTP endpoint exists.
+#[cfg(not(feature = "demo"))]
+async fn trigger_download_from_url(
+    project_name: &str,
+    relative_path: &str,
+    filename: &str,
+    mime_type: &str,
+    api_endpoint: &str, // e.g. "/api/projects/{name}/outputs/bytes" or "glb"
+    mut toast_ctx: crate::mycomponents::ToastCtx,
+) {
+    use dioxus::document::eval as eval_fn;
+    let name_esc = js_escape(filename);
+    let project_esc = js_escape(project_name);
+    let path_esc = js_escape(relative_path);
+
+    // Show progress toast while the download is being prepared
+    let progress_id = add_toast(
+        &mut toast_ctx,
+        format!("Downloading {filename}"),
+        ToastType::Info,
+        None,
+    );
+
+    // Use get_server_url() as base so JS fetches via the correct server
+    // origin — works in web mode (equals window.location.origin) and
+    // desktop mode (embedded server on localhost:port).
+    // On Android/Tauri where get_server_url() may be empty and
+    // window.location.origin is a non-HTTP protocol (dioxus://, tauri://),
+    // fall back to the default localhost address.
+    let server_url = {
+        #[cfg(feature = "fullstack")]
+        {
+            dioxus::fullstack::get_server_url()
+        }
+        #[cfg(not(feature = "fullstack"))]
+        {
+            String::new()
+        }
+    };
+    let server_url_esc = js_escape(&server_url);
+
+    let js = format!(
+        r#"(async function() {{
+    const baseUrl = '{server_url_esc}' || (/^https?:/.test(window.location.origin) ? window.location.origin : 'http://localhost:8080');
+    const url = baseUrl + '{api_endpoint}'.replace('{{name}}', encodeURIComponent('{project_esc}')) + '?relative_path=' + encodeURIComponent('{path_esc}');
+    try {{
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const blob = await resp.blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = '{name_esc}';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(a.href); }}, 10000);
+        dioxus.send('ok');
+    }} catch(e) {{
+        dioxus.send('error:' + e.message);
+    }}
+}})();"#
+    );
+
+    let mut handle = eval_fn(&js);
+    if let Ok(msg) = handle.recv::<String>().await {
+        if let Some(err) = msg.strip_prefix("error:") {
+            tracing::warn!(
+                "JS HTTP download failed ({}), falling back to Rust server function — performance may be reduced",
+                err
+            );
+            // Fallback: fetch via Rust, base64-encode, and trigger download via eval.
+            let stream_result = if api_endpoint.contains("/outputs/glb") {
+                get_project_output_glb(project_name.to_string(), relative_path.to_string()).await
+            } else {
+                get_project_output_bytes(project_name.to_string(), relative_path.to_string()).await
+            };
+
+            match stream_result {
+                Ok(mut stream) => {
+                    let mut bytes = Vec::new();
+                    while let Some(chunk) = stream.next().await {
+                        match chunk {
+                            Ok(data) => bytes.extend_from_slice(&data),
+                            Err(e) => {
+                                error!("Fallback download stream error: {e}");
+                                remove_toast(&mut toast_ctx, &progress_id);
+                                add_toast(
+                                    &mut toast_ctx,
+                                    format!("Download failed: {e}"),
+                                    ToastType::Error,
+                                    None,
+                                );
+                                return;
+                            }
+                        }
+                    }
+                    // On Android, write to the SD card Download folder directly
+                    // (the `<a>` download attribute does not work in WebViews).
+                    // On other platforms, use the base64 + eval approach.
+                    if let Some(saved_path) = save_bytes_to_downloads(&bytes, filename) {
+                        tracing::info!(saved_to = %saved_path.display(), "Download saved locally");
+                        add_toast(
+                            &mut toast_ctx,
+                            format!("Downloaded {filename} to {}", saved_path.display()),
+                            ToastType::Info,
+                            None,
+                        );
+                        remove_toast(&mut toast_ctx, &progress_id);
+                        return;
+                    } else {
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        let b64_esc = js_escape(&b64);
+                        let mime_esc = js_escape(mime_type);
+                        let js_fb = format!(
+                            r#"const b64 = '{b64_esc}';
+const blob = new Blob([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], {{type: '{mime_esc}'}});
+const a = document.createElement('a');
+a.href = URL.createObjectURL(blob);
+a.download = '{name_esc}';
+document.body.appendChild(a);
+a.click();
+setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(a.href); }}, 10000);"#
+                        );
+                        let _ = eval_fn(&js_fb).await;
+                    }
+                }
+                Err(e) => {
+                    error!("Fallback server function failed: {e}");
+                    remove_toast(&mut toast_ctx, &progress_id);
+                    add_toast(
+                        &mut toast_ctx,
+                        format!("Download failed: {e}"),
+                        ToastType::Error,
+                        None,
+                    );
+                    return;
+                }
+            }
+        }
+    }
+    // Success: replace progress toast with completion notification
+    remove_toast(&mut toast_ctx, &progress_id);
+    add_toast(
+        &mut toast_ctx,
+        format!("Downloaded {filename}"),
+        ToastType::Info,
+        None,
+    );
+}
+
 /// Escape a string for embedding inside a JS single-quoted string literal.
 fn js_escape(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('\'', "\\'")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
-}
-
-/// Yield control back to the event loop so the UI stays responsive
-/// during long-running synchronous work (e.g. ZIP compression).
-#[cfg(target_arch = "wasm32")]
-async fn yield_to_event_loop() {
-    gloo_timers::future::TimeoutFuture::new(0).await;
-}
-
-/// Yield control back to the event loop (non-WASM, e.g. server-side tokio).
-#[cfg(not(target_arch = "wasm32"))]
-async fn yield_to_event_loop() {
-    tokio::task::yield_now().await;
 }
 
 /// Pick an emoji icon based on file extension.
@@ -262,251 +465,120 @@ fn is_entry_visible(relative_path: &str, collapsed: &HashSet<String>) -> bool {
     true
 }
 
-/// Build a map: directory path → list of (relative_path, name) for all files under it.
-/// Used by the folder-download feature to know which files belong to a directory.
-fn build_dir_files_map(files: &[OutputFile]) -> HashMap<String, Vec<(String, String)>> {
-    let mut map = HashMap::<String, Vec<(String, String)>>::new();
-    for f in files {
-        // Every file belongs to the root.
-        map.entry(String::new())
-            .or_default()
-            .push((f.relative_path.clone(), f.name.clone()));
-        // … and to each ancestor directory along its path.
-        if let Some(slash) = f.relative_path.rfind('/') {
-            let mut cur = f.relative_path[..slash].to_string();
-            map.entry(cur.clone())
-                .or_default()
-                .push((f.relative_path.clone(), f.name.clone()));
-            while let Some(slash) = cur.rfind('/') {
-                cur = cur[..slash].to_string();
-                map.entry(cur.clone())
-                    .or_default()
-                    .push((f.relative_path.clone(), f.name.clone()));
-            }
-        }
-    }
-    map
-}
-
-/// Compute a zip-entry path relative to `folder_path`.
-/// For the root folder (`""`) the full relative path is used unchanged;
-/// for sub-folders the folder prefix is stripped.
-fn zip_entry_path(relative_path: &str, folder_path: &str) -> String {
-    if folder_path.is_empty() {
-        relative_path.to_string()
-    } else {
-        let prefix = format!("{}/", folder_path);
-        relative_path
-            .strip_prefix(&prefix)
-            .unwrap_or(relative_path)
-            .to_string()
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Async folder download / restore helpers (called from spawn blocks)
+// Server-side download / restore helpers (called from spawn blocks)
 // ---------------------------------------------------------------------------
 
-/// Create a Blob from the ZIP bytes and trigger a browser download.
-///
-/// On WASM targets this uses `web-sys` / `js-sys` to build the Blob directly
-/// from a view into WASM linear memory, avoiding costly base64 serialization.
-/// Falls back to base64 + eval on other targets.
-#[cfg(target_arch = "wasm32")]
-async fn trigger_zip_download(zip_bytes: Vec<u8>, zip_name: &str) {
-    use js_sys::Array;
+/// Download the ZIP archive of `folder_path` from the server and trigger a
+/// browser save-as dialog via base64 + eval.
+async fn trigger_download_zip(
+    project_name: &str,
+    folder_path: &str,
+    filename: &str,
+    mut toast_ctx: crate::mycomponents::ToastCtx,
+) {
+    let pn = project_name.to_string();
+    let fp = folder_path.to_string();
+    let fn_ = filename.to_string();
 
-    // SAFETY: we create a short-lived view into WASM memory and immediately
-    // hand it off to the Blob constructor (which copies the data). No
-    // allocations or yielding happen between the view and the Blob call.
-    let uint8_view = unsafe { js_sys::Uint8Array::view(&zip_bytes) };
-    let arr = Array::new();
-    arr.push(uint8_view.as_ref());
-
-    let opts = web_sys::BlobPropertyBag::new();
-    opts.set_type("application/zip");
-    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(arr.as_ref(), &opts)
-        .expect("Failed to create Blob from ZIP bytes");
-    let url =
-        web_sys::Url::create_object_url_with_blob(&blob).expect("Failed to create object URL");
-
-    // Minimal one-shot eval: just create an anchor and click it.
-    let zip_name_esc = js_escape(zip_name);
-    let js = format!(
-        r#"const a = document.createElement('a');
-a.href = '{url}';
-a.download = '{zip_name_esc}';
-document.body.appendChild(a);
-a.click();
-setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(a.href); }}, 10000);"#
+    // Show persistent progress toast while the ZIP is being prepared
+    let progress_id = add_toast(
+        &mut toast_ctx,
+        format!("Downloading {fn_}…"),
+        ToastType::Info,
+        Some((0, 0)),
     );
-    let _ = eval(&js).await;
-}
 
-#[cfg(not(target_arch = "wasm32"))]
-async fn trigger_zip_download(zip_bytes: Vec<u8>, zip_name: &str) {
-    // Fallback path (e.g. server-side tests): base64 + eval.
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&zip_bytes);
-    let zip_name_esc = js_escape(zip_name);
-    let js = format!(
-        r#"const b64 = '{b64}';
+    match download_project_outputs_zip(pn, fp).await {
+        Ok(mut stream) => {
+            let mut bytes = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(data) => bytes.extend_from_slice(&data),
+                    Err(e) => {
+                        error!(error = %e, "ZIP download stream error");
+                        remove_toast(&mut toast_ctx, &progress_id);
+                        add_toast(
+                            &mut toast_ctx,
+                            format!("Download failed: {e}"),
+                            ToastType::Error,
+                            None,
+                        );
+                        return;
+                    }
+                }
+            }
+            // Remove progress toast before triggering download
+            remove_toast(&mut toast_ctx, &progress_id);
+
+            // On Android, write to the SD card Download folder directly
+            // (the `<a>` download attribute does not work in WebViews).
+            // On other platforms, use the base64 + eval approach.
+            if let Some(saved_path) = save_bytes_to_downloads(&bytes, &fn_) {
+                tracing::info!(saved_to = %saved_path.display(), "ZIP backup saved locally");
+                add_toast(
+                    &mut toast_ctx,
+                    format!("Downloaded {fn_} to {}", saved_path.display()),
+                    ToastType::Info,
+                    None,
+                );
+                remove_toast(&mut toast_ctx, &progress_id);
+                return;
+            } else {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                let name_esc = js_escape(&fn_);
+                let js = format!(
+                    r#"const b64 = '{b64}';
 const blob = new Blob([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], {{type: 'application/zip'}});
 const a = document.createElement('a');
 a.href = URL.createObjectURL(blob);
-a.download = '{zip_name_esc}';
+a.download = '{name_esc}';
 document.body.appendChild(a);
 a.click();
 setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(a.href); }}, 10000);"#
-    );
-    let _ = eval(&js).await;
-}
-
-/// Download every file under `folder_path` and save the user a ZIP archive.
-///
-/// On error, still exports a partial zip with whatever files were successfully
-/// downloaded and reports the failures via the toast context.
-async fn download_folder_zip(
-    project_name: &str,
-    folder_path: &str,
-    zip_name: &str,
-    entries: Vec<(String, String)>,
-    mut toast_ctx: crate::mycomponents::ToastCtx,
-) {
-    if entries.is_empty() {
-        add_toast(
-            &mut toast_ctx,
-            "Folder has no files".to_string(),
-            ToastType::Error,
-            None,
-        );
-        return;
-    }
-
-    let total = entries.len();
-    let progress_id = add_toast(
-        &mut toast_ctx,
-        format!("Downloading {} files…", total),
-        ToastType::Info,
-        Some((0, total)),
-    );
-
-    // Download every file's bytes, collecting errors along the way.
-    let mut file_data: Vec<(String, Vec<u8>)> = Vec::with_capacity(total);
-    let mut errors: Vec<String> = Vec::new();
-    for (done, (rel_path, _name)) in entries.iter().enumerate() {
-        update_toast(
-            &mut toast_ctx,
-            &progress_id,
-            Some(format!("Downloading {}", rel_path)),
-            Some(Some((done, total))),
-        );
-        let pn = project_name.to_string();
-        let rp = rel_path.clone();
-        match get_project_output_bytes(pn, rp).await {
-            Ok(mut stream) => {
-                let mut bytes = Vec::new();
-                let mut stream_error = false;
-                while let Some(chunk) = stream.next().await {
-                    match chunk {
-                        Ok(data) => bytes.extend_from_slice(&data),
-                        Err(e) => {
-                            errors.push(format!("Failed to read {}: {e}", rel_path));
-                            stream_error = true;
-                            break;
-                        }
-                    }
-                }
-                if !stream_error {
-                    let zpath = zip_entry_path(rel_path, folder_path);
-                    file_data.push((zpath, bytes));
-                }
+                );
+                let _ = eval(&js).await;
             }
-            Err(e) => {
-                errors.push(format!("Failed to download {}: {e}", rel_path));
-            }
+            add_toast(
+                &mut toast_ctx,
+                format!("Downloaded {fn_}"),
+                ToastType::Info,
+                None,
+            );
         }
-    }
-
-    // If nothing could be downloaded, show error(s) and bail.
-    if file_data.is_empty() {
-        remove_toast(&mut toast_ctx, &progress_id);
-        let msg = if errors.len() == 1 {
-            errors.into_iter().next().unwrap()
-        } else {
-            format!(
-                "Download failed: {} errors — no files could be retrieved",
-                errors.len()
-            )
-        };
-        add_toast(&mut toast_ctx, msg, ToastType::Error, None);
-        return;
-    }
-
-    // Create ZIP archive in memory using the Rust `zip` crate.
-    let mut zip_buf = std::io::Cursor::new(Vec::new());
-    {
-        let mut zip_writer = zip::ZipWriter::new(&mut zip_buf);
-        for (zpath, bytes) in &file_data {
-            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
-            if let Err(e) = zip_writer.start_file(zpath, options) {
-                error!("Failed to start ZIP entry {}: {e}", zpath);
-            }
-            if let Err(e) = zip_writer.write_all(bytes) {
-                error!("Failed to write ZIP entry {}: {e}", zpath);
-            }
-            // Yield to the event loop so the UI stays responsive during
-            // ZIP compression (which may block for large files).
-            yield_to_event_loop().await;
+        Err(e) => {
+            error!(error = %e, "Failed to create ZIP archive");
+            remove_toast(&mut toast_ctx, &progress_id);
+            add_toast(
+                &mut toast_ctx,
+                format!("Failed to create ZIP: {e}"),
+                ToastType::Error,
+                None,
+            );
         }
-        if let Err(e) = zip_writer.finish() {
-            error!("Failed to finish ZIP: {e}");
-        }
-    }
-    let zip_bytes = zip_buf.into_inner();
-
-    // Trigger browser download using the optimal path for the current target.
-    trigger_zip_download(zip_bytes, zip_name).await;
-
-    remove_toast(&mut toast_ctx, &progress_id);
-
-    // Report success (and any partial failures).
-    let ok_count = file_data.len();
-    add_toast(
-        &mut toast_ctx,
-        if ok_count == 1 {
-            format!("Downloaded {} file as {}", ok_count, zip_name)
-        } else {
-            format!("Downloaded {} files as {}", ok_count, zip_name)
-        },
-        ToastType::Info,
-        None,
-    );
-    if !errors.is_empty() {
-        add_toast(
-            &mut toast_ctx,
-            format!("Some files failed: {}", errors.join("; ")),
-            ToastType::Error,
-            None,
-        );
     }
 }
 
-/// Present a file-picker for a ZIP archive, extract every entry and upload
-/// each file to the server inside `folder_path`.
+/// Present a file-picker for a ZIP archive and send its raw bytes to the
+/// server for restoration under `folder_path`.
 ///
-/// Progress is reported via the toast context.
-/// When cancelled by the user, `restoring` is reset and an info toast is shown.
-async fn restore_from_zip(
+/// Progress and errors are reported via the toast context.
+async fn restore_files(
     project_name: &str,
     folder_path: &str,
-    mut restoring: Signal<bool>,
     mut refresh_counter: Signal<u32>,
     mut toast_ctx: crate::mycomponents::ToastCtx,
 ) {
-    // The eval JS opens a file picker, reads the selected file as bytes
-    // (via native FileReader, no JSZip needed), and sends the raw ZIP bytes
-    // as a base64 string back to Rust for extraction.
+    // Show a persistent toast indicating the file picker is open
+    let progress_id = add_toast(
+        &mut toast_ctx,
+        "Select a ZIP file to restore…".to_string(),
+        ToastType::Info,
+        Some((0, 0)),
+    );
+
+    // The eval JS opens a file picker, reads the selected file as bytes,
+    // and sends the raw ZIP bytes as a base64 string back to Rust.
     let js = r#"
 (async function() {
     const input = document.createElement('input');
@@ -549,24 +621,24 @@ async fn restore_from_zip(
     let b64_data = match eval_handle.recv::<String>().await {
         Ok(s) if s.is_empty() => {
             // User cancelled the file picker.
+            remove_toast(&mut toast_ctx, &progress_id);
             add_toast(
                 &mut toast_ctx,
                 "Restore cancelled".to_string(),
                 ToastType::Info,
                 None,
             );
-            restoring.set(false);
             return;
         }
         Ok(s) => s,
         Err(_) => {
+            remove_toast(&mut toast_ctx, &progress_id);
             add_toast(
                 &mut toast_ctx,
                 "Restore cancelled".to_string(),
                 ToastType::Info,
                 None,
             );
-            restoring.set(false);
             return;
         }
     };
@@ -578,108 +650,58 @@ async fn restore_from_zip(
     let zip_bytes = match base64::engine::general_purpose::STANDARD.decode(&b64_data) {
         Ok(b) => b,
         Err(e) => {
+            remove_toast(&mut toast_ctx, &progress_id);
             add_toast(
                 &mut toast_ctx,
                 format!("Invalid ZIP data: {e}"),
                 ToastType::Error,
                 None,
             );
-            restoring.set(false);
             return;
         }
     };
 
-    // Parse the ZIP archive using the Rust `zip` crate.
-    let cursor = std::io::Cursor::new(zip_bytes);
-    let mut archive = match zip::ZipArchive::new(cursor) {
-        Ok(a) => a,
-        Err(e) => {
-            add_toast(
-                &mut toast_ctx,
-                format!("Invalid ZIP file: {e}"),
-                ToastType::Error,
-                None,
-            );
-            restoring.set(false);
-            return;
-        }
-    };
-
-    let total = archive.len();
-    let progress_id = add_toast(
+    // Update progress toast to indicate restoration is in progress
+    update_toast(
         &mut toast_ctx,
-        format!("Restoring {} files into '{}'…", total, folder_path),
-        ToastType::Info,
-        Some((0, total)),
+        &progress_id,
+        Some("Restoring files…".to_string()),
+        Some(Some((0, 1))),
     );
 
-    let mut done = 0usize;
-    for i in 0..total {
-        let mut entry = match archive.by_index(i) {
-            Ok(e) => e,
-            Err(_) => break,
-        };
+    // Send the raw ZIP bytes to the server for restoration.
+    let byte_stream = crate::fullstack_compat::ByteStream::new(futures::stream::once(async move {
+        crate::fullstack_compat::body::Bytes::from(zip_bytes)
+    }));
 
-        if entry.is_dir() {
-            continue;
-        }
-
-        let path = entry.name().to_string();
-
-        let mut bytes = Vec::new();
-        if entry.read_to_end(&mut bytes).is_err() {
+    match restore_project_outputs(
+        project_name.to_string(),
+        folder_path.to_string(),
+        byte_stream,
+    )
+    .await
+    {
+        Ok(()) => {
+            remove_toast(&mut toast_ctx, &progress_id);
             add_toast(
                 &mut toast_ctx,
-                format!("Failed to read {} from ZIP", path),
+                "Files restored successfully".to_string(),
+                ToastType::Info,
+                None,
+            );
+            refresh_counter += 1;
+        }
+        Err(e) => {
+            error!(error = %e, "Restore failed");
+            remove_toast(&mut toast_ctx, &progress_id);
+            add_toast(
+                &mut toast_ctx,
+                format!("Failed to restore: {e}"),
                 ToastType::Error,
                 None,
             );
-            break;
-        }
-
-        // Prepend folder prefix.
-        let target_path = if folder_path.is_empty() {
-            path.clone()
-        } else {
-            format!("{}/{}", folder_path, path)
-        };
-
-        // Upload.
-        let byte_stream =
-            crate::fullstack_compat::ByteStream::new(futures::stream::once(async move {
-                crate::fullstack_compat::body::Bytes::from(bytes)
-            }));
-        match write_project_output(project_name.to_string(), target_path, byte_stream).await {
-            Ok(()) => {
-                done += 1;
-                update_toast(
-                    &mut toast_ctx,
-                    &progress_id,
-                    Some(format!("Restoring {}", path)),
-                    Some(Some((done, total))),
-                );
-            }
-            Err(e) => {
-                add_toast(
-                    &mut toast_ctx,
-                    format!("Failed to write {}: {e}", path),
-                    ToastType::Error,
-                    None,
-                );
-                break;
-            }
         }
     }
-
-    restoring.set(false);
-    remove_toast(&mut toast_ctx, &progress_id);
-    add_toast(
-        &mut toast_ctx,
-        format!("Restored {} files", done),
-        ToastType::Info,
-        None,
-    );
-    refresh_counter += 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -700,6 +722,7 @@ pub fn OutputsTab(project_name: String) -> Element {
     let restoring = use_signal(|| false);
     let downloading_folder = use_signal(|| Option::<String>::None);
     let restore_folder = use_signal(|| Option::<String>::None);
+    let mut download_modal = use_signal(|| Option::<(String, String, bool)>::None);
 
     let project_name_res = project_name.clone();
     let files = use_resource(move || {
@@ -740,21 +763,10 @@ pub fn OutputsTab(project_name: String) -> Element {
                             dl.set(Some(String::new()));
                             let pn2 = pn.clone();
                             let mut dl2 = dl.clone();
-                            let mut tc2 = tc.clone();
+                            let tc2 = tc.clone();
                             spawn(async move {
-                                let fl = match crate::server::list_project_outputs(pn2.clone()).await {
-                                    Ok(f) => f,
-                                    Err(e) => {
-                                        add_toast(&mut tc2, format!("Failed to list outputs: {e}"), ToastType::Error, None);
-                                        dl2.set(None);
-                                        return;
-                                    }
-                                };
-                                let entries = build_dir_files_map(&fl);
-                                let root_entries = entries.get("").cloned().unwrap_or_default();
-                                download_folder_zip(
-                                    &pn2, "", &format!("{}-backup.zip", pn2),
-                                    root_entries, tc2.clone(),
+                                trigger_download_zip(
+                                    &pn2, "", &format!("{}-backup.zip", pn2), tc2,
                                 ).await;
                                 dl2.set(None);
                             });
@@ -777,11 +789,12 @@ pub fn OutputsTab(project_name: String) -> Element {
                         move |_| {
                             rst.set(true);
                             let pn2 = pn.clone();
-                            let rst2 = rst.clone();
+                            let mut rst2 = rst.clone();
                             let rc2 = rc.clone();
                             let tc2 = tc.clone();
                             spawn(async move {
-                                restore_from_zip(&pn2, "", rst2, rc2, tc2).await;
+                                restore_files(&pn2, "", rc2, tc2).await;
+                                rst2.set(false);
                             });
                         }
                     },
@@ -883,6 +896,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                                             let is_confirming = confirming_delete() == Some(rel_path.clone());
                                             let is_deleting   = deleting_path()    == Some(rel_path.clone());
                                             let is_viewable   = entry.file.as_ref().map(|f| f.is_viewable).unwrap_or(false);
+                                            let has_glb       = entry.file.as_ref().map(|f| f.glb_available).unwrap_or(false);
 
                                             // For download/view use the *real* file path (handles virtual entries)
                                             let actual_path = entry.file.as_ref()
@@ -983,7 +997,6 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                 let fn_ = entry_name.clone();
                                                                 let mut dl = downloading_folder;
                                                                 let tc = toast_ctx;
-                                                                let fl_clone = fl.clone();
                                                                 move |_| {
                                                                     dl.set(Some(fp.clone()));
                                                                     let pn2 = pn.clone();
@@ -991,13 +1004,10 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                     let fn2 = fn_.clone();
                                                                     let mut dl2 = dl.clone();
                                                                     let tc2 = tc.clone();
-                                                                    let fl2 = fl_clone.clone();
                                                                     spawn(async move {
-                                                                        let entries = build_dir_files_map(&fl2);
-                                                                        let file_entries = entries.get(&fp2).cloned().unwrap_or_default();
                                                                         let zip_name = format!("{}-{}.zip", pn2, fn2);
-                                                                        download_folder_zip(
-                                                                            &pn2, &fp2, &zip_name, file_entries, tc2.clone(),
+                                                                        trigger_download_zip(
+                                                                            &pn2, &fp2, &zip_name, tc2,
                                                                         ).await;
                                                                         dl2.set(None);
                                                                     });
@@ -1025,12 +1035,13 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                         rst.set(true);
                                                                         let pn2 = pn.clone();
                                                                         let fp2 = fp.clone();
-                                                                        let rst2 = rst.clone();
-                                                                        let rc2 = rc.clone();
+                                                                        let mut rst2 = rst.clone();
                                                                         let mut rst_f2 = rst_f.clone();
+                                                                        let rc2 = rc.clone();
                                                                         let tc2 = tc.clone();
                                                                         spawn(async move {
-                                                                            restore_from_zip(&pn2, &fp2, rst2, rc2, tc2).await;
+                                                                            restore_files(&pn2, &fp2, rc2, tc2).await;
+                                                                            rst2.set(false);
                                                                             rst_f2.set(None);
                                                                         });
                                                                     }
@@ -1041,9 +1052,9 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                         }
                                                     }
 
-                                                    // Download (files only) — fetches bytes through the
-                                                    // Dioxus server-function protocol, then triggers the
-                                                    // browser save-as dialog via a native Blob URL.
+                                                    // Download (files only) — viewable files with GLB show a
+                                                    // modal offering Raw / GLB choices; everything else downloads
+                                                    // raw bytes directly.
                                                     if !is_dir {
                                                         button {
                                                             class: "outputs-btn outputs-download-link",
@@ -1052,42 +1063,62 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                 let pn = pn_dl.clone();
                                                                 let rp = rp_dl.clone();
                                                                 let fname = fname_dl.clone();
-                                                                let mut tc = tc_dl;
-                                                                spawn(async move {
-                                                                     // Download bytes, then trigger browser Save As via Blob URL.
-                                                                     match get_project_output_bytes(pn, rp).await {
-                                                                         Ok(stream) => {
-                                                                             let mut bytes = Vec::new();
-                                                                             let mut s = stream;
-                                                                             while let Some(chunk) = s.next().await {
-                                                                                 match chunk {
-                                                                                     Ok(data) => bytes.extend_from_slice(&data),
-                                                                                     Err(e) => {
-                                                                                         error!(error = %e, "Download stream error");
-                                                                                         add_toast(&mut tc, format!("Download failed: {e}"), ToastType::Error, None);
-                                                                                         return;
-                                                                                     }
-                                                                                 }
-                                                                             }
-                                                                             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                                                                             let fname_esc = js_escape(&fname);
-                                                                             let js = format!(
-                                                                                 r#"const b64 = '{b64}';\nconst blob = new Blob([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], {{type: 'application/octet-stream'}});\nconst a = document.createElement('a');\na.href = URL.createObjectURL(blob);\na.download = '{fname_esc}';\ndocument.body.appendChild(a);\na.click();\nsetTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(a.href); }}, 10000);"#
-                                                                             );
-                                                                             let _ = eval(&js).await;
-                                                                             add_toast(&mut tc, format!("Downloaded {fname}"), ToastType::Info, None);
-                                                                         }
-                                                                         Err(e) => {
-                                                                             error!(error = %e, "Download failed");
-                                                                             add_toast(&mut tc, format!("Download failed: {e}"), ToastType::Error, None);
-                                                                         }
-                                                                     }
-                                                                 });
-                                                            },
-                                                            Icon { icon: BsDownload }
-                                                            span { class: "btn-label", " Backup" }
+                                                                let tc = tc_dl;
+                                                                if is_viewable && has_glb {
+                                                                    download_modal.set(Some((rp, fname, true)));
+                                                                } else {
+                                                                    spawn(async move {
+                                                                        #[cfg(not(feature = "demo"))]
+                                                                        {
+                                                                            trigger_download_from_url(
+                                                                                &pn, &rp, &fname, "application/octet-stream",
+                                                                                "/api/projects/{name}/outputs/bytes", tc,
+                                                                            ).await;
+                                                                        }
+                                                                        #[cfg(feature = "demo")]
+                                                                        {
+                                                                            let mut tc = tc;
+                                                                            match get_project_output_bytes(pn, rp).await {
+                                                                                Ok(mut stream) => {
+                                                                                    let mut bytes = Vec::new();
+                                                                                    while let Some(chunk) = stream.next().await {
+                                                                                        match chunk {
+                                                                                            Ok(data) => bytes.extend_from_slice(&data),
+                                                                                            Err(e) => {
+                                                                                                error!(error = %e, "Download stream error");
+                                                                                                add_toast(&mut tc, format!("Download failed: {e}"), ToastType::Error, None);
+                                                                                                return;
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                                                                    let fname_esc = js_escape(&fname);
+                                                                                    let js = format!(
+                                                                                        r#"const b64 = '{b64}';
+	const blob = new Blob([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], {{type: 'application/octet-stream'}});
+	const a = document.createElement('a');
+	a.href = URL.createObjectURL(blob);
+	a.download = '{fname_esc}';
+	document.body.appendChild(a);
+	a.click();
+	setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(a.href); }}, 10000);"#
+                                                                                        );
+                                                                                        let _ = eval(&js).await;
+                                                                                        add_toast(&mut tc, format!("Downloaded {fname}"), ToastType::Info, None);
+                                                                                    }
+                                                                                    Err(e) => {
+                                                                                        error!(error = %e, "Download failed");
+                                                                                        add_toast(&mut tc, format!("Download failed: {e}"), ToastType::Error, None);
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        });
+                                                                    }
+                                                                },
+                                                                Icon { icon: BsDownload }
+                                                                span { class: "btn-label", " Backup" }
+                                                            }
                                                         }
-                                                    }
 
                                                     // 3D View (viewable files only) — navigate to the viewer route
                                                     if is_viewable {
@@ -1172,6 +1203,189 @@ pub fn OutputsTab(project_name: String) -> Element {
                             }
                         }
                     }
+                }
+            }
+
+            // ── Download modal overlay ─────────────────────────────────────
+            {
+                let modal = download_modal();
+                if let Some((modal_path, modal_name, modal_has_glb)) = modal {
+                    let modal_path_clone = modal_path.clone();
+                    let modal_name_clone = modal_name.clone();
+                    let pn = project_name.clone();
+
+                    rsx! {
+                        div {
+                            class: "modal-overlay",
+                            onclick: move |_| download_modal.set(None),
+                            div {
+                                class: "modal-content",
+                                onclick: move |e| e.stop_propagation(),
+                                h3 { "Download options" }
+                                p { class: "download-hint", "Choose a format for {modal_name_clone}" }
+                                div {
+                                    class: "download-options-vertical",
+                                    div {
+                                        class: "download-option",
+                                        button {
+                                            class: "download-option-btn",
+                                            onclick: {
+                                                let pn = pn.clone();
+                                                let rp = modal_path_clone.clone();
+                                                let fname = modal_name_clone.clone();
+                                                let mut dm = download_modal;
+                                                let tc = toast_ctx;
+                                                move |_| {
+                                                    dm.set(None);
+                                                    let pn2 = pn.clone();
+                                                    let rp2 = rp.clone();
+                                                    let fname2 = fname.clone();
+                                                    let tc2 = tc.clone();
+                                                    spawn(async move {
+                                                        #[cfg(not(feature = "demo"))]
+                                                        {
+                                                            trigger_download_from_url(
+                                                                &pn2, &rp2, &fname2, "application/octet-stream",
+                                                                "/api/projects/{name}/outputs/bytes", tc2,
+                                                            ).await;
+                                                        }
+                                                        #[cfg(feature = "demo")]
+                                                        {
+                                                            let mut tc2 = tc2;
+                                                            match get_project_output_bytes(pn2, rp2).await {
+                                                                Ok(mut stream) => {
+                                                                    let mut bytes = Vec::new();
+                                                                    while let Some(chunk) = stream.next().await {
+                                                                        match chunk {
+                                                                            Ok(data) => bytes.extend_from_slice(&data),
+                                                                            Err(e) => {
+                                                                                error!(error = %e, "Raw download stream error");
+                                                                                return;
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                                                    let fname_esc = js_escape(&fname2);
+                                                                    let js = format!(
+                                                                        r#"const b64 = '{b64}';
+const blob = new Blob([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], {{type: 'application/octet-stream'}});
+const a = document.createElement('a');
+a.href = URL.createObjectURL(blob);
+a.download = '{fname_esc}';
+document.body.appendChild(a);
+a.click();
+setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(a.href); }}, 10000);"#
+                                                                    );
+                                                                    let _ = eval(&js).await;
+                                                                    add_toast(
+                                                                        &mut tc2,
+                                                                        format!("Downloaded {fname2}"),
+                                                                        ToastType::Info,
+                                                                        None,
+                                                                    );
+                                                                }
+                                                                Err(e) => {
+                                                                    error!(error = %e, "Raw download failed");
+                                                                }
+                                                            }
+                                                        }
+                                                    });
+                                                }
+                                            },
+                                            div { class: "download-option-title", "Download Raw" }
+                                            div { class: "download-option-desc", "Original file; may need other supporting files to open." }
+                                        }
+                                    }
+                                    if modal_has_glb {
+                                        div {
+                                            class: "download-option",
+                                            button {
+                                                class: "download-option-btn",
+                                                onclick: {
+                                                    let pn = pn.clone();
+                                                    let rp = modal_path_clone.clone();
+                                                    let fname = modal_name_clone.clone();
+                                                    let mut dm = download_modal;
+                                                    let tc = toast_ctx;
+                                                    move |_| {
+                                                        dm.set(None);
+                                                        let pn2 = pn.clone();
+                                                        let rp2 = rp.clone();
+                                                        let fname2 = fname.clone();
+                                                        let tc2 = tc.clone();
+                                                        // Derive a .glb filename from the original name
+                                                        let glb_name = if let Some((base, _)) = fname2.rsplit_once('.') {
+                                                            format!("{base}.glb")
+                                                        } else {
+                                                            format!("{fname2}.glb")
+                                                        };
+                                                        spawn(async move {
+                                                            #[cfg(not(feature = "demo"))]
+                                                            {
+                                                                trigger_download_from_url(
+                                                                    &pn2, &rp2, &glb_name, "model/gltf-binary",
+                                                                    "/api/projects/{name}/outputs/glb", tc2,
+                                                                ).await;
+                                                            }
+                                                            #[cfg(feature = "demo")]
+                                                            {
+                                                                let mut tc2 = tc2;
+                                                                match get_project_output_glb(pn2, rp2).await {
+                                                                    Ok(mut stream) => {
+                                                                        let mut bytes = Vec::new();
+                                                                        while let Some(chunk) = stream.next().await {
+                                                                            match chunk {
+                                                                                Ok(data) => bytes.extend_from_slice(&data),
+                                                                                Err(e) => {
+                                                                                    error!(error = %e, "GLB download stream error");
+                                                                                    return;
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                                                        let fname_esc = js_escape(&glb_name);
+                                                                        let js = format!(
+                                                                            r#"const b64 = '{b64}';
+const blob = new Blob([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], {{type: 'model/gltf-binary'}});
+const a = document.createElement('a');
+a.href = URL.createObjectURL(blob);
+a.download = '{fname_esc}';
+document.body.appendChild(a);
+a.click();
+setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(a.href); }}, 10000);"#
+                                                                        );
+                                                                        let _ = eval(&js).await;
+                                                                        add_toast(
+                                                                            &mut tc2,
+                                                                            format!("Downloaded {glb_name}"),
+                                                                            ToastType::Info,
+                                                                            None,
+                                                                        );
+                                                                    }
+                                                                    Err(e) => {
+                                                                        error!(error = %e, "GLB download failed");
+                                                                    }
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                },
+                                                div { class: "download-option-title", "Download GLB" }
+                                                div { class: "download-option-desc", "Modern, more compatible format; packs all supporting files into a single file." }
+                                            }
+                                        }
+                                    }
+                                    button {
+                                        class: "modal-cancel-btn",
+                                        onclick: move |_| download_modal.set(None),
+                                        "Cancel"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    rsx! {}
                 }
             }
         }

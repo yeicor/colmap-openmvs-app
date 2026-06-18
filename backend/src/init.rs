@@ -15,7 +15,9 @@ use colmap_openmvs_api::TaskKind;
 /// progress.  Each step emits [`TaskEvent::Log`] before and after.
 pub async fn startup() -> dioxus::Result<String> {
     tracing::info!(
-        url = %dioxus::cli_config::fullstack_address_or_localhost().to_string(),
+        fullstack_address_or_localhost =
+            dioxus::cli_config::fullstack_address_or_localhost().to_string(),
+        server_url = dioxus::fullstack::get_server_url(),
         "Server listening for connections"
     );
 

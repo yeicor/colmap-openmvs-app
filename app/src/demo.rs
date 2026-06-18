@@ -208,6 +208,36 @@ pub async fn get_project_output_bytes(
     }
 }
 
+pub async fn get_project_output_glb(
+    _project_name: String,
+    relative_path: String,
+) -> Result<ByteStream> {
+    // Demo mode serves pre-generated GLB files alongside the originals.
+    // Map .ply -> .glb, points3D.bin -> points3D.glb
+    let glb_path = if relative_path.to_lowercase().ends_with(".ply") {
+        let without_ext = relative_path.strip_suffix(".ply").unwrap_or(&relative_path);
+        format!("{}.glb", without_ext)
+    } else if relative_path.to_lowercase().ends_with("points3d.bin") {
+        // Strip the ".bin" suffix (4 chars) and append ".glb"
+        let without_ext = &relative_path[..relative_path.len() - 4];
+        format!("{}.glb", without_ext)
+    } else {
+        return Err(dioxus::CapturedError::msg(format!(
+            "No GLB available for {}",
+            relative_path
+        )));
+    };
+    match demo_output_bytes(&glb_path) {
+        Some(bytes) => Ok(ByteStream::new(futures::stream::once(async move {
+            body::Bytes::from(bytes.to_vec())
+        }))),
+        None => Err(dioxus::CapturedError::msg(format!(
+            "GLB not found in demo data for {}",
+            relative_path
+        ))),
+    }
+}
+
 pub async fn get_dark_mode() -> Result<Option<bool>> {
     Ok(get_manifest()?.dark_mode)
 }
@@ -290,6 +320,21 @@ pub async fn clear_project_outputs(_project_name: String) -> Result<()> {
 pub async fn write_project_output(
     _project_name: String,
     _relative_path: String,
+    _body: ByteStream,
+) -> Result<()> {
+    read_only_error()
+}
+
+pub async fn download_project_outputs_zip(
+    _project_name: String,
+    _folder_path: String,
+) -> Result<ByteStream> {
+    read_only_error()
+}
+
+pub async fn restore_project_outputs(
+    _project_name: String,
+    _folder_path: String,
     _body: ByteStream,
 ) -> Result<()> {
     read_only_error()

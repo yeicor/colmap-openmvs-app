@@ -9,6 +9,7 @@ icon = ["assets/icon.png", "assets/icon.icns", "assets/icon.ico"]
 
 [permissions]
 internet = { description = "Required for internal dioxus functionality." }
+photos = { access = "write", description = "Required to save the generated 3D models / backups to the device's storage." }
 # Camera and photos permissions are not required, as the user can use browser-based file selection to provide photos for 3D reconstruction.
 # However, if we want to enable direct camera access or photo library access in the future, we have to request these permissions (which require more work for publishing on app stores).
 #camera = { description = "Required to capture photos for 3D reconstruction." }
