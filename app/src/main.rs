@@ -14,16 +14,7 @@ pub mod mycomponents;
 pub mod picker;
 pub mod server;
 pub mod task_manager;
-pub mod viewer_conversion;
 pub mod views;
-
-/// Transient viewer state set by the outputs tab before navigating,
-/// then consumed by the viewer page once to recover the file path
-/// without needing a JS↔Rust eval round-trip.
-#[derive(Clone)]
-pub struct ViewerPendingParams {
-    pub file: String,
-}
 
 #[cfg(feature = "demo")]
 pub mod demo;
@@ -73,7 +64,21 @@ pub enum Route {
 pub fn App() -> Element {
     use crate::mycomponents::ToastContainer;
     use crate::task_manager::{StartupCtx, TasksCtx, TasksState};
-    use_effect(move || info!("App component: initializing..."));
+    use_effect(move || {
+        #[cfg(feature = "fullstack")]
+        info!(
+            fullstack_address_or_localhost =
+                dioxus::cli_config::fullstack_address_or_localhost().to_string(),
+            server_url = dioxus::fullstack::get_server_url(),
+            "App component: initializing..."
+        );
+        #[cfg(not(feature = "fullstack"))]
+        info!(
+            fullstack_address_or_localhost =
+                dioxus::cli_config::fullstack_address_or_localhost().to_string(),
+            "App component: initializing..."
+        );
+    });
     use_context_provider(|| Signal::new(TasksState::default()) as TasksCtx);
 
     // Global toast notification system (single container for all floating toasts).
@@ -83,12 +88,24 @@ pub fn App() -> Element {
     // finish within the 1-second grace window without ever showing the startup
     // page.  Components inside the router tree (ProjectsSidebar, StartupTasks)
     // consume this context to decide whether / where to redirect.
+    // ── Eruda debug console (non-release builds only) ─────────────────
+    // Copy is handled by build.rs → assets/lib/eruda/eruda.js
+    // We use `asset!()` to get the correct hashed/served URL from Dioxus.
+    #[cfg(debug_assertions)]
+    use_effect(move || {
+        let eruda_url = asset!(
+            "/assets/lib/eruda/eruda.js",
+            AssetOptions::js().with_minify(false)
+        )
+        .to_string();
+        let _ = dioxus::document::eval(&format!(
+            "(function() {{\n                if (window.eruda) return;\n                var s = document.createElement('script');\n                s.src = '{eruda_url}';\n                s.onload = function() {{ eruda.init(); }};\n                document.head.appendChild(s);\n            }})();"
+        ));
+    });
+
     use_effect(move || info!("App component: creating startup context..."));
     let startup = StartupCtx::new();
     use_context_provider(|| startup);
-
-    // Transient channel: outputs tab → viewer page (avoids eval bridge).
-    use_context_provider(|| Signal::new(Option::<ViewerPendingParams>::None));
 
     {
         // Start the startup task in background as early as possible.

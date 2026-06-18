@@ -203,6 +203,61 @@ async fn test_generate_demo_data() {
         .await
         .unwrap();
 
+    // 7. Generate GLB files for viewable outputs.
+    //    Store them alongside the raw files so the demo backend can serve
+    //    them via demo_output_bytes(), but do NOT add them to the manifest —
+    //    the demo emulates the real back-end which lists only raw files with
+    //    glb_available=true.
+    println!("Generating GLB files...");
+    let project_path = Path::new(&project.path);
+    let mut glb_paths: Vec<String> = Vec::new();
+    for output in &outputs {
+        if output.is_viewable {
+            let glb_path = raw_to_glb_path(&output.relative_path);
+            match backend::generate_glb(&output.relative_path, project_path) {
+                Ok(glb_bytes) => {
+                    // Write .glb alongside the original in the project work directory
+                    // (so the real back-end would also see it on a re-list, but
+                    // we use the original output list for the manifest).
+                    if let Some(parent) = Path::new(&glb_path).parent() {
+                        let _ = fs::create_dir_all(project_path.join(parent));
+                    }
+                    if let Err(e) = fs::write(project_path.join(&glb_path), &glb_bytes) {
+                        println!("WARNING: Failed to write GLB to project: {e}");
+                    }
+                    // Write the GLB directly to the demo outputs directory
+                    let glb_rel = Path::new(&glb_path);
+                    if let Some(parent) = glb_rel.parent() {
+                        let _ = fs::create_dir_all(outputs_dir.join(parent));
+                    }
+                    if let Err(e) = fs::write(outputs_dir.join(&glb_path), &glb_bytes) {
+                        println!("WARNING: Failed to write GLB to demo outputs: {e}");
+                    }
+                    glb_paths.push(glb_path);
+                }
+                Err(e) => {
+                    println!(
+                        "WARNING: Failed to generate GLB for {}: {e}",
+                        output.relative_path
+                    );
+                }
+            }
+        }
+    }
+
+    // 8. Set glb_available on viewable outputs and write manifest.
+    //    Only raw files appear — GLB files are NOT listed as separate entries.
+    let outputs_for_manifest: Vec<colmap_openmvs_api::OutputFile> = outputs
+        .iter()
+        .cloned()
+        .map(|mut o| {
+            if o.is_viewable {
+                o.glb_available = true;
+            }
+            o
+        })
+        .collect();
+
     let manifest = json!({
         "projects": [project.clone()],
         "settings": settings,
@@ -211,7 +266,7 @@ async fn test_generate_demo_data() {
             "images": images,
             "config_schema": config_schema,
             "project_config": project_config,
-            "outputs": outputs,
+            "outputs": outputs_for_manifest,
             "run_status": run_status,
         },
         "runtime_info": runtime_info,
@@ -223,7 +278,7 @@ async fn test_generate_demo_data() {
     )
     .unwrap();
 
-    // 7. Copy generated files to assets/demo
+    // 9. Copy generated files to assets/demo
     for img in &images {
         let stream = backend::get_project_image_bytes("demo".to_string(), img.clone())
             .await
@@ -240,13 +295,13 @@ async fn test_generate_demo_data() {
         fs::write(images_dir.join(img), bytes).unwrap();
     }
 
+    // Copy raw viewable/png outputs to demo outputs directory
     for output in &outputs {
         if output.is_viewable || output.relative_path.ends_with(".png") {
             if let Ok(stream) =
                 backend::get_project_output_bytes("demo".to_string(), output.relative_path.clone())
                     .await
             {
-                // Keep the relative directory structure
                 let rel_path = Path::new(&output.relative_path);
                 if let Some(parent) = rel_path.parent() {
                     fs::create_dir_all(outputs_dir.join(parent)).unwrap();
@@ -262,6 +317,24 @@ async fn test_generate_demo_data() {
                 fs::write(outputs_dir.join(rel_path), bytes).unwrap();
             }
         }
+    }
+
+    // The pre-generated GLB files were already written to outputs_dir in step 7.
+}
+
+/// Map a raw output path (e.g. "openmvs/scene_mesh.ply" or
+/// "colmap/dense/sparse/points3D.bin") to its GLB companion path.
+fn raw_to_glb_path(relative_path: &str) -> String {
+    let lower = relative_path.to_lowercase();
+    if lower.ends_with(".ply") {
+        let without_ext = relative_path.strip_suffix(".ply").unwrap_or(relative_path);
+        format!("{}.glb", without_ext)
+    } else if lower.ends_with("points3d.bin") {
+        // Strip the ".bin" suffix (4 chars) and append ".glb"
+        let without_ext = &relative_path[..relative_path.len() - 4];
+        format!("{}.glb", without_ext)
+    } else {
+        format!("{}.glb", relative_path)
     }
 }
 

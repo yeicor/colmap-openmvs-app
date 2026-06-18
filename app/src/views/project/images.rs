@@ -36,6 +36,160 @@ use tracing::{debug, error, info};
 /// Keeps some room in the browser connection pool for other requests.
 const MAX_CONCURRENT_FETCHES: usize = 6;
 
+/// Helper: escape a string for embedding in a JS single-quoted string literal.
+#[cfg(not(target_arch = "wasm32"))]
+fn js_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+/// Fetch image size via HEAD request using JS eval (non-WASM).
+/// Uses the HTTP endpoint with `get_server_url()` for the correct base URL.
+/// Falls back to calling the Rust server function directly if the JS fetch fails
+/// (e.g. on Android where no TCP server is running).
+#[cfg(all(not(feature = "demo"), not(target_arch = "wasm32")))]
+async fn fetch_image_size_eval(project_name: &str, image_name: &str) -> Result<u64, String> {
+    let server_url = {
+        #[cfg(feature = "fullstack")]
+        {
+            dioxus::fullstack::get_server_url()
+        }
+        #[cfg(not(feature = "fullstack"))]
+        {
+            String::new()
+        }
+    };
+    let server_url_esc = js_escape(&server_url);
+    let project_esc = js_escape(project_name);
+    let image_esc = js_escape(image_name);
+
+    let js = format!(
+        r#"(async function() {{
+    const baseUrl = '{server_url_esc}' || (/^https?:/.test(window.location.origin) ? window.location.origin : 'http://localhost:8080');
+    const url = baseUrl + '/api/projects/' + encodeURIComponent('{project_esc}') + '/images/' + encodeURIComponent('{image_esc}') + '/bytes';
+    try {{
+        const resp = await fetch(url, {{method: 'HEAD'}});
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const len = resp.headers.get('Content-Length');
+        const result = (len !== null) ? len : '0';
+        dioxus.send(result);
+    }} catch(e) {{
+        dioxus.send('error:' + e.message);
+    }}
+}})();"#
+    );
+
+    let mut eval_handle = eval(&js);
+    let result = eval_handle
+        .recv::<String>()
+        .await
+        .map_err(|e| format!("eval error: {e}"))?;
+
+    if let Some(err) = result.strip_prefix("error:") {
+        tracing::warn!(
+            "JS HTTP HEAD for image size failed ({}), falling back to Rust server function — performance may be reduced",
+            err
+        );
+        fetch_image_size_rust_fallback(project_name, image_name).await
+    } else {
+        result
+            .parse::<u64>()
+            .map_err(|e| format!("Invalid size: {e}"))
+    }
+}
+
+/// Fallback: get image size by fetching bytes via the Rust server function.
+/// Used when the JS HTTP HEAD request fails (e.g. on Android with no TCP server).
+#[cfg(all(not(feature = "demo"), not(target_arch = "wasm32")))]
+async fn fetch_image_size_rust_fallback(
+    project_name: &str,
+    image_name: &str,
+) -> Result<u64, String> {
+    let bytes = fetch_image_bytes_rust_fallback(project_name, image_name).await?;
+    Ok(bytes.len() as u64)
+}
+
+/// Fetch image bytes via HTTP GET using JS eval (non-WASM).
+/// Uses the HTTP endpoint with `get_server_url()` for the correct base URL.
+/// Falls back to calling the Rust server function directly if the JS fetch fails
+/// (e.g. on Android where no TCP server is running).
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetch_image_bytes_eval(project_name: &str, image_name: &str) -> Result<Vec<u8>, String> {
+    let server_url = {
+        #[cfg(feature = "fullstack")]
+        {
+            dioxus::fullstack::get_server_url()
+        }
+        #[cfg(not(feature = "fullstack"))]
+        {
+            String::new()
+        }
+    };
+    let server_url_esc = js_escape(&server_url);
+    let project_esc = js_escape(project_name);
+    let image_esc = js_escape(image_name);
+
+    let js = format!(
+        r#"(async function() {{
+    const baseUrl = '{server_url_esc}' || (/^https?:/.test(window.location.origin) ? window.location.origin : 'http://localhost:8080');
+    const url = baseUrl + '/api/projects/' + encodeURIComponent('{project_esc}') + '/images/' + encodeURIComponent('{image_esc}') + '/bytes';
+    try {{
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const blob = await resp.blob();
+        const reader = new FileReader();
+        reader.onload = function() {{
+            const b64 = reader.result.split(',')[1];
+            dioxus.send(b64);
+            dioxus.send('__done__');
+        }};
+        reader.readAsDataURL(blob);
+    }} catch(e) {{
+        dioxus.send('__error__:' + e.message);
+    }}
+}})();"#
+    );
+
+    let mut eval_handle = eval(&js);
+    let b64_data = eval_handle
+        .recv::<String>()
+        .await
+        .map_err(|e| format!("eval error: {e}"))?;
+
+    if let Some(err) = b64_data.strip_prefix("__error__:") {
+        tracing::warn!(
+            "JS HTTP fetch for image bytes failed ({}), falling back to Rust server function — performance may be reduced",
+            err
+        );
+        return fetch_image_bytes_rust_fallback(project_name, image_name).await;
+    }
+
+    // Wait for the __done__ sentinel
+    let _ = eval_handle.recv::<String>().await;
+
+    base64::engine::general_purpose::STANDARD
+        .decode(&b64_data)
+        .map_err(|e| format!("Base64 decode error: {e}"))
+}
+
+/// Fallback: collect image bytes via the Rust server function directly.
+/// Used when the JS HTTP fetch fails (e.g. on Android with no TCP server).
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetch_image_bytes_rust_fallback(
+    project_name: &str,
+    image_name: &str,
+) -> Result<Vec<u8>, String> {
+    let stream = crate::server::get_project_image_bytes_stream(
+        project_name.to_string(),
+        image_name.to_string(),
+    )
+    .await
+    .map_err(|e| format!("Rust server function failed: {e}"))?;
+    crate::fullstack_compat::collect_bytes_from_stream(stream).await
+}
+
 /// Platform‑specific fetch for a single image's bytes.
 ///
 /// In demo mode, embedded byte data is returned directly — no HTTP request
@@ -100,29 +254,15 @@ async fn fetch_image_bytes_impl(
     Ok(bytes)
 }
 
-/// Non‑WASM fallback – uses the Dioxus server function.
+/// Non‑WASM fallback – fetches image bytes via HTTP from JS eval.
+/// Uses `get_server_url()` so it works correctly in desktop mode.
 #[cfg(not(target_arch = "wasm32"))]
 async fn fetch_image_bytes_impl(project_name: &str, image_name: &str) -> Result<Vec<u8>, String> {
-    match crate::server::get_project_image_bytes_stream(
-        project_name.to_string(),
-        image_name.to_string(),
-    )
-    .await
-    {
-        Ok(mut stream) => {
-            let mut bytes = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                match chunk {
-                    Ok(data) => bytes.extend_from_slice(&data),
-                    Err(e) => {
-                        return Err(format!("Failed to read image stream: {e:?}"));
-                    }
-                }
-            }
-            Ok(bytes)
-        }
-        Err(e) => Err(format!("Failed to fetch image bytes: {e}")),
+    #[cfg(feature = "demo")]
+    if let Some(bytes) = crate::demo::demo_image_bytes(image_name) {
+        return Ok(bytes.to_vec());
     }
+    fetch_image_bytes_eval(project_name, image_name).await
 }
 
 /// Fetch the `Content-Length` of an image via a HEAD request (WASM only).
@@ -422,7 +562,7 @@ async fn fetch_all_bytes(
 /// is not a concern.
 async fn fetch_all_sizes(
     needs_fetch: Vec<String>,
-    project: String,
+    _project: String,
     version: u64,
     cancelled: Signal<bool>,
     list_version: Signal<u64>,
@@ -437,29 +577,30 @@ async fn fetch_all_sizes(
             #[cfg(target_arch = "wasm32")]
             {
                 // HEAD request — downloads headers only, zero body bytes.
-                fetch_image_size_wasm(&project, name).await.ok()
+                fetch_image_size_wasm(&_project, name).await.ok()
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
-                // Non‑WASM: the function returns the full body, but since
-                // the server is localhost we accept the small overhead.
-                match crate::server::get_project_image_bytes_stream(project.clone(), name.clone())
-                    .await
-                {
-                    Ok(mut stream) => {
-                        let mut total: u64 = 0;
-                        while let Some(chunk) = stream.next().await {
-                            if cancelled() {
-                                break;
-                            }
-                            if let Ok(data) = chunk {
-                                total += data.len() as u64;
+                let size = {
+                    #[cfg(feature = "demo")]
+                    {
+                        // Demo mode (non-WASM): use embedded bytes directly — no HTTP server.
+                        crate::demo::demo_image_bytes(name).map(|b| b.len() as u64)
+                    }
+                    #[cfg(not(feature = "demo"))]
+                    {
+                        // HEAD request via JS eval — uses the HTTP endpoint with
+                        // `get_server_url()`, avoiding the download of full bytes.
+                        match fetch_image_size_eval(&_project, name).await {
+                            Ok(size) => Some(size),
+                            Err(e) => {
+                                tracing::debug!(error = %e, "Failed to fetch image size via HEAD");
+                                None
                             }
                         }
-                        Some(total)
                     }
-                    Err(_) => None,
-                }
+                };
+                size
             }
         };
 
@@ -486,19 +627,8 @@ async fn fetch_and_cache_single(
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            match crate::server::get_project_image_bytes_stream(project.clone(), name.clone()).await
-            {
-                Ok(mut stream) => {
-                    let mut bytes = Vec::new();
-                    while let Some(chunk) = stream.next().await {
-                        if let Ok(data) = chunk {
-                            bytes.extend_from_slice(&data);
-                        }
-                    }
-                    Ok(bytes)
-                }
-                Err(e) => Err(e.to_string()),
-            }
+            // Fetch via HTTP from JS eval with `get_server_url()`.
+            fetch_image_bytes_eval(&project, &name).await
         }
     };
 
@@ -561,7 +691,8 @@ async fn fetch_image_bytes_wasm_fallback(
 
 #[component]
 pub fn ImagesTab(project_name: String) -> Element {
-    debug!(project_name = %project_name, "Initializing images tab");
+    let project_name_clone = project_name.clone();
+    use_effect(move || debug!(project_name = %project_name_clone, "Initializing images tab"));
     let mut tasks_ctx = use_context::<TasksCtx>();
     let mut image_paths = use_signal(Vec::<String>::new);
     // Incremented on every mutation that may change image content (upload, delete,

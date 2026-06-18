@@ -1,9 +1,10 @@
 use dioxus::prelude::*;
+use dioxus_free_icons::icons::bs_icons::BsX;
+use dioxus_free_icons::Icon;
 use dioxus_primitives::dialog::{
     self, DialogCtx, DialogDescriptionProps, DialogRootProps, DialogTitleProps,
 };
 use dioxus_primitives::dioxus_attributes::attributes;
-use dioxus_primitives::icon;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum SheetSide {
@@ -79,12 +80,11 @@ pub fn SheetContent(
             attributes,
             {children}
             SheetClose { class: "dx-sheet-close",
-                icon::Icon {
+                Icon {
+                    icon: BsX,
                     class: "dx-sheet-close-icon",
-                    width: "20px",
-                    height: "20px",
-                    path { d: "M18 6 6 18" }
-                    path { d: "m6 6 12 12" }
+                    width: 20,
+                    height: 20,
                 }
             }
         }

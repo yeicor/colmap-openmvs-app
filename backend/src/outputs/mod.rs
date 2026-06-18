@@ -1,3 +1,6 @@
+pub mod glb;
+pub use glb::generate_glb;
+
 use anyhow::anyhow;
 use dioxus::fullstack::ByteStream;
 use dioxus::Result as DioxusResult;

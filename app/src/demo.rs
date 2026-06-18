@@ -10,7 +10,11 @@ use crate::fullstack_compat::ByteStream;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
-include!(concat!(env!("OUT_DIR"), "/demo_assets.rs"));
+// The generated file is at app/gen/demo_assets_gen.rs (produced by app/build.rs).
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/gen/demo_assets_gen.rs"
+));
 
 fn get_download_events() -> &'static Vec<TaskEvent> {
     static DOWNLOAD_EVENTS: OnceLock<Vec<TaskEvent>> = OnceLock::new();
@@ -52,12 +56,12 @@ pub struct DemoProject {
     pub run_status: ProjectRunStatus,
 }
 
-fn get_manifest() -> Result<DemoManifest> {
-    tracing::info!(
-        "Parsing DEMO_MANIFEST ({len} chars)...",
-        len = DEMO_MANIFEST.len()
-    );
-    Ok(serde_json::from_str(DEMO_MANIFEST)?)
+fn get_manifest() -> &'static DemoManifest {
+    static MANIFEST: OnceLock<DemoManifest> = OnceLock::new();
+    MANIFEST.get_or_init(|| {
+        tracing::info!("Parsing DEMO_MANIFEST ({} chars)...", DEMO_MANIFEST.len());
+        serde_json::from_str(DEMO_MANIFEST).expect("Failed to parse DEMO_MANIFEST")
+    })
 }
 
 pub fn read_only_error<T>() -> Result<T> {
@@ -67,15 +71,15 @@ pub fn read_only_error<T>() -> Result<T> {
 }
 
 pub async fn get_projects() -> Result<Vec<Project>> {
-    Ok(get_manifest()?.projects)
+    Ok(get_manifest().projects.clone())
 }
 
 pub async fn get_settings() -> Result<Settings> {
-    Ok(get_manifest()?.settings)
+    Ok(get_manifest().settings.clone())
 }
 
 pub async fn get_project_images(_project_name: String) -> Result<Vec<String>> {
-    Ok(get_manifest()?.project.images)
+    Ok(get_manifest().project.images.clone())
 }
 
 pub async fn get_project_image_bytes(
@@ -94,11 +98,11 @@ pub async fn get_project_image_bytes(
 }
 
 pub async fn get_runtime_info() -> Result<RuntimeInfo> {
-    Ok(get_manifest()?.runtime_info.clone())
+    Ok(get_manifest().runtime_info.clone())
 }
 
 pub async fn get_docker_runtime_info() -> Result<RuntimeInfo> {
-    Ok(get_manifest()?.runtime_info)
+    Ok(get_manifest().runtime_info.clone())
 }
 
 pub async fn get_available_runtime_versions() -> Result<Vec<String>> {
@@ -122,11 +126,11 @@ pub async fn get_embedded_image_tag() -> Result<Option<String>> {
 }
 
 pub async fn get_image_config(_image_tag: String) -> Result<ConfigSchema> {
-    Ok(get_manifest()?.project.config_schema)
+    Ok(get_manifest().project.config_schema.clone())
 }
 
 pub async fn load_project_config(_project_name: String) -> Result<LoadedProjectConfig> {
-    Ok(get_manifest()?.project.project_config)
+    Ok(get_manifest().project.project_config.clone())
 }
 
 pub async fn list_tasks(
@@ -189,11 +193,11 @@ pub async fn poll_task_events(
 }
 
 pub async fn get_project_run_status(_project_name: String) -> Result<ProjectRunStatus> {
-    Ok(get_manifest()?.project.run_status)
+    Ok(get_manifest().project.run_status.clone())
 }
 
 pub async fn list_project_outputs(_project_name: String) -> Result<Vec<OutputFile>> {
-    Ok(get_manifest()?.project.outputs)
+    Ok(get_manifest().project.outputs.clone())
 }
 
 pub async fn get_project_output_bytes(
@@ -208,8 +212,38 @@ pub async fn get_project_output_bytes(
     }
 }
 
+pub async fn get_project_output_glb(
+    _project_name: String,
+    relative_path: String,
+) -> Result<ByteStream> {
+    // Demo mode serves pre-generated GLB files alongside the originals.
+    // Map .ply -> .glb, points3D.bin -> points3D.glb
+    let glb_path = if relative_path.to_lowercase().ends_with(".ply") {
+        let without_ext = relative_path.strip_suffix(".ply").unwrap_or(&relative_path);
+        format!("{}.glb", without_ext)
+    } else if relative_path.to_lowercase().ends_with("points3d.bin") {
+        // Strip the ".bin" suffix (4 chars) and append ".glb"
+        let without_ext = &relative_path[..relative_path.len() - 4];
+        format!("{}.glb", without_ext)
+    } else {
+        return Err(dioxus::CapturedError::msg(format!(
+            "No GLB available for {}",
+            relative_path
+        )));
+    };
+    match demo_output_bytes(&glb_path) {
+        Some(bytes) => Ok(ByteStream::new(futures::stream::once(async move {
+            body::Bytes::from(bytes.to_vec())
+        }))),
+        None => Err(dioxus::CapturedError::msg(format!(
+            "GLB not found in demo data for {}",
+            relative_path
+        ))),
+    }
+}
+
 pub async fn get_dark_mode() -> Result<Option<bool>> {
-    Ok(get_manifest()?.dark_mode)
+    Ok(get_manifest().dark_mode.clone())
 }
 
 pub async fn create_project(_name: String) -> Result<Project> {
@@ -256,6 +290,8 @@ pub async fn remove_runtime_image(_image_tag: String) -> Result<()> {
     read_only_error()
 }
 pub async fn startup() -> Result<String> {
+    // Pre-decode all demo data at startup so first access is instant.
+    init_demo_data();
     Ok("demo-startup-task".to_string())
 }
 pub async fn save_project_config(
@@ -290,6 +326,21 @@ pub async fn clear_project_outputs(_project_name: String) -> Result<()> {
 pub async fn write_project_output(
     _project_name: String,
     _relative_path: String,
+    _body: ByteStream,
+) -> Result<()> {
+    read_only_error()
+}
+
+pub async fn download_project_outputs_zip(
+    _project_name: String,
+    _folder_path: String,
+) -> Result<ByteStream> {
+    read_only_error()
+}
+
+pub async fn restore_project_outputs(
+    _project_name: String,
+    _folder_path: String,
     _body: ByteStream,
 ) -> Result<()> {
     read_only_error()

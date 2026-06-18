@@ -79,3 +79,18 @@ pub(crate) mod inner {
 // ---------------------------------------------------------------------------
 
 pub use inner::*;
+
+/// Collect all bytes from a [`ByteStream`] into a single `Vec<u8>`.
+///
+/// Works with both the real `dioxus::fullstack::ByteStream` and the local
+/// replacement used when `fullstack` is not enabled.
+pub async fn collect_bytes_from_stream(mut stream: ByteStream) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(data) => bytes.extend_from_slice(&data),
+            Err(e) => return Err(format!("Stream read error: {e}")),
+        }
+    }
+    Ok(bytes)
+}
