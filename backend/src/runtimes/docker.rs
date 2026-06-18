@@ -15,6 +15,25 @@ use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
 
+/// Normalize a host path for use in Docker volume mounts.
+///
+/// On Windows, `std::fs::canonicalize()` may prepend `\\?\` (the Win32
+/// extended-length path prefix) when the path exceeds `MAX_PATH`.  Docker
+/// Desktop on Windows does **not** understand that prefix, so we strip it.
+///
+/// On non-Windows platforms this is a no-op.
+fn normalize_for_docker(path: &std::path::Path) -> String {
+    let path_str = path.display().to_string();
+    #[cfg(windows)]
+    {
+        path_str.trim_start_matches(r"\\?\").to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        path_str
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Docker struct
 // ---------------------------------------------------------------------------
@@ -379,8 +398,9 @@ impl Runtime for Docker {
                 mount.container_path,
                 dind_active,
             );
+            let normalized = normalize_for_docker(&host_path);
             cmd.arg("-v")
-                .arg(format!("{}:{}", host_path.display(), mount.container_path));
+                .arg(format!("{}:{}", normalized, mount.container_path));
         }
 
         // Add custom mounts from settings (with DinD path translation)
@@ -408,8 +428,11 @@ impl Runtime for Docker {
                         dind_translation = dind_active,
                         "run: adding custom mount"
                     );
-                    cmd.arg("-v")
-                        .arg(format!("{}:{}", resolved_host_path, container_path));
+                    cmd.arg("-v").arg(format!(
+                        "{}:{}",
+                        normalize_for_docker(&std::path::Path::new(&resolved_host_path)),
+                        container_path
+                    ));
                 } else if cfg_host_path != resolved_host_path
                     && std::path::Path::new(&cfg_host_path).exists()
                 {
@@ -422,8 +445,11 @@ impl Runtime for Docker {
                         fallback_path = %cfg_host_path,
                         "run: DinD-translated path not found, falling back to original"
                     );
-                    cmd.arg("-v")
-                        .arg(format!("{}:{}", cfg_host_path, container_path));
+                    cmd.arg("-v").arg(format!(
+                        "{}:{}",
+                        normalize_for_docker(&std::path::Path::new(&cfg_host_path)),
+                        container_path
+                    ));
                 } else {
                     warn!(host_path = %cfg_host_path, "run: skipping custom mount, host path does not exist");
                 }
