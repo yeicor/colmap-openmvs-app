@@ -926,17 +926,21 @@ export class Viewer3D {
   // ── Camera state serialisation ────────────────────────────────────────────
 
   _getCameraState(): CameraState {
+    // IMPORTANT: ArcballControls NEVER modifies `controls.target` during user
+    // interactions (rotation, pan, zoom). It only uses `this.target` as an
+    // initial reference that is synced to _gizmos.position once via update().
+    // After that, all interactions update _gizmos.position directly via
+    // applyTransformMatrix(), leaving controls.target permanently stale.
+    // Therefore we must read _gizmos.position — the actual point the camera
+    // looks at — instead of controls.target.
+    const gizPos = this.controls._gizmos.position;
     return {
       position: [
         Math.round(this.camera.position.x * 1e4) / 1e4,
         Math.round(this.camera.position.y * 1e4) / 1e4,
         Math.round(this.camera.position.z * 1e4) / 1e4,
       ],
-      target: [
-        Math.round(this.controls.target.x * 1e4) / 1e4,
-        Math.round(this.controls.target.y * 1e4) / 1e4,
-        Math.round(this.controls.target.z * 1e4) / 1e4,
-      ],
+      target: [Math.round(gizPos.x * 1e4) / 1e4, Math.round(gizPos.y * 1e4) / 1e4, Math.round(gizPos.z * 1e4) / 1e4],
       up: [Math.round(this.camera.up.x * 1e4) / 1e4, Math.round(this.camera.up.y * 1e4) / 1e4, Math.round(this.camera.up.z * 1e4) / 1e4],
       near: Math.round(this.camera.near * 1e4) / 1e4,
       far: Math.round(this.camera.far * 1e4) / 1e4,
@@ -958,8 +962,19 @@ export class Viewer3D {
     this.camera.updateProjectionMatrix();
 
     this.controls.setCamera(this.camera);
+    // setCamera() may have reset target / up internally, so re-apply.
     this.controls.target.set(tx, ty, tz);
+    if (state.up) {
+      this.camera.up.set(state.up[0], state.up[1], state.up[2]);
+    }
     this.camera.lookAt(tx, ty, tz);
+    this.controls.update();
+    // Sync ArcballControls' internal matrix states with the actual camera/gizmos
+    // after update() modified them.  Without this, the stale _cameraMatrixState
+    // (set earlier by setCamera()) can cause subsequent operations (or even just
+    // the first frame in some browser/environment combinations) to snap back to
+    // the wrong target, effectively resetting the lookAt to model center.
+    this.controls.updateMatrixState();
     this.controls.saveState();
     return true;
   }

@@ -115,15 +115,15 @@ const routes = [
   { url: "/project/demo/logs", name: "project-demo-logs" },
   { url: "/project/demo/outputs", name: "project-demo-outputs" },
   {
-    url: "/viewer/demo/openmvs|scene_dense.ply/eyJjYW0iOnsicG9zaXRpb24iOlsxLjYxMDMsLTEuMDc2MiwwLjQ0N10sInRhcmdldCI6WzMuNTYyMSwwLjMwNTIsNC4wNDQ3XSwidXAiOlswLjMyNTksLTAuOTEzNywwLjI0MjddLCJuZWFyIjowLjAwNzEsImZhciI6MTAwMH0sImNvbmZpZyI6eyJiYWNrZ3JvdW5kIjoiIzExMTMxOCIsInRleHR1cmVzIjp0cnVlLCJ3aXJlZnJhbWUiOmZhbHNlLCJiYWNrZmFjZXMiOmZhbHNlLCJsaWdodGluZyI6ZmFsc2UsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjMwLCJwb2ludHNTaXplIjoxLjUsInRvbmVNYXBwaW5nIjp0cnVlLCJleHBvc3VyZSI6MC43fX0=",
+    url: "/viewer/demo/openmvs|scene_dense.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjkxMzIsMS4xNDA2LDAuOTg5Nl0sInRhcmdldCI6WzIuNjE4NiwyLjk5NTUsLTMuNjY4XSwidXAiOlstMC4xMjA5LDAuNzk1NywwLjU5MzVdLCJuZWFyIjowLjAwNzIsImZhciI6MTAwMH0sImNvbmZpZyI6eyJ0ZXh0dXJlcyI6dHJ1ZSwid2lyZWZyYW1lIjp0cnVlLCJiYWNrZmFjZXMiOmZhbHNlLCJsaWdodGluZyI6dHJ1ZSwibGlnaHRBemltdXRoIjowLCJsaWdodEVsZXZhdGlvbiI6MCwicG9pbnRzU2l6ZSI6MS41LCJ0b25lTWFwcGluZyI6dHJ1ZSwiZXhwb3N1cmUiOjF9fQ==",
     name: "viewer-pointcloud",
   },
   {
-    url: "/viewer/demo/openmvs|scene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlsxLjYxMDMsLTEuMDc2MiwwLjQ0N10sInRhcmdldCI6WzMuNTYyMSwwLjMwNTIsNC4wNDQ3XSwidXAiOlswLjMyNTksLTAuOTEzNywwLjI0MjddLCJuZWFyIjowLjAwNzEsImZhciI6MTAwMH0sImNvbmZpZyI6eyJiYWNrZ3JvdW5kIjoiIzExMTMxOCIsInRleHR1cmVzIjp0cnVlLCJ3aXJlZnJhbWUiOnRydWUsImJhY2tmYWNlcyI6ZmFsc2UsImxpZ2h0aW5nIjpmYWxzZSwibGlnaHRBemltdXRoIjowLCJsaWdodEVsZXZhdGlvbiI6MzAsInBvaW50c1NpemUiOjEuNSwidG9uZU1hcHBpbmciOnRydWUsImV4cG9zdXJlIjowLjd9fQ==",
+    url: "/viewer/demo/openmvs|scene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjkxMzIsMS4xNDA2LDAuOTg5Nl0sInRhcmdldCI6WzIuNjE4NiwyLjk5NTUsLTMuNjY4XSwidXAiOlstMC4xMjA5LDAuNzk1NywwLjU5MzVdLCJuZWFyIjowLjAwNzIsImZhciI6MTAwMH0sImNvbmZpZyI6eyJ0ZXh0dXJlcyI6dHJ1ZSwid2lyZWZyYW1lIjp0cnVlLCJiYWNrZmFjZXMiOmZhbHNlLCJsaWdodGluZyI6dHJ1ZSwibGlnaHRBemltdXRoIjowLCJsaWdodEVsZXZhdGlvbiI6MCwicG9pbnRzU2l6ZSI6MS41LCJ0b25lTWFwcGluZyI6dHJ1ZSwiZXhwb3N1cmUiOjF9fQ==",
     name: "viewer-textured-wireframe",
   },
   {
-    url: "/viewer/demo/openmvs|scene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlsxLjYxMDMsLTEuMDc2MiwwLjQ0N10sInRhcmdldCI6WzMuNTYyMSwwLjMwNTIsNC4wNDQ3XSwidXAiOlswLjMyNTksLTAuOTEzNywwLjI0MjddLCJuZWFyIjowLjAwNzEsImZhciI6MTAwMH0sImNvbmZpZyI6eyJiYWNrZ3JvdW5kIjoiIzExMTMxOCIsInRleHR1cmVzIjp0cnVlLCJ3aXJlZnJhbWUiOmZhbHNlLCJiYWNrZmFjZXMiOmZhbHNlLCJsaWdodGluZyI6ZmFsc2UsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjMwLCJwb2ludHNTaXplIjoxLjUsInRvbmVNYXBwaW5nIjp0cnVlLCJleHBvc3VyZSI6MC43fX0=",
+    url: "/viewer/demo/openmvs|scene_dense_mesh_refined_textured.ply/eyJjYW0iOnsicG9zaXRpb24iOlswLjkxMzIsMS4xNDA2LDAuOTg5Nl0sInRhcmdldCI6WzIuNjE4NiwyLjk5NTUsLTMuNjY4XSwidXAiOlstMC4xMjA5LDAuNzk1NywwLjU5MzVdLCJuZWFyIjowLjAwNzIsImZhciI6MTAwMH0sImNvbmZpZyI6eyJ0ZXh0dXJlcyI6dHJ1ZSwid2lyZWZyYW1lIjpmYWxzZSwiYmFja2ZhY2VzIjpmYWxzZSwibGlnaHRpbmciOnRydWUsImxpZ2h0QXppbXV0aCI6MCwibGlnaHRFbGV2YXRpb24iOjAsInBvaW50c1NpemUiOjEuNSwidG9uZU1hcHBpbmciOnRydWUsImV4cG9zdXJlIjoxfX0=",
     name: "viewer-textured-mesh",
   },
 ];
@@ -236,20 +236,6 @@ async function captureForTheme(page, route, theme) {
     if (route.url.startsWith("/viewer/")) {
       const viewerReady = await waitForViewerModel(page);
       console.log(viewerReady ? `  🎯 Model loaded` : `  ⚠ Model not loaded`);
-
-      // Log the actual camera state after restoration for cross-environment
-      // comparison (helps debug CI-vs-local camera transform differences).
-      const camState = await page.evaluate(() => {
-        const v = window.__viewer3d_instance;
-        if (!v) return null;
-        const s = v._getCameraState();
-        return { position: s.position, target: s.target, up: s.up };
-      });
-      if (camState) {
-        console.log(
-          `  camera: pos=[${camState.position.map((v) => v.toFixed(4)).join(", ")}] target=[${camState.target.map((v) => v.toFixed(4)).join(", ")}] up=[${camState.up.map((v) => v.toFixed(4)).join(", ")}]`,
-        );
-      }
     } else {
       await waitForAppReady(page);
     }
