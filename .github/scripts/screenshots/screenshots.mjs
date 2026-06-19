@@ -200,8 +200,8 @@ async function waitForViewerModel(page, timeout = 120000) {
   // rAF-driven render have been fully composited on the GPU.
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
-  // Small safety margin for any in-flight presentation work.
-  await page.waitForTimeout(500);
+  // "Small" safety margin for any in-flight presentation work (needed on CI only).
+  await page.waitForTimeout(30000);
   return true;
 }
 
