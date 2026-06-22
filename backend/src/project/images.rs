@@ -3,6 +3,7 @@ use dioxus::fullstack::ByteStream;
 use futures::stream::StreamExt;
 use image::{DynamicImage, ImageDecoder, ImageReader};
 use once_cell::sync::Lazy;
+use regex::Regex;
 use tracing::{debug, error, info, warn};
 
 use std::collections::HashMap;
@@ -79,13 +80,18 @@ pub async fn get_project_images(project_name: String) -> dioxus::Result<Vec<Stri
         return Ok(Vec::new());
     }
 
+    // Regex to match auto-generated frame images from video keyframe extraction.
+    // Pattern: <video_basename>_frame_%06d.jpg (e.g. "flight1_frame_000001.jpg")
+    let frame_pattern = Regex::new(r"^.+_frame_\d{6}\.(jpg|jpeg|png|bmp|gif|webp|tiff)$")
+        .expect("Invalid frame image regex");
+
     let mut images = Vec::new();
     let entries = std::fs::read_dir(&images_path).context("Failed to read images directory")?;
     for entry in entries.flatten() {
         if let Ok(path) = entry.path().canonicalize() {
             if path.is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if is_image_file(name) {
+                    if is_image_file(name) && !frame_pattern.is_match(name) {
                         debug!(image_name = %name, "Found image file");
                         images.push(name.to_string());
                     }
