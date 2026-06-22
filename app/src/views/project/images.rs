@@ -45,12 +45,14 @@ fn js_escape(s: &str) -> String {
         .replace('\r', "\\r")
 }
 
-/// Fetch image size via HEAD request using JS eval (non-WASM).
-/// Uses the HTTP endpoint with `get_server_url()` for the correct base URL.
-/// Falls back to calling the Rust server function directly if the JS fetch fails
-/// (e.g. on Android where no TCP server is running).
+/// Fetch media size via HEAD request using JS eval (non-WASM).
+/// Supports both images and videos via the `endpoint_type` parameter.
 #[cfg(all(not(feature = "demo"), not(target_arch = "wasm32")))]
-async fn fetch_image_size_eval(project_name: &str, image_name: &str) -> Result<u64, String> {
+async fn fetch_media_size_eval(
+    project_name: &str,
+    media_name: &str,
+    endpoint_type: &str, // "images" or "videos"
+) -> Result<u64, String> {
     let server_url = {
         #[cfg(feature = "fullstack")]
         {
@@ -63,12 +65,12 @@ async fn fetch_image_size_eval(project_name: &str, image_name: &str) -> Result<u
     };
     let server_url_esc = js_escape(&server_url);
     let project_esc = js_escape(project_name);
-    let image_esc = js_escape(image_name);
+    let media_esc = js_escape(media_name);
 
     let js = format!(
         r#"(async function() {{
     const baseUrl = '{server_url_esc}' || (/^https?:/.test(window.location.origin) ? window.location.origin : 'http://localhost:8080');
-    const url = baseUrl + '/api/projects/' + encodeURIComponent('{project_esc}') + '/images/' + encodeURIComponent('{image_esc}') + '/bytes';
+    const url = baseUrl + '/api/projects/' + encodeURIComponent('{project_esc}') + '/{endpoint_type}/' + encodeURIComponent('{media_esc}') + '/bytes';
     try {{
         const resp = await fetch(url, {{method: 'HEAD'}});
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -89,15 +91,27 @@ async fn fetch_image_size_eval(project_name: &str, image_name: &str) -> Result<u
 
     if let Some(err) = result.strip_prefix("error:") {
         tracing::warn!(
-            "JS HTTP HEAD for image size failed ({}), falling back to Rust server function — performance may be reduced",
-            err
+            "JS HTTP HEAD for {} size failed ({}), falling back to Rust server function — performance may be reduced",
+            endpoint_type, err
         );
-        fetch_image_size_rust_fallback(project_name, image_name).await
+        // Only images have a Rust fallback (videos just return error)
+        if endpoint_type == "images" {
+            fetch_image_size_rust_fallback(project_name, media_name).await
+        } else {
+            Err(err.to_string())
+        }
     } else {
         result
             .parse::<u64>()
             .map_err(|e| format!("Invalid size: {e}"))
     }
+}
+
+/// Fetch image size via HEAD request using JS eval (non-WASM).
+/// Uses the HTTP endpoint with `get_server_url()` for the correct base URL.
+#[cfg(all(not(feature = "demo"), not(target_arch = "wasm32")))]
+async fn fetch_image_size_eval(project_name: &str, image_name: &str) -> Result<u64, String> {
+    fetch_media_size_eval(project_name, image_name, "images").await
 }
 
 /// Fallback: get image size by fetching bytes via the Rust server function.
@@ -263,6 +277,62 @@ async fn fetch_image_bytes_impl(project_name: &str, image_name: &str) -> Result<
         return Ok(bytes.to_vec());
     }
     fetch_image_bytes_eval(project_name, image_name).await
+}
+
+/// Fetch the `Content-Length` of a media file via a HEAD request (WASM only).
+/// This avoids downloading any bytes just to show a file size in list mode.
+#[cfg(target_arch = "wasm32")]
+async fn fetch_media_size_wasm(
+    project_name: &str,
+    media_name: &str,
+    endpoint_type: &str, // "images" or "videos"
+) -> Result<u64, String> {
+    #[cfg(feature = "demo")]
+    if endpoint_type == "images" {
+        if let Some(bytes) = crate::demo::demo_image_bytes(media_name) {
+            return Ok(bytes.len() as u64);
+        }
+    }
+    use js_sys::Promise;
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::wasm_bindgen::JsCast;
+
+    let window = web_sys::window().ok_or("No window available")?;
+    let prefix = crate::backend_url::BACKEND_URL
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let encoded_project = urlencoding::encode(project_name);
+    let encoded_media = urlencoding::encode(media_name);
+    let url =
+        format!("{prefix}/api/projects/{encoded_project}/{endpoint_type}/{encoded_media}/bytes");
+
+    let opts = web_sys::RequestInit::new();
+    opts.set_method("HEAD");
+
+    let request = web_sys::Request::new_with_str_and_init(&url, &opts)
+        .map_err(|e| format!("Failed to create HEAD request: {e:?}"))?;
+
+    let response_promise: Promise = window.fetch_with_request(&request);
+    let response_val = JsFuture::from(response_promise)
+        .await
+        .map_err(|e| format!("HEAD request failed: {e:?}"))?;
+
+    let response: web_sys::Response = response_val
+        .dyn_into()
+        .map_err(|_| "Response is not a Response object".to_string())?;
+
+    if !response.ok() {
+        return Err(format!("HEAD returned HTTP {}", response.status()));
+    }
+
+    response
+        .headers()
+        .get("Content-Length")
+        .map_err(|e| format!("Failed to get Content-Length header: {e:?}"))?
+        .ok_or_else(|| "No Content-Length header in response".to_string())?
+        .parse::<u64>()
+        .map_err(|e| format!("Invalid Content-Length: {e}"))
 }
 
 /// Fetch the `Content-Length` of an image via a HEAD request (WASM only).
@@ -610,6 +680,55 @@ async fn fetch_all_sizes(
     }
 }
 
+/// Fetch video file sizes via HEAD requests (list mode).
+/// Same approach as `fetch_all_sizes` but uses the video bytes endpoint.
+async fn fetch_all_video_sizes(
+    video_names: Vec<String>,
+    _project: String,
+    version: u64,
+    cancelled: Signal<bool>,
+    list_version: Signal<u64>,
+    mut file_sizes: Signal<HashMap<String, u64>>,
+) {
+    for name in &video_names {
+        if cancelled() || list_version() != version {
+            break;
+        }
+
+        let size = {
+            #[cfg(target_arch = "wasm32")]
+            {
+                fetch_media_size_wasm(&_project, name, "videos").await.ok()
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let size = {
+                    #[cfg(feature = "demo")]
+                    {
+                        // Demo mode: no videos, return None.
+                        None::<u64>
+                    }
+                    #[cfg(not(feature = "demo"))]
+                    {
+                        match fetch_media_size_eval(&_project, name, "videos").await {
+                            Ok(size) => Some(size),
+                            Err(e) => {
+                                tracing::debug!(error = %e, "Failed to fetch video size via HEAD");
+                                None
+                            }
+                        }
+                    }
+                };
+                size
+            }
+        };
+
+        if let Some(s) = size {
+            file_sizes.write().insert(name.clone(), s);
+        }
+    }
+}
+
 /// Fetch a single image's bytes and store them in `img_cache`.
 /// Used by the fullscreen viewer when the image isn't cached yet
 /// (e.g. in list mode where we only fetch sizes).
@@ -690,7 +809,7 @@ async fn fetch_image_bytes_wasm_fallback(
 }
 
 #[component]
-pub fn ImagesTab(project_name: String) -> Element {
+pub fn GalleryTab(project_name: String) -> Element {
     let project_name_clone = project_name.clone();
     use_effect(move || debug!(project_name = %project_name_clone, "Initializing images tab"));
     let mut tasks_ctx = use_context::<TasksCtx>();
@@ -917,10 +1036,6 @@ pub fn ImagesTab(project_name: String) -> Element {
             .collect();
         drop(cache);
 
-        if needs_fetch.is_empty() {
-            return;
-        }
-
         // ── 2. Create a fresh AbortController for this batch (WASM only) ─
         #[cfg(target_arch = "wasm32")]
         let abort_signal: Option<web_sys::AbortSignal> = {
@@ -940,28 +1055,43 @@ pub fn ImagesTab(project_name: String) -> Element {
         // multi-GB image data just to show a size column.
         if show_images() {
             // ── Gallery mode: fetch full image bytes ────────────────────
-            let project = project_name_cache.clone();
-            spawn(fetch_all_bytes(
-                needs_fetch,
-                project,
-                version,
-                cancelled,
-                list_version,
-                img_cache,
-                #[cfg(target_arch = "wasm32")]
-                abort_signal,
-            ));
+            if !needs_fetch.is_empty() {
+                let project = project_name_cache.clone();
+                spawn(fetch_all_bytes(
+                    needs_fetch,
+                    project,
+                    version,
+                    cancelled,
+                    list_version,
+                    img_cache,
+                    #[cfg(target_arch = "wasm32")]
+                    abort_signal,
+                ));
+            }
         } else {
-            // ── List mode: only fetch sizes ────────────────────────────
+            // ── List mode: fetch sizes for images and videos ────────────
             let project = project_name_cache.clone();
-            spawn(fetch_all_sizes(
-                needs_fetch,
-                project,
-                version,
-                cancelled,
-                list_version,
-                file_sizes,
-            ));
+            if !needs_fetch.is_empty() {
+                spawn(fetch_all_sizes(
+                    needs_fetch,
+                    project.clone(),
+                    version,
+                    cancelled,
+                    list_version,
+                    file_sizes,
+                ));
+            }
+            let vids = video_paths();
+            if !vids.is_empty() {
+                spawn(fetch_all_video_sizes(
+                    vids,
+                    project,
+                    version,
+                    cancelled,
+                    list_version,
+                    file_sizes,
+                ));
+            }
         }
     });
 
@@ -1273,87 +1403,128 @@ pub fn ImagesTab(project_name: String) -> Element {
                 }
             }
 
-            // ── Fullscreen image viewer (on‑demand fetch) ──────────────────
-            //
-            // When the user opens fullscreen for an image that isn't cached
-            // (e.g. in list mode where we only fetch sizes), we fetch its bytes
-            // on demand and store them in `img_cache` so both list and gallery
-            // modes share the same rendering path.
+            // ── Fullscreen media viewer (on‑demand fetch) ──────────────────
+            // Supports both images and videos.
             {
                 if let Some(fullscreen_name) = fullscreen_image() {
-                    // On‑demand fetch: if the image isn't cached yet (list mode
-                    // cold cache), use_resource fires and populates img_cache.
-                    let cache_entry = img_cache().get(&fullscreen_name).cloned();
-                    let (full_image_url, size_bytes) = cache_entry.unwrap_or_else(|| (String::new(), 0));
+                    let is_video = video_paths().contains(&fullscreen_name);
 
-                    let img_id = format!("fullscreen-img-{}", fullscreen_name);
-                    let metadata_id = format!("metadata-fullscreen-{}", fullscreen_name);
-                    let img_id_onload = img_id.clone();
-                    let metadata_id_onload = metadata_id.clone();
-                    let fname_onload = fullscreen_name.clone();
-                    let cached_size = size_bytes;
-
-                    // Trigger fetch for uncached images.
-                    let fullscreen_img_cache = img_cache;
-                    let fullscreen_fetch_project = project_name.clone();
-                    let fname_for_fetch = fullscreen_name.clone();
-                    let _ = use_resource(move || {
-                        // Clone FnMut captures so the closure stays reusable.
-                        let name = fname_for_fetch.clone();
-                        let project = fullscreen_fetch_project.clone();
-                        async move {
-                            if !fullscreen_img_cache.read().contains_key(&name) {
-                                fetch_and_cache_single(
-                                    name.clone(),
-                                    project.clone(),
-                                    fullscreen_img_cache,
-                                )
-                                .await;
-                            }
-                        }
-                    });
-
-                    let size_mb = cached_size as f64 / 1024.0 / 1024.0;
-                    rsx! {
-                        div {
-                            class: "fullscreen-modal",
-                            onclick: move |_| fullscreen_image.set(None),
-
+                    if is_video {
+                        // ── Video fullscreen ────────────────────────────────
+                        let video_url = video_urls.get(&fullscreen_name).map(|s| s.as_str()).unwrap_or("");
+                        let size = file_sizes().get(&fullscreen_name).copied().unwrap_or(0);
+                        let size_mb = size as f64 / 1024.0 / 1024.0;
+                        let cap = if size > 0 {
+                            format!("{} \u{00b7} {:.2} MB", &fullscreen_name, size_mb)
+                        } else {
+                            fullscreen_name.clone()
+                        };
+                        rsx! {
                             div {
-                                class: "fullscreen-container",
-                                onclick: move |evt| evt.stop_propagation(),
-
-                                button {
-                                    class: "fullscreen-close",
-                                    onclick: move |_| fullscreen_image.set(None),
-                                    title: "Close (ESC)",
-                                    "×"
-                                }
+                                class: "fullscreen-modal",
+                                onclick: move |_| fullscreen_image.set(None),
 
                                 div {
-                                    class: "fullscreen-caption",
-                                    id: metadata_id.clone(),
-                                    if full_image_url.is_empty() { "Loading…" } else { "" }
+                                    class: "fullscreen-container",
+                                    onclick: move |evt| evt.stop_propagation(),
+
+                                    button {
+                                        class: "fullscreen-close",
+                                        onclick: move |_| fullscreen_image.set(None),
+                                        title: "Close (ESC)",
+                                        "\u{00d7}"
+                                    }
+
+                                    div {
+                                        class: "fullscreen-caption",
+                                        "{cap}"
+                                    }
+                                    video {
+                                        src: "{video_url}",
+                                        preload: "auto",
+                                        controls: true,
+                                        class: "fullscreen-video",
+                                        autoplay: true,
+                                    }
                                 }
-                                if !full_image_url.is_empty() {
-                                    img {
-                                        src: full_image_url.clone(),
-                                        alt: fullscreen_name.clone(),
-                                        class: "fullscreen-image",
-                                        id: img_id.clone(),
-                                        onload: move |_| {
-                                            eval(&format!(
-                                                r#"const img = document.getElementById('{id}');
-                                                   const meta = document.getElementById('{mid}');
-                                                   if (img && meta) {{
-                                                     meta.innerHTML = img.naturalWidth + 'x' + img.naturalHeight
-                                                       + ' · {sz:.3} MB · {fname}';
-                                                   }}"#,
-                                                id = img_id_onload,
-                                                mid = metadata_id_onload,
-                                                sz = size_mb,
-                                                fname = fname_onload,
-                                            ));
+                            }
+                        }
+                    } else {
+                        // ── Image fullscreen (on‑demand fetch) ──────────────
+                        // When the user opens fullscreen for an image that isn't cached
+                        // (e.g. in list mode where we only fetch sizes), we fetch its bytes
+                        // on demand and store them in `img_cache`.
+                        let cache_entry = img_cache().get(&fullscreen_name).cloned();
+                        let (full_image_url, size_bytes) = cache_entry.unwrap_or_else(|| (String::new(), 0));
+
+                        let img_id = format!("fullscreen-img-{}", fullscreen_name);
+                        let metadata_id = format!("metadata-fullscreen-{}", fullscreen_name);
+                        let img_id_onload = img_id.clone();
+                        let metadata_id_onload = metadata_id.clone();
+                        let fname_onload = fullscreen_name.clone();
+                        let cached_size = size_bytes;
+
+                        // Trigger fetch for uncached images.
+                        let fullscreen_img_cache = img_cache;
+                        let fullscreen_fetch_project = project_name.clone();
+                        let fname_for_fetch = fullscreen_name.clone();
+                        let _ = use_resource(move || {
+                            let name = fname_for_fetch.clone();
+                            let project = fullscreen_fetch_project.clone();
+                            async move {
+                                if !fullscreen_img_cache.read().contains_key(&name) {
+                                    fetch_and_cache_single(
+                                        name.clone(),
+                                        project.clone(),
+                                        fullscreen_img_cache,
+                                    )
+                                    .await;
+                                }
+                            }
+                        });
+
+                        let size_mb = cached_size as f64 / 1024.0 / 1024.0;
+                        rsx! {
+                            div {
+                                class: "fullscreen-modal",
+                                onclick: move |_| fullscreen_image.set(None),
+
+                                div {
+                                    class: "fullscreen-container",
+                                    onclick: move |evt| evt.stop_propagation(),
+
+                                    button {
+                                        class: "fullscreen-close",
+                                        onclick: move |_| fullscreen_image.set(None),
+                                        title: "Close (ESC)",
+                                        "×"
+                                    }
+
+                                    div {
+                                        class: "fullscreen-caption",
+                                        id: metadata_id.clone(),
+                                        if full_image_url.is_empty() { "Loading…" } else { "" }
+                                    }
+                                    if !full_image_url.is_empty() {
+                                        img {
+                                            src: full_image_url.clone(),
+                                            alt: fullscreen_name.clone(),
+                                            class: "fullscreen-image",
+                                            id: img_id.clone(),
+                                            onload: move |_| {
+                                                eval(&format!(
+                                                    r#"const img = document.getElementById('{id}');
+                                                       const meta = document.getElementById('{mid}');
+                                                       if (img && meta) {{
+                                                         meta.innerHTML = img.naturalWidth + 'x' + img.naturalHeight
+                                                           + ' · {sz:.3} MB · {fname}';
+                                                       }}"#,
+                                                    id = img_id_onload,
+                                                    mid = metadata_id_onload,
+                                                    sz = size_mb,
+                                                    fname = fname_onload,
+                                                ));
+                                            }
                                         }
                                     }
                                 }
@@ -1656,10 +1827,18 @@ pub fn ImagesTab(project_name: String) -> Element {
                                 if *is_video {
                                     // ── Video item ────────────────────────────
                                     let url = urls.get(media_name).map(|s| s.as_str()).unwrap_or("");
+                                    let vname_clone = media_name.clone();
                                     elements.push(rsx! {
                                         div {
                                             key: "{media_name}",
                                             class: "image-item",
+
+                                            button {
+                                                class: "image-fullscreen-btn",
+                                                title: "View fullscreen",
+                                                onclick: move |_| fullscreen_image.set(Some(vname_clone.clone())),
+                                                Icon { icon: BsArrowsFullscreen }
+                                            }
 
                                             video {
                                                 src: "{url}",
@@ -1762,7 +1941,24 @@ pub fn ImagesTab(project_name: String) -> Element {
                                         Icon { icon: BsCameraVideo }
                                         " {media_name}"
                                     }
-                                    span { class: "item-size", "🎬" }
+                                    button {
+                                        class: "list-fullscreen-btn",
+                                        title: "View fullscreen",
+                                        onclick: {
+                                            let n = media_name.clone();
+                                            move |_| fullscreen_image.set(Some(n.clone()))
+                                        },
+                                        Icon { icon: BsArrowsFullscreen }
+                                    }
+                                    span { class: "item-size",
+                                        {
+                                            let sz = file_sizes().get(&media_name).copied();
+                                            match sz {
+                                                Some(s) => format!("{:.2} MB", s as f64 / 1048576.0),
+                                                None => String::new(),
+                                            }
+                                        }
+                                    }
                                 }
                             } else {
                                 div {
