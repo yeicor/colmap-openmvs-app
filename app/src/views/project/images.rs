@@ -823,6 +823,7 @@ pub fn GalleryTab(project_name: String) -> Element {
     // Rebuilt whenever `list_version` or `image_paths` changes.
     let mut img_cache = use_signal(HashMap::<String, (String, usize)>::new);
     let mut selected_images = use_signal(Vec::<String>::new);
+    let mut selected_videos = use_signal(Vec::<String>::new);
     let mut demo_loading = use_signal(|| false);
     let mut demo_dialog_open = use_signal(|| false);
     let mut resize_loading = use_signal(|| false);
@@ -1099,24 +1100,49 @@ pub fn GalleryTab(project_name: String) -> Element {
         let project_name = project_name.clone();
         move |_| {
             let project_name = project_name.clone();
-            let to_delete: Vec<String> = selected_images().clone();
+            let to_delete_images: Vec<String> = selected_images().clone();
+            let to_delete_videos: Vec<String> = selected_videos().clone();
             spawn(async move {
-                for image_name in to_delete {
-                    let _ =
-                        crate::server::delete_project_image(project_name.clone(), image_name).await;
+                let mut deleted_any = false;
+                for image_name in to_delete_images {
+                    if crate::server::delete_project_image(project_name.clone(), image_name)
+                        .await
+                        .is_ok()
+                    {
+                        deleted_any = true;
+                    }
                 }
-                match crate::server::get_project_images(project_name).await {
-                    Ok(imgs) => {
-                        image_paths.set(imgs);
-                        list_version += 1;
-                        info_message.set(Some("Images deleted successfully".to_string()));
+                for video_name in to_delete_videos {
+                    if crate::server::delete_project_video(project_name.clone(), video_name)
+                        .await
+                        .is_ok()
+                    {
+                        deleted_any = true;
                     }
-                    Err(e) => {
-                        error_message.set(Some(format!("Failed to reload images: {}", e)));
+                }
+                if deleted_any {
+                    match crate::server::get_project_images(project_name.clone()).await {
+                        Ok(imgs) => {
+                            image_paths.set(imgs);
+                            list_version += 1;
+                        }
+                        Err(e) => {
+                            error_message.set(Some(format!("Failed to reload images: {}", e)));
+                        }
                     }
+                    match crate::server::get_project_videos(project_name.clone()).await {
+                        Ok(vids) => {
+                            video_paths.set(vids);
+                        }
+                        Err(e) => {
+                            warn!(project_name = %project_name, error = %e, "Failed to reload videos after delete");
+                        }
+                    }
+                    info_message.set(Some("Selected items deleted successfully.".to_string()));
                 }
             });
             selected_images.set(Vec::new());
+            selected_videos.set(Vec::new());
         }
     };
 
@@ -1238,20 +1264,41 @@ pub fn GalleryTab(project_name: String) -> Element {
         selected_images2.set(selected);
     };
 
-    let select_all = move |_| {
-        if selected_images().len() == image_paths().len() && !image_paths().is_empty() {
-            selected_images.set(Vec::new());
+    let mut selected_videos2 = selected_videos;
+    let mut toggle_select_video = move |video_name: String| {
+        let mut selected = selected_videos();
+        if selected.contains(&video_name) {
+            selected.retain(|x| x != &video_name);
         } else {
-            selected_images.set(image_paths());
+            selected.push(video_name);
+        }
+        selected_videos2.set(selected);
+    };
+
+    let select_all = move |_| {
+        let img_paths = image_paths();
+        let vid_paths = video_paths();
+        let all_paths: Vec<String> = img_paths.iter().chain(vid_paths.iter()).cloned().collect();
+        let total_count = all_paths.len();
+        let selected_count = selected_images().len() + selected_videos().len();
+        if selected_count == total_count && total_count > 0 {
+            selected_images.set(Vec::new());
+            selected_videos.set(Vec::new());
+        } else {
+            selected_images.set(img_paths);
+            selected_videos.set(vid_paths);
         }
     };
 
     let has_images = !image_paths().is_empty();
-    let has_selection = !selected_images().is_empty();
-    let all_selected = selected_images().len() == image_paths().len() && has_images;
-    let num_images = image_paths().len();
-    let num_selected = selected_images().len();
     let has_videos = !video_paths().is_empty();
+    let has_media = has_images || has_videos;
+    let has_selection = !selected_images().is_empty() || !selected_videos().is_empty();
+    let all_selected = (selected_images().len() + selected_videos().len())
+        == (image_paths().len() + video_paths().len())
+        && has_media;
+    let num_images = image_paths().len();
+    let num_selected = selected_images().len() + selected_videos().len();
     let num_videos = video_paths().len();
 
     // Pre-compute video streaming URLs for the gallery.
@@ -1285,7 +1332,6 @@ pub fn GalleryTab(project_name: String) -> Element {
         all.sort_by(|a, b| a.0.cmp(&b.0));
         all
     };
-    let has_media = has_images || has_videos;
 
     rsx! {
         div {
@@ -1769,7 +1815,7 @@ pub fn GalleryTab(project_name: String) -> Element {
                         }
                     }
 
-                    if has_images {
+                    if has_images || has_videos {
                         button {
                             class: "action-btn",
                             onclick: select_all,
@@ -1796,7 +1842,7 @@ pub fn GalleryTab(project_name: String) -> Element {
                         button {
                             class: "action-btn action-btn-danger",
                             onclick: on_delete_selected,
-                            title: "Delete selected images",
+                            title: "Delete selected items",
                             Icon { icon: BsTrash3 }
                             span { class: "btn-label", "Delete ({num_selected})" }
                         }
@@ -1828,10 +1874,22 @@ pub fn GalleryTab(project_name: String) -> Element {
                                     // ── Video item ────────────────────────────
                                     let url = urls.get(media_name).map(|s| s.as_str()).unwrap_or("");
                                     let vname_clone = media_name.clone();
+                                    let vname_checkbox = media_name.clone();
+                                    let is_vid_selected = selected_videos().contains(media_name);
                                     elements.push(rsx! {
                                         div {
                                             key: "{media_name}",
-                                            class: "image-item",
+                                            class: if is_vid_selected { "image-item selected" } else { "image-item" },
+
+                                            div {
+                                                class: "image-checkbox",
+                                                input {
+                                                    r#type: "checkbox",
+                                                    checked: is_vid_selected,
+                                                    onchange: move |_| toggle_select_video(vname_checkbox.clone()),
+                                                    id: format!("video-checkbox-{}", urlencoding::encode(media_name)),
+                                                }
+                                            }
 
                                             button {
                                                 class: "image-fullscreen-btn",
@@ -1935,7 +1993,15 @@ pub fn GalleryTab(project_name: String) -> Element {
                             if is_video {
                                 div {
                                     key: "{media_name}",
-                                    class: "image-list-item",
+                                    class: if selected_videos().contains(&media_name) { "image-list-item selected" } else { "image-list-item" },
+                                    input {
+                                        r#type: "checkbox",
+                                        checked: selected_videos().contains(&media_name),
+                                        onchange: {
+                                            let n = media_name.clone();
+                                            move |_| toggle_select_video(n.clone())
+                                        },
+                                    }
                                     span {
                                         class: "item-name video-name",
                                         Icon { icon: BsCameraVideo }
