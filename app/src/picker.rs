@@ -108,6 +108,14 @@ pub async fn pick_file(accept: Option<&str>) -> Option<(String, Vec<u8>)> {
     }
 }
 
+/// Escape a string for embedding in a JS single-quoted string literal.
+fn js_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
 /// Open a native file-picker and upload each selected file **directly** to the
 /// server via `fetch()`, bypassing the Dioxus `eval` channel entirely.
 ///
@@ -122,66 +130,84 @@ pub async fn pick_file(accept: Option<&str>) -> Option<(String, Vec<u8>)> {
 /// 4. On supported browsers the file is streamed, avoiding OOM for files
 ///    larger than available WASM heap.
 ///
+/// Heartbeat messages are sent periodically during upload to keep the Dioxus
+/// eval WebSocket/channel alive, preventing timeouts during large file uploads.
+///
 /// * `accept` — optional comma-separated MIME types or file extensions.
 /// * `multiple` — if `true`, the user can select multiple files.
 /// * `upload_url_prefix` — the base URL for the upload endpoint,
 ///   e.g. `"/api/projects/myproject/videos/"`.
 ///
-/// Returns the list of filenames that were **successfully** uploaded.
+/// Returns `(successful_names, error_messages)`.
 pub async fn upload_files_direct(
     accept: Option<&str>,
     multiple: bool,
     upload_url_prefix: &str,
-) -> Vec<String> {
+) -> (Vec<String>, Vec<String>) {
     let accept_js = accept.unwrap_or("");
     let multiple_js = if multiple { "true" } else { "false" };
-    let url_prefix = upload_url_prefix;
+    let url_prefix_escaped = js_escape(upload_url_prefix);
 
     let js = format!(
         r#"
 (async function() {{
+    const acceptFilter = '{accept_js}';
+    const multipleFlag = {multiple_js};
+    const urlPrefix = '{url_prefix_escaped}';
+
+    // ── Open file picker ────────────────────────────────────────────
     const input = document.createElement('input');
     input.type = 'file';
-    input.multiple = {multiple_js};
-    input.accept = '{accept_js}';
+    input.multiple = multipleFlag;
+    if (acceptFilter) input.accept = acceptFilter;
     input.style.display = 'none';
     document.body.appendChild(input);
 
-    const files = await new Promise((resolve) => {{
+    const picked = await new Promise((resolve) => {{
         input.addEventListener('change', () => resolve(input.files));
         input.addEventListener('cancel', () => resolve(null));
         input.click();
     }});
     document.body.removeChild(input);
 
-    if (!files || files.length === 0) {{
+    if (!picked || picked.length === 0) {{
         dioxus.send('__done__');
         return;
     }}
 
-    dioxus.send(String(files.length));
+    dioxus.send(String(picked.length));
 
-    for (let i = 0; i < files.length; i++) {{
-        const f = files[i];
-        const url = '{url_prefix}' + encodeURIComponent(f.name);
+    // ── Upload each file ─────────────────────────────────────────────
+    for (let i = 0; i < picked.length; i++) {{
+        const file = picked[i];
+        const url = urlPrefix + encodeURIComponent(file.name);
 
+        // Start a heartbeat interval to keep the eval channel alive.
+        const heartbeat = setInterval(() => {{
+            dioxus.send('__heartbeat__');
+        }}, 15000); // every 15 seconds
+
+        let success = false;
         try {{
             const resp = await fetch(url, {{
                 method: 'POST',
                 headers: {{ 'Content-Type': 'application/octet-stream' }},
-                body: f,
+                body: file,
             }});
-            const name64 = btoa(unescape(encodeURIComponent(f.name)));
+            const name64 = btoa(unescape(encodeURIComponent(file.name)));
             if (resp.ok) {{
-                dioxus.send(f.name);
+                dioxus.send(file.name);
+                success = true;
             }} else {{
                 const body = await resp.text().catch(() => '');
                 dioxus.send('__fail__:' + name64 + ':' + resp.status + ':' + body.slice(0, 200));
             }}
         }} catch(e) {{
-            const name64 = btoa(unescape(encodeURIComponent(f.name)));
+            clearInterval(heartbeat);
+            const name64 = btoa(unescape(encodeURIComponent(file.name)));
             dioxus.send('__fail__:' + name64 + ':0:' + e.message.slice(0, 200));
         }}
+        clearInterval(heartbeat);
     }}
 
     dioxus.send('__done__');
@@ -193,24 +219,43 @@ pub async fn upload_files_direct(
 
     let first = match eval_handle.recv::<String>().await {
         Ok(s) => s,
-        Err(_) => return vec![],
+        Err(_) => return (vec![], vec![]),
     };
 
     if first == "__done__" {
-        return vec![];
+        return (vec![], vec![]);
     }
 
     let count: usize = match first.parse() {
         Ok(n) => n,
-        Err(_) => return vec![],
+        Err(_) => return (vec![], vec![]),
     };
 
     let mut uploaded = Vec::with_capacity(count);
-    for _ in 0..count {
+    let mut errors = Vec::new();
+    let mut remaining = count;
+
+    while remaining > 0 {
         let msg = match eval_handle.recv::<String>().await {
             Ok(m) => m,
-            Err(_) => break,
+            Err(e) => {
+                tracing::error!("Eval channel error during upload: {:?}", e);
+                // Eval channel died — add any remaining files as errors
+                if remaining > 0 {
+                    errors.push(format!("Upload channel closed unexpectedly ({} pending)", remaining));
+                }
+                break;
+            }
         };
+
+        // Handle heartbeat messages (keep-alive pings from JS)
+        if msg == "__heartbeat__" {
+            continue;
+        }
+
+        if msg == "__done__" {
+            break;
+        }
 
         if let Some(rest) = msg.strip_prefix("__fail__:") {
             // rest is "<base64-name>:<status>:<message>"
@@ -221,12 +266,22 @@ pub async fn upload_files_direct(
                     .ok()
                     .and_then(|b| String::from_utf8(b).ok())
                     .unwrap_or_else(|| format!("<base64:{}", name_b64));
-            tracing::error!("Direct upload failed for '{}': {:?}", decoded, err_parts);
+            let status = err_parts.get(1).copied().unwrap_or("?");
+            let message = err_parts.get(2).copied().unwrap_or("unknown error");
+            tracing::error!(
+                "Direct upload failed for '{}': status={}, msg={}",
+                decoded,
+                status,
+                message
+            );
+            errors.push(format!("{}: {}", decoded, message));
+            remaining -= 1;
         } else {
             tracing::info!("Direct upload succeeded: {}", msg);
             uploaded.push(msg);
+            remaining -= 1;
         }
     }
 
-    uploaded
+    (uploaded, errors)
 }

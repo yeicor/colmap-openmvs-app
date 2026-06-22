@@ -1,7 +1,7 @@
 use crate::Route;
 use dioxus::prelude::*;
 
-use super::images::ImagesTab;
+use super::images::GalleryTab;
 
 /// Catch-all route: `/project/:name` → redirects to `/project/:name/images`.
 ///
@@ -17,14 +17,14 @@ pub fn ProjectOverview(name: String) -> Element {
     use_effect(move || {
         if !did_redirect() {
             did_redirect.set(true);
-            navigator().replace(Route::ProjectImages {
+            navigator().replace(Route::ProjectGallery {
                 name: name_for_redirect.clone(),
             });
         }
     });
     rsx! {
         div { class: "dx-tabs-content dx-tabs-content-themed",
-            ImagesTab { project_name: name_for_tab }
+            GalleryTab { project_name: name_for_tab }
         }
     }
 }

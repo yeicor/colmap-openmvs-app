@@ -97,7 +97,7 @@ pub fn AppShell(children: Element) -> Element {
             }
             BaseSidebar {
                 SidebarTrigger {}
-                Projects { is_sidebar: true, selected: match &cur_route { Route::ProjectOverview { name } | Route::ProjectImages { name } | Route::ProjectConfig { name } | Route::ProjectLogs { name } | Route::ProjectOutputs { name } => Some(name.clone()), _ => None, } }
+                Projects { is_sidebar: true, selected: match &cur_route { Route::ProjectOverview { name } | Route::ProjectGallery { name } | Route::ProjectConfig { name } | Route::ProjectLogs { name } | Route::ProjectOutputs { name } => Some(name.clone()), _ => None, } }
             }
         }
         {children}
@@ -330,8 +330,8 @@ pub fn Projects(
                                 onclick: move |_| {
                                     if dialog_type().is_none() {
                                         if let Some(proj) = projects().get(idx) {
-                                            debug!(project_name = %proj.name, route = ?Route::ProjectImages { name: proj.name.clone() }, "Navigating to project");
-                                            dioxus::prelude::navigator().push(Route::ProjectImages { name: proj.name.clone() });
+                                            debug!(project_name = %proj.name, route = ?Route::ProjectGallery { name: proj.name.clone() }, "Navigating to project");
+                                            dioxus::prelude::navigator().push(Route::ProjectGallery { name: proj.name.clone() });
                                             eval("if (window.innerWidth <= 768) { document.querySelector('.dx-sidebar-trigger').click(); }");
                                         }
                                     }
