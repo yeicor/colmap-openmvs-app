@@ -1585,6 +1585,7 @@ pub fn GalleryTab(project_name: String) -> Element {
             div {
                 class: "images-toolbar",
 
+                // ── First group: upload and demo actions ────────────────
                 div {
                     class: "toolbar-group",
 
@@ -1661,49 +1662,11 @@ pub fn GalleryTab(project_name: String) -> Element {
                         Icon { icon: BsUpload }
                         span {
                             class: "btn-label",
-                            if uploading() { "Uploading..." } else { "Upload" }
+                            if uploading() { "Uploading..." } else { "Upload Image" }
                         }
                     }
 
-                    button {
-                        class: "action-btn action-btn-primary",
-                        onclick: move |_| demo_dialog_open.set(true),
-                        disabled: demo_loading() || uploading(),
-                        title: "Choose and download demo images from bundler_sfm examples",
-                        Icon { icon: BsStar }
-                        span {
-                            class: "btn-label",
-                            if demo_loading() {
-                                "Downloading…"
-                            } else {
-                                "Demo Images"
-                            }
-                        }
-                    }
-
-                    if has_images {
-                        button {
-                            class: "action-btn",
-                            onclick: on_open_resize_dialog,
-                            disabled: resize_loading() || uploading() || demo_loading(),
-                            title: "Resize ALL images by resizing to a maximum dimension",
-                            Icon { icon: BsTextareaResize }
-                            span {
-                                class: "btn-label",
-                                if resize_loading() {
-                                    "Resizing..."
-                                } else {
-                                    "Resize Images"
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // ── Video toolbar group ───────────────────────────────
-                div {
-                    class: "toolbar-group",
-
+                    // ── Upload Video (direct stream, avoids WASM memory) ──
                     button {
                         class: "action-btn action-btn-primary",
                         title: if video_uploading() { "Uploading..." } else { "Upload videos from disk" },
@@ -1715,12 +1678,6 @@ pub fn GalleryTab(project_name: String) -> Element {
                                 error_message.set(None);
                                 let pn = project_name.clone();
                                 spawn(async move {
-                                    // Use direct upload via fetch() — streams the file
-                                    // from disk to the server without reading it into
-                                    // WASM memory or base64-encoding it.
-                                    //
-                                    // Construct the URL prefix using the configured backend
-                                    // URL (if any) so cross-origin setups work correctly.
                                     let base = crate::backend_url::BACKEND_URL
                                         .get()
                                         .map(|s| s.trim_end_matches('/'))
@@ -1765,6 +1722,45 @@ pub fn GalleryTab(project_name: String) -> Element {
                         }
                     }
 
+                    button {
+                        class: "action-btn action-btn-primary",
+                        onclick: move |_| demo_dialog_open.set(true),
+                        disabled: demo_loading() || uploading(),
+                        title: "Choose and download demo images from bundler_sfm examples",
+                        Icon { icon: BsStar }
+                        span {
+                            class: "btn-label",
+                            if demo_loading() {
+                                "Downloading…"
+                            } else {
+                                "Demo Images"
+                            }
+                        }
+                    }
+
+                    if has_images {
+                        button {
+                            class: "action-btn",
+                            onclick: on_open_resize_dialog,
+                            disabled: resize_loading() || uploading() || demo_loading(),
+                            title: "Resize ALL images by resizing to a maximum dimension",
+                            Icon { icon: BsTextareaResize }
+                            span {
+                                class: "btn-label",
+                                if resize_loading() {
+                                    "Resizing..."
+                                } else {
+                                    "Resize Images"
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── Second group: video info and management ──────────────
+                div {
+                    class: "toolbar-group",
+
                     if has_videos {
                         div {
                             class: "action-btn images-info",
@@ -1799,6 +1795,7 @@ pub fn GalleryTab(project_name: String) -> Element {
                     }
                 }
 
+                // ── Third group: view toggle and selection actions ───────
                 div {
                     class: "toolbar-group",
 

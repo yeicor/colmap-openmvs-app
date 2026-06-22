@@ -3,16 +3,16 @@ use dioxus::fullstack::body::Bytes;
 use dioxus::fullstack::ByteStream;
 use futures::Stream;
 use once_cell::sync::Lazy;
+use regex::Regex;
 use std::io;
+use std::path::Path;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream as TokioReaderStream;
 use tracing::{debug, error, info, warn};
-
-use std::path::Path;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use std::collections::HashMap;
 
@@ -134,7 +134,7 @@ pub async fn add_project_video(
     Ok(())
 }
 
-/// Delete a video file from a project's videos/ directory.
+/// Delete a video file from a project's videos/ directory and its associated frames.
 pub async fn delete_project_video(project_name: String, video_name: String) -> dioxus::Result<()> {
     debug!(project_name = %project_name, video_name = %video_name, "Deleting video from project");
     let settings = crate::get_settings().await?;
@@ -151,12 +151,16 @@ pub async fn delete_project_video(project_name: String, video_name: String) -> d
         error!(video_path = %canonical_video.display(), error = %e, "Failed to delete video");
         anyhow!("Failed to delete video: {}", e)
     })?;
+
+    // Delete associated frame images: <basename>_frame_%06d.jpg
+    delete_video_frames(&project_name, &video_name, &settings.projects_folder).await;
+
     info!(project_name = %project_name, video_name = %video_name, "Video deleted successfully");
 
     Ok(())
 }
 
-/// Clear all video files from a project's videos/ directory.
+/// Clear all video files from a project's videos/ directory and their frames.
 pub async fn clear_project_videos(project_name: String) -> dioxus::Result<()> {
     debug!(project_name = %project_name, "Clearing all videos from project");
     let settings = crate::get_settings().await?;
@@ -176,7 +180,96 @@ pub async fn clear_project_videos(project_name: String) -> dioxus::Result<()> {
         debug!(videos_path = %videos_path.display(), "Videos directory does not exist");
     }
 
+    // Delete all frame images from this project
+    delete_all_frames(&project_name, &settings.projects_folder).await;
+
     Ok(())
+}
+
+/// Delete frame images associated with a video.
+///
+/// Frames follow the pattern: `<video_basename>_frame_%06d.jpg`
+/// e.g., `my_video.mp4` produces frames like `my_video_frame_000001.jpg`
+async fn delete_video_frames(project_name: &str, video_name: &str, projects_folder: &str) {
+    let Some(basename) = video_name.rsplit('.').nth(1) else {
+        return;
+    };
+    let pattern = format!(r"^{basename}_frame_\d{{6}}\.jpg$");
+    let re = match Regex::new(&pattern) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+
+    let images_path = match crate::project::project_images_path(project_name, projects_folder) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    if !images_path.exists() {
+        return;
+    }
+
+    let mut deleted = 0u64;
+    let entries = match std::fs::read_dir(&images_path) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if re.is_match(name) {
+                if std::fs::remove_file(&path).is_ok() {
+                    if let Some(name_str) = path.file_name().and_then(|n| n.to_str()) {
+                        debug!(frame = %name_str, "Deleted frame image associated with video");
+                        deleted += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    if deleted > 0 {
+        info!(project_name = %project_name, video_name = %video_name, frame_count = deleted, "Deleted associated frame images");
+    }
+}
+
+/// Delete ALL frame images (matching `*_frame_%06d.jpg`) from the project's images directory.
+async fn delete_all_frames(project_name: &str, projects_folder: &str) {
+    let re = match Regex::new(r"^.+_frame_\d{6}\.jpg$") {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+
+    let images_path = match crate::project::project_images_path(project_name, projects_folder) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    if !images_path.exists() {
+        return;
+    }
+
+    let mut deleted = 0u64;
+    let entries = match std::fs::read_dir(&images_path) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if re.is_match(name) {
+                if std::fs::remove_file(&path).is_ok() {
+                    deleted += 1;
+                }
+            }
+        }
+    }
+
+    if deleted > 0 {
+        info!(project_name = %project_name, frame_count = deleted, "Deleted all frame images after clearing videos");
+    }
 }
 
 /// Helper function to safely canonicalize and validate video paths
