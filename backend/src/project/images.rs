@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 use dioxus::fullstack::body::Bytes;
@@ -263,18 +264,36 @@ pub async fn add_project_image(
     let lock = lock_for_image_path(&image_path).await;
     let _guard = lock.lock().await;
 
-    let mut image_bytes = Vec::new();
+    // Stream directly to disk instead of accumulating in memory.
+    let temp_path = image_path.with_extension(format!("{}.tmp", std::process::id()));
+    let mut file = tokio::fs::File::create(&temp_path).await.map_err(|e| {
+        error!(temp_path = %temp_path.display(), error = %e, "Failed to create temp file");
+        anyhow!("Failed to create temp file: {}", e)
+    })?;
+
+    let mut total: u64 = 0;
     while let Some(chunk) = body.next().await {
         let chunk = chunk?;
-        image_bytes.extend_from_slice(&chunk);
+        total += chunk.len() as u64;
+        file.write_all(&chunk).await.map_err(|e| {
+            error!(temp_path = %temp_path.display(), error = %e, "Failed to write chunk");
+            anyhow!("Failed to write image chunk: {}", e)
+        })?;
     }
 
-    debug!(image_path = %image_path.display(), body_size = image_bytes.len(), "Writing image file");
-    std::fs::write(&image_path, &image_bytes).map_err(|e| {
-        error!(image_path = %image_path.display(), error = %e, "Failed to write image file");
-        anyhow!("Failed to write image file: {}", e)
+    file.flush().await.map_err(|e| {
+        error!(temp_path = %temp_path.display(), error = %e, "Failed to flush temp file");
+        anyhow!("Failed to flush image file: {}", e)
     })?;
-    info!(project_name = %project_name, image_name = %image_name, image_path = %image_path.display(), body_size = image_bytes.len(), "Image added successfully");
+    drop(file);
+
+    debug!(image_path = %image_path.display(), body_size = total, "Renaming temp file to final path");
+    tokio::fs::rename(&temp_path, &image_path).await.map_err(|e| {
+        error!(temp_path = %temp_path.display(), image_path = %image_path.display(), error = %e, "Failed to rename");
+        anyhow!("Failed to finalize image file: {}", e)
+    })?;
+
+    info!(project_name = %project_name, image_name = %image_name, image_path = %image_path.display(), body_size = total, "Image added successfully");
 
     Ok(())
 }

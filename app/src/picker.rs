@@ -127,12 +127,12 @@ pub async fn pick_file(accept: Option<&str>) -> Option<(String, Vec<u8>)> {
 /// * `upload_url_prefix` — the base URL for the upload endpoint,
 ///   e.g. `"/api/projects/myproject/videos/"`.
 ///
-/// Returns the list of filenames that were **successfully** uploaded.
+/// Returns `(successful_names, error_messages)`.
 pub async fn upload_files_direct(
     accept: Option<&str>,
     multiple: bool,
     upload_url_prefix: &str,
-) -> Vec<String> {
+) -> (Vec<String>, Vec<String>) {
     let accept_js = accept.unwrap_or("");
     let multiple_js = if multiple { "true" } else { "false" };
     let url_prefix = upload_url_prefix;
@@ -193,19 +193,20 @@ pub async fn upload_files_direct(
 
     let first = match eval_handle.recv::<String>().await {
         Ok(s) => s,
-        Err(_) => return vec![],
+        Err(_) => return (vec![], vec![]),
     };
 
     if first == "__done__" {
-        return vec![];
+        return (vec![], vec![]);
     }
 
     let count: usize = match first.parse() {
         Ok(n) => n,
-        Err(_) => return vec![],
+        Err(_) => return (vec![], vec![]),
     };
 
     let mut uploaded = Vec::with_capacity(count);
+    let mut errors = Vec::new();
     for _ in 0..count {
         let msg = match eval_handle.recv::<String>().await {
             Ok(m) => m,
@@ -221,12 +222,20 @@ pub async fn upload_files_direct(
                     .ok()
                     .and_then(|b| String::from_utf8(b).ok())
                     .unwrap_or_else(|| format!("<base64:{}", name_b64));
-            tracing::error!("Direct upload failed for '{}': {:?}", decoded, err_parts);
+            let status = err_parts.get(1).copied().unwrap_or("?");
+            let message = err_parts.get(2).copied().unwrap_or("unknown error");
+            tracing::error!(
+                "Direct upload failed for '{}': status={}, msg={}",
+                decoded,
+                status,
+                message
+            );
+            errors.push(format!("{}: {}", decoded, message));
         } else {
             tracing::info!("Direct upload succeeded: {}", msg);
             uploaded.push(msg);
         }
     }
 
-    uploaded
+    (uploaded, errors)
 }

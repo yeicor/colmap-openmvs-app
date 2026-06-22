@@ -11,5 +11,6 @@ pub(crate) use paths::{
     validate_project_name,
 };
 pub use videos::{
-    add_project_video, clear_project_videos, delete_project_video, get_project_videos,
+    add_project_video, clear_project_videos, delete_project_video, get_project_video_bytes,
+    get_project_videos, VideoData,
 };

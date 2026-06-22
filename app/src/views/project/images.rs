@@ -1124,6 +1124,39 @@ pub fn ImagesTab(project_name: String) -> Element {
     let has_videos = !video_paths().is_empty();
     let num_videos = video_paths().len();
 
+    // Pre-compute video streaming URLs for the gallery.
+    let video_urls: HashMap<String, String> = if has_videos {
+        let base = crate::backend_url::BACKEND_URL
+            .get()
+            .map(|s| s.trim_end_matches('/'))
+            .unwrap_or("");
+        video_paths()
+            .iter()
+            .map(|name| {
+                let url = format!(
+                    "{}/api/projects/{}/videos/{}/bytes",
+                    base,
+                    urlencoding::encode(&project_name),
+                    urlencoding::encode(name),
+                );
+                (name.clone(), url)
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
+
+    // Merged sorted list of all media (images + videos) for unified gallery display.
+    let all_media: Vec<(String, bool)> = {
+        let imgs = image_paths();
+        let vids = video_paths();
+        let mut all: Vec<(String, bool)> = imgs.into_iter().map(|n| (n, false)).collect();
+        all.extend(vids.into_iter().map(|n| (n, true)));
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        all
+    };
+    let has_media = has_images || has_videos;
+
     rsx! {
         div {
             class: "tab-content images-tab",
@@ -1479,7 +1512,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                                         format!("{}/api/projects/{}/videos/",
                                             base,
                                             urlencoding::encode(&pn));
-                                    let uploaded = crate::picker::upload_files_direct(
+                                    let (uploaded, upload_errors) = crate::picker::upload_files_direct(
                                         Some("video/*,.mp4,.webm,.mkv,.avi,.mov,.m4v,.mpg,.mpeg,.wmv,.flv,.3gp"),
                                         true,
                                         &upload_prefix,
@@ -1487,14 +1520,21 @@ pub fn ImagesTab(project_name: String) -> Element {
 
                                     let count = uploaded.len();
                                     if count > 0 {
-                                        info_message.set(Some(
-                                            format!("Uploaded {} video(s). Videos are kept in the videos/ folder and will be automatically processed when the pipeline runs.", count),
-                                        ));
+                                        let mut msg = format!("Uploaded {} video(s). Videos are kept in the videos/ folder and will be automatically processed when the pipeline runs.", count);
+                                        if !upload_errors.is_empty() {
+                                            msg.push_str(&format!(" {} upload(s) failed.", upload_errors.len()));
+                                            error_message.set(Some(upload_errors.join("; ")));
+                                        }
+                                        info_message.set(Some(msg));
                                         if let Ok(vids) = crate::server::get_project_videos(pn).await {
                                             video_paths.set(vids);
                                         }
                                     } else {
-                                        info_message.set(Some("No videos were uploaded.".to_string()));
+                                        if !upload_errors.is_empty() {
+                                            error_message.set(Some(format!("Video upload failed: {}", upload_errors.join("; "))));
+                                        } else {
+                                            info_message.set(Some("No videos were uploaded.".to_string()));
+                                        }
                                     }
 
                                     video_uploading.set(false);
@@ -1603,89 +1643,108 @@ pub fn ImagesTab(project_name: String) -> Element {
                 }
             }
 
-            if has_images {
+            if has_media {
                 if show_images() {
                     div {
                         class: "image-gallery",
                         {
-                            let paths = image_paths();
                             let selected = selected_images();
                             let cache = img_cache();
+                            let urls = &video_urls;
                             let mut elements = Vec::new();
-                            for image_name in paths.into_iter() {
-                                let is_selected = selected.contains(&image_name);
-                                // Blob / data URL from the cache.  Shows nothing until the
-                                // background fetch completes — the img element is simply not
-                                // rendered, keeping the tile visible as a loading placeholder.
-                                let Some((image_url, size_bytes)) = cache.get(&image_name).cloned()
-                                    else { continue; };
-                                let size_mb = size_bytes as f64 / 1024.0 / 1024.0;
-                                // Safe ID (avoid special chars from file names).
-                                let safe_image_name = urlencoding::encode(&image_name);
-                                let img_id = format!("thumbnail-{}", safe_image_name);
-                                let metadata_id = format!("metadata-{}", safe_image_name);
-                                let image_name_for_checkbox = image_name.clone();
-                                let image_name_for_fullscreen = image_name.clone();
-                                let image_name_for_img = image_name.clone();
-                                elements.push(rsx! {
-                                    div {
-                                        key: "{image_name}",
-                                        class: if is_selected { "image-item selected" } else { "image-item" },
-
+                            for (media_name, is_video) in all_media.iter() {
+                                if *is_video {
+                                    // ── Video item ────────────────────────────
+                                    let url = urls.get(media_name).map(|s| s.as_str()).unwrap_or("");
+                                    elements.push(rsx! {
                                         div {
-                                            class: "image-checkbox",
-                                            input {
-                                                r#type: "checkbox",
-                                                checked: is_selected,
-                                                onchange: move |_| toggle_select(image_name_for_checkbox.clone()),
-                                                id: format!("checkbox-{}", safe_image_name),
+                                            key: "{media_name}",
+                                            class: "image-item",
+
+                                            video {
+                                                src: "{url}",
+                                                preload: "metadata",
+                                                controls: true,
+                                                class: "thumbnail video-player",
                                             }
-                                        }
 
-                                        button {
-                                            class: "image-fullscreen-btn",
-                                            title: "View fullscreen",
-                                            onclick: move |_| fullscreen_image.set(Some(image_name_for_fullscreen.clone())),
-                                            Icon { icon: BsArrowsFullscreen }
-                                        }
-
-                                        div {
-                                            class: "image-info-overlay",
                                             div {
                                                 class: "image-name",
-                                                div {
-                                                    class: "image-metadata",
-                                                    id: metadata_id.clone(),
-                                                    "Loading..."
-                                                }
-                                                "{image_name}"
+                                                "{media_name}"
                                             }
                                         }
+                                    });
+                                } else {
+                                    // ── Image item ────────────────────────────
+                                    let is_selected = selected.contains(media_name);
+                                    let Some((image_url, size_bytes)) = cache.get(media_name).cloned()
+                                        else { continue; };
+                                    let size_mb = size_bytes as f64 / 1024.0 / 1024.0;
+                                    let safe_image_name = urlencoding::encode(media_name);
+                                    let img_id = format!("thumbnail-{}", safe_image_name);
+                                    let metadata_id = format!("metadata-{}", safe_image_name);
+                                    let image_name_for_checkbox = media_name.clone();
+                                    let image_name_for_fullscreen = media_name.clone();
+                                    let image_name_for_img = media_name.clone();
+                                    elements.push(rsx! {
+                                        div {
+                                            key: "{media_name}",
+                                            class: if is_selected { "image-item selected" } else { "image-item" },
 
-                                        img {
-                                            src: image_url.clone(),
-                                            alt: image_name.clone(),
-                                            id: img_id.clone(),
-                                            onclick: move |_| toggle_select(image_name_for_img.clone()),
-                                            class: "thumbnail",
-                                            onload: move |_| {
-                                                // Size is already known; read only dimensions from the DOM.
-                                                let js = format!(
-                                                    r#"const img = document.getElementById('{id}');
-                                                       const meta = document.getElementById('{mid}');
-                                                       if (img && meta) {{
-                                                         meta.innerHTML = img.naturalWidth + 'x' + img.naturalHeight
-                                                           + '<br/>{sz:.3} MB';
-                                                       }}"#,
-                                                    id = img_id,
-                                                    mid = metadata_id,
-                                                    sz = size_mb,
-                                                );
-                                                eval(&js);
+                                            div {
+                                                class: "image-checkbox",
+                                                input {
+                                                    r#type: "checkbox",
+                                                    checked: is_selected,
+                                                    onchange: move |_| toggle_select(image_name_for_checkbox.clone()),
+                                                    id: format!("checkbox-{}", safe_image_name),
+                                                }
+                                            }
+
+                                            button {
+                                                class: "image-fullscreen-btn",
+                                                title: "View fullscreen",
+                                                onclick: move |_| fullscreen_image.set(Some(image_name_for_fullscreen.clone())),
+                                                Icon { icon: BsArrowsFullscreen }
+                                            }
+
+                                            div {
+                                                class: "image-info-overlay",
+                                                div {
+                                                    class: "image-name",
+                                                    div {
+                                                        class: "image-metadata",
+                                                        id: metadata_id.clone(),
+                                                        "Loading..."
+                                                    }
+                                                    "{media_name}"
+                                                }
+                                            }
+
+                                            img {
+                                                src: image_url.clone(),
+                                                alt: media_name.clone(),
+                                                id: img_id.clone(),
+                                                onclick: move |_| toggle_select(image_name_for_img.clone()),
+                                                class: "thumbnail",
+                                                onload: move |_| {
+                                                    let js = format!(
+                                                        r#"const img = document.getElementById('{id}');
+                                                           const meta = document.getElementById('{mid}');
+                                                           if (img && meta) {{
+                                                             meta.innerHTML = img.naturalWidth + 'x' + img.naturalHeight
+                                                               + '<br/>{sz:.3} MB';
+                                                           }}"#,
+                                                        id = img_id,
+                                                        mid = metadata_id,
+                                                        sz = size_mb,
+                                                    );
+                                                    eval(&js);
+                                                }
                                             }
                                         }
-                                    }
-                                });
+                                    });
+                                }
                             }
                             rsx! { for element in elements { {element} } }
                         }
@@ -1693,49 +1752,58 @@ pub fn ImagesTab(project_name: String) -> Element {
                 } else {
                     div {
                         class: "image-list-compact",
-                        for image_name in image_paths() {
-                            div {
-                                key: "{image_name}",
-                                class: if selected_images().contains(&image_name) { "image-list-item selected" } else { "image-list-item" },
-                                input {
-                                    r#type: "checkbox",
-                                    checked: selected_images().contains(&image_name),
-                                    onchange: {
-                                        let name = image_name.clone();
-                                        move |_| toggle_select(name.clone())
-                                    },
+                        for (media_name, is_video) in all_media.iter().map(|(n, v)| (n.clone(), *v)) {
+                            if is_video {
+                                div {
+                                    key: "{media_name}",
+                                    class: "image-list-item",
+                                    span {
+                                        class: "item-name video-name",
+                                        Icon { icon: BsCameraVideo }
+                                        " {media_name}"
+                                    }
+                                    span { class: "item-size", "🎬" }
                                 }
-                                span {
-                                    class: "item-name",
-                                    onclick: {
-                                        let name = image_name.clone();
-                                        move |_| fullscreen_image.set(Some(name.clone()))
-                                    },
-                                    "{image_name}"
-                                }
-                                button {
-                                    class: "list-fullscreen-btn",
-                                    title: "View fullscreen",
-                                    onclick: {
-                                        let name = image_name.clone();
-                                        move |_| fullscreen_image.set(Some(name.clone()))
-                                    },
-                                    Icon { icon: BsArrowsFullscreen }
-                                }
-                                span { class: "item-size",
-                                    {
-                                        // In list mode we populate `file_sizes`
-                                        // via HEAD requests so we never
-                                        // download full image bytes just for
-                                        // a size column.
-                                        let sz_from_size_cache =
-                                            file_sizes().get(&image_name).copied();
-                                        let sz_from_img_cache =
-                                            img_cache().get(&image_name).map(|(_, s)| *s as u64);
-                                        let sz = sz_from_size_cache.or(sz_from_img_cache);
-                                        match sz {
-                                            Some(s) => format!("{:.2} MB", s as f64 / 1048576.0),
-                                            None => String::new(),
+                            } else {
+                                div {
+                                    key: "{media_name}",
+                                    class: if selected_images().contains(&media_name) { "image-list-item selected" } else { "image-list-item" },
+                                    input {
+                                        r#type: "checkbox",
+                                        checked: selected_images().contains(&media_name),
+                                        onchange: {
+                                            let n = media_name.clone();
+                                            move |_| toggle_select(n.clone())
+                                        },
+                                    }
+                                    span {
+                                        class: "item-name",
+                                        onclick: {
+                                            let n = media_name.clone();
+                                            move |_| fullscreen_image.set(Some(n.clone()))
+                                        },
+                                        "{media_name}"
+                                    }
+                                    button {
+                                        class: "list-fullscreen-btn",
+                                        title: "View fullscreen",
+                                        onclick: {
+                                            let n = media_name.clone();
+                                            move |_| fullscreen_image.set(Some(n.clone()))
+                                        },
+                                        Icon { icon: BsArrowsFullscreen }
+                                    }
+                                    span { class: "item-size",
+                                        {
+                                            let sz_from_size_cache =
+                                                file_sizes().get(&media_name).copied();
+                                            let sz_from_img_cache =
+                                                img_cache().get(&media_name).map(|(_, s)| *s as u64);
+                                            let sz = sz_from_size_cache.or(sz_from_img_cache);
+                                            match sz {
+                                                Some(s) => format!("{:.2} MB", s as f64 / 1048576.0),
+                                                None => String::new(),
+                                            }
                                         }
                                     }
                                 }
@@ -1751,7 +1819,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                     p { "No images in this project" }
                     p {
                         class: "hint",
-                        "Upload images, capture photos, or download demo images to get started."
+                        "Upload images, capture photos, upload videos, or download demo images to get started."
                     }
                 }
             }
