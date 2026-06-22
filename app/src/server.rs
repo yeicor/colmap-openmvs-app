@@ -204,6 +204,40 @@ pub async fn clear_project_images(project_name: String) -> Result<()> {
     backend::clear_project_images(project_name).await
 }
 
+// ---------------------------------------------------------------------------
+// Project videos
+// ---------------------------------------------------------------------------
+
+#[cfg_attr(not(feature = "demo"), get("/api/projects/{project_name}/videos"))]
+pub async fn get_project_videos(project_name: String) -> Result<Vec<String>> {
+    backend::get_project_videos(project_name).await
+}
+
+#[cfg_attr(
+    not(feature = "demo"),
+    post("/api/projects/{project_name}/videos/{video_name}")
+)]
+pub async fn add_project_video(
+    project_name: String,
+    video_name: String,
+    body: ByteStream,
+) -> Result<()> {
+    backend::add_project_video(project_name, video_name, body).await
+}
+
+#[cfg_attr(
+    not(feature = "demo"),
+    delete("/api/projects/{project_name}/videos/{video_name}")
+)]
+pub async fn delete_project_video(project_name: String, video_name: String) -> Result<()> {
+    backend::delete_project_video(project_name, video_name).await
+}
+
+#[cfg_attr(not(feature = "demo"), delete("/api/projects/{project_name}/videos"))]
+pub async fn clear_project_videos(project_name: String) -> Result<()> {
+    backend::clear_project_videos(project_name).await
+}
+
 #[cfg_attr(
     not(feature = "demo"),
     post("/api/projects/{project_name}/images/resize/{max_dimension}")

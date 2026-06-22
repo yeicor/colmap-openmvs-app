@@ -12,8 +12,8 @@ use dioxus::core::use_drop;
 use dioxus::document::eval;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
-    BsArrowsFullscreen, BsBoxArrowUpRight, BsCheckAll, BsCloudDownload, BsGrid, BsImage, BsStar,
-    BsTextareaResize, BsTrash3, BsUpload, BsViewList, BsXCircle,
+    BsArrowsFullscreen, BsBoxArrowUpRight, BsCameraVideo, BsCheckAll, BsCloudDownload, BsGrid,
+    BsImage, BsStar, BsTextareaResize, BsTrash3, BsUpload, BsViewList, BsXCircle,
 };
 use dioxus_free_icons::Icon;
 use std::collections::HashMap;
@@ -715,6 +715,11 @@ pub fn ImagesTab(project_name: String) -> Element {
     let mut uploading = use_signal(|| false);
     let mut show_images = use_signal(|| cfg!(feature = "demo"));
 
+    // Video state
+    let mut video_paths = use_signal(Vec::<String>::new);
+    let mut video_uploading = use_signal(|| false);
+    let mut video_list_version = use_signal(|| 0u64);
+
     // Size-only cache for list mode (populated via HEAD requests on WASM
     // so we never download full image bytes just to show a file size).
     let file_sizes: Signal<HashMap<String, u64>> = use_signal(HashMap::new);
@@ -770,6 +775,23 @@ pub fn ImagesTab(project_name: String) -> Element {
             }
         });
     }
+
+    // ── Load video list on mount ─────────────────────────────────────
+    let project_name_videos = project_name.clone();
+    use_effect(move || {
+        let project_name = project_name_videos.clone();
+        spawn(async move {
+            match crate::server::get_project_videos(project_name.clone()).await {
+                Ok(vids) => {
+                    debug!(project_name = %project_name, video_count = vids.len(), "Loaded project videos");
+                    video_paths.set(vids);
+                }
+                Err(e) => {
+                    warn!(project_name = %project_name, error = %e, "Failed to load project videos");
+                }
+            }
+        });
+    });
 
     // ── Load image list on mount + reconnect any running task ────────────
     let project_name_clone = project_name.clone();
@@ -1100,6 +1122,8 @@ pub fn ImagesTab(project_name: String) -> Element {
     let all_selected = selected_images().len() == image_paths().len() && has_images;
     let num_images = image_paths().len();
     let num_selected = selected_images().len();
+    let has_videos = !video_paths().is_empty();
+    let num_videos = video_paths().len();
 
     rsx! {
         div {
@@ -1332,11 +1356,11 @@ pub fn ImagesTab(project_name: String) -> Element {
                                 let pn = project_name.clone();
                                 spawn(async move {
                                     // ── File picker (works everywhere: web, desktop, Android) ──
-                                    // Opens the browser's native file-picker via a hidden
-                                    // <input type="file"> element, reads each selected
-                                    // file as bytes in the browser, and uploads them to
-                                    // the server one-by-one through the existing
-                                    // add_project_image endpoint.
+                                                            // Opens the browser's native file-picker via a hidden
+                                                            // <input type="file"> element, reads each selected
+                                                            // file as bytes in the browser, and uploads them to
+                                                            // the server one-by-one through the existing
+                                                            // add_project_image endpoint.
 
                                     let files = crate::picker::pick_files(Some("image/*"), true).await;
 
@@ -1423,6 +1447,108 @@ pub fn ImagesTab(project_name: String) -> Element {
                                     "Resize Images"
                                 }
                             }
+                        }
+                    }
+                }
+
+                // ── Video toolbar group ───────────────────────────────
+                div {
+                    class: "toolbar-group",
+
+                    button {
+                        class: "action-btn action-btn-primary",
+                        title: if video_uploading() { "Uploading..." } else { "Upload videos from disk" },
+                        disabled: video_uploading() || uploading() || demo_loading(),
+                        onclick: {
+                            let project_name = project_name.clone();
+                            move |_| {
+                                video_uploading.set(true);
+                                error_message.set(None);
+                                let pn = project_name.clone();
+                                spawn(async move {
+                                    let files = crate::picker::pick_files(Some("video/*,.mp4,.webm,.mkv,.avi,.mov,.m4v,.mpg,.mpeg,.wmv,.flv,.3gp"), true).await;
+                                    let count = files.len();
+                                    let mut imported: Vec<String> = Vec::new();
+                                    let mut failed: Vec<String> = Vec::new();
+
+                                    for (name, bytes) in files {
+                                        let byte_stream = crate::fullstack_compat::ByteStream::new(
+                                            futures::stream::once(async {
+                                                crate::fullstack_compat::body::Bytes::from(bytes)
+                                            }),
+                                        );
+                                        match crate::server::add_project_video(
+                                            pn.clone(),
+                                            name.clone(),
+                                            byte_stream,
+                                        )
+                                        .await
+                                        {
+                                            Ok(_) => imported.push(name),
+                                            Err(e) => {
+                                                error!("Failed to import video '{}': {}", name, e);
+                                                failed.push(name);
+                                            }
+                                        }
+                                    }
+
+                                    if count > 0 {
+                                        let fail_count = failed.len();
+                                        info_message.set(Some(
+                                            if fail_count > 0 {
+                                                format!("Imported {} video(s), {} failed", count, fail_count)
+                                            } else {
+                                                format!("Imported {} video(s). Videos are kept in the videos/ folder and will be automatically processed when the pipeline runs.", count)
+                                            },
+                                        ));
+                                        if let Ok(vids) = crate::server::get_project_videos(pn).await {
+                                            video_paths.set(vids);
+                                            video_list_version += 1;
+                                        }
+                                    }
+
+                                    video_uploading.set(false);
+                                });
+                            }
+                        },
+                        Icon { icon: BsCameraVideo }
+                        span {
+                            class: "btn-label",
+                            if video_uploading() { "Uploading..." } else { "Upload Video" }
+                        }
+                    }
+
+                    if has_videos {
+                        div {
+                            class: "action-btn images-info",
+                            "{num_videos} " Icon { icon: BsCameraVideo }
+                        }
+                    }
+
+                    if has_videos {
+                        button {
+                            class: "action-btn action-btn-danger",
+                            onclick: {
+                                let project_name = project_name.clone();
+                                move |_| {
+                                    let project_name = project_name.clone();
+                                    spawn(async move {
+                                        match crate::server::clear_project_videos(project_name).await {
+                                            Ok(_) => {
+                                                video_paths.set(Vec::new());
+                                                video_list_version += 1;
+                                                info_message.set(Some("All videos cleared successfully".to_string()));
+                                            }
+                                            Err(e) => {
+                                                error_message.set(Some(format!("Failed to clear videos: {}", e)));
+                                            }
+                                        }
+                                    });
+                                }
+                            },
+                            title: "Delete all videos",
+                            Icon { icon: BsXCircle }
+                            span { class: "btn-label", "Clear Videos" }
                         }
                     }
                 }
