@@ -718,7 +718,6 @@ pub fn ImagesTab(project_name: String) -> Element {
     // Video state
     let mut video_paths = use_signal(Vec::<String>::new);
     let mut video_uploading = use_signal(|| false);
-    let mut video_list_version = use_signal(|| 0u64);
 
     // Size-only cache for list mode (populated via HEAD requests on WASM
     // so we never download full image bytes just to show a file size).
@@ -1493,7 +1492,6 @@ pub fn ImagesTab(project_name: String) -> Element {
                                         ));
                                         if let Ok(vids) = crate::server::get_project_videos(pn).await {
                                             video_paths.set(vids);
-                                            video_list_version += 1;
                                         }
                                     } else {
                                         info_message.set(Some("No videos were uploaded.".to_string()));
@@ -1528,7 +1526,6 @@ pub fn ImagesTab(project_name: String) -> Element {
                                         match crate::server::clear_project_videos(project_name).await {
                                             Ok(_) => {
                                                 video_paths.set(Vec::new());
-                                                video_list_version += 1;
                                                 info_message.set(Some("All videos cleared successfully".to_string()));
                                             }
                                             Err(e) => {
