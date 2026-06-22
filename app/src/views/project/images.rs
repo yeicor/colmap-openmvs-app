@@ -1466,45 +1466,37 @@ pub fn ImagesTab(project_name: String) -> Element {
                                 error_message.set(None);
                                 let pn = project_name.clone();
                                 spawn(async move {
-                                    let files = crate::picker::pick_files(Some("video/*,.mp4,.webm,.mkv,.avi,.mov,.m4v,.mpg,.mpeg,.wmv,.flv,.3gp"), true).await;
-                                    let count = files.len();
-                                    let mut imported: Vec<String> = Vec::new();
-                                    let mut failed: Vec<String> = Vec::new();
+                                    // Use direct upload via fetch() — streams the file
+                                    // from disk to the server without reading it into
+                                    // WASM memory or base64-encoding it.
+                                    //
+                                    // Construct the URL prefix using the configured backend
+                                    // URL (if any) so cross-origin setups work correctly.
+                                    let base = crate::backend_url::BACKEND_URL
+                                        .get()
+                                        .map(|s| s.trim_end_matches('/'))
+                                        .unwrap_or("");
+                                    let upload_prefix =
+                                        format!("{}/api/projects/{}/videos/",
+                                            base,
+                                            urlencoding::encode(&pn));
+                                    let uploaded = crate::picker::upload_files_direct(
+                                        Some("video/*,.mp4,.webm,.mkv,.avi,.mov,.m4v,.mpg,.mpeg,.wmv,.flv,.3gp"),
+                                        true,
+                                        &upload_prefix,
+                                    ).await;
 
-                                    for (name, bytes) in files {
-                                        let byte_stream = crate::fullstack_compat::ByteStream::new(
-                                            futures::stream::once(async {
-                                                crate::fullstack_compat::body::Bytes::from(bytes)
-                                            }),
-                                        );
-                                        match crate::server::add_project_video(
-                                            pn.clone(),
-                                            name.clone(),
-                                            byte_stream,
-                                        )
-                                        .await
-                                        {
-                                            Ok(_) => imported.push(name),
-                                            Err(e) => {
-                                                error!("Failed to import video '{}': {}", name, e);
-                                                failed.push(name);
-                                            }
-                                        }
-                                    }
-
+                                    let count = uploaded.len();
                                     if count > 0 {
-                                        let fail_count = failed.len();
                                         info_message.set(Some(
-                                            if fail_count > 0 {
-                                                format!("Imported {} video(s), {} failed", count, fail_count)
-                                            } else {
-                                                format!("Imported {} video(s). Videos are kept in the videos/ folder and will be automatically processed when the pipeline runs.", count)
-                                            },
+                                            format!("Uploaded {} video(s). Videos are kept in the videos/ folder and will be automatically processed when the pipeline runs.", count),
                                         ));
                                         if let Ok(vids) = crate::server::get_project_videos(pn).await {
                                             video_paths.set(vids);
                                             video_list_version += 1;
                                         }
+                                    } else {
+                                        info_message.set(Some("No videos were uploaded.".to_string()));
                                     }
 
                                     video_uploading.set(false);
