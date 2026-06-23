@@ -338,15 +338,16 @@
     text-align: center;
 }
 
-.viewer-error h3,
-.viewer-empty h3 {
+.viewer-error h3 {
     margin: 0;
     font-size: 1.1rem;
-    color: #f87171;
+    color: var(--secondary-error-color);
 }
 
 .viewer-empty h3 {
-    color: #a78bfa;
+    margin: 0;
+    font-size: 1.1rem;
+    color: var(--dark, #a78bfa) var(--light, #7c3aed);
 }
 
 .viewer-error p,

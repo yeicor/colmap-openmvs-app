@@ -554,7 +554,7 @@
     padding: 0.1rem 0.4rem;
     border-radius: 0.25rem;
     background: var(--primary-accent-color, #4a9eff);
-    color: #fff;
+    color: var(--secondary-color);
     white-space: nowrap;
     flex-shrink: 0;
 }

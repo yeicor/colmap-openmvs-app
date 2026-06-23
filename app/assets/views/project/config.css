@@ -155,8 +155,8 @@
 }
 
 .btn-retry:hover:not(:disabled) {
-    background-color: #dc2626;
-    border-color: #dc2626;
+    background-color: var(--contrast-error-color);
+    border-color: var(--contrast-error-color);
 }
 
 @media (max-width: 768px) {

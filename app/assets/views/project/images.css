@@ -171,7 +171,7 @@
     height: 100%;
     object-fit: cover;
     display: block;
-    background-color: #000;
+    background-color: var(--primary-color);
 }
 
 .image-item .video-player::-webkit-media-controls-panel {
@@ -483,7 +483,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background-color: rgba(0, 0, 0, 0.9);
+    background-color: color-mix(in srgb, var(--primary-color) 90%, rgba(0, 0, 0, 0.95));
     backdrop-filter: blur(4px);
     animation: fadeIn 0.2s ease-out;
 }
@@ -521,7 +521,7 @@
     max-width: 100%;
     max-height: 80vh;
     object-fit: contain;
-    background: #000;
+    background: var(--primary-color);
 }
 
 .fullscreen-close {
@@ -861,9 +861,9 @@
     font-size: 0.75em;
     font-weight: 700;
     letter-spacing: 0.02em;
-    color: #f59e0b;
-    background-color: color-mix(in srgb, #f59e0b 15%, transparent);
-    border: 1px solid color-mix(in srgb, #f59e0b 40%, transparent);
+    color: var(--secondary-warning-color);
+    background-color: color-mix(in srgb, var(--secondary-warning-color) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--secondary-warning-color) 40%, transparent);
     border-radius: 9999px;
 }
 

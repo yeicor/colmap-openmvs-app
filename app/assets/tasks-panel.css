@@ -34,7 +34,7 @@
 
 .tasks-fab--active {
     background: var(--secondary-info-color);
-    color: #fff;
+    color: var(--secondary-color);
     border-color: transparent;
 }
 
@@ -73,7 +73,7 @@
     padding: 0 0.3rem;
     border-radius: 999px;
     background: var(--secondary-error-color);
-    color: #fff;
+    color: var(--secondary-color);
     font-size: 0.7rem;
     font-weight: 700;
     line-height: 1;
