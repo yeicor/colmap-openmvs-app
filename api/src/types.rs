@@ -10,6 +10,16 @@ pub struct Project {
     pub path: String,
 }
 
+/// List of project images and metadata about video frames
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectImages {
+    /// Regular (non-frame) image file names, sorted
+    pub images: Vec<String>,
+    /// Number of auto-generated frame images currently in the project
+    /// (extracted from uploaded videos, not shown in the gallery)
+    pub frame_count: usize,
+}
+
 /// Application settings
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Settings {

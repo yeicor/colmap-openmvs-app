@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context};
+use colmap_openmvs_api::ProjectImages;
 use dioxus::fullstack::ByteStream;
 use futures::stream::StreamExt;
 use image::{DynamicImage, ImageDecoder, ImageReader};
@@ -63,7 +64,7 @@ fn validate_and_canonicalize_image_path(
     Ok(canonical_image)
 }
 
-pub async fn get_project_images(project_name: String) -> dioxus::Result<Vec<String>> {
+pub async fn get_project_images(project_name: String) -> dioxus::Result<ProjectImages> {
     debug!(project_name = %project_name, "Retrieving project images list");
     let settings = crate::get_settings().await?;
     let images_path =
@@ -78,7 +79,10 @@ pub async fn get_project_images(project_name: String) -> dioxus::Result<Vec<Stri
         std::fs::create_dir_all(&images_path)
             .map_err(|e| anyhow!("Failed to create images folder: {}", e))?;
         info!(images_path = %images_path.display(), project_name = %project_name, "Images directory created");
-        return Ok(Vec::new());
+        return Ok(ProjectImages {
+            images: Vec::new(),
+            frame_count: 0,
+        });
     }
 
     // Regex to match auto-generated frame images from video keyframe extraction.
@@ -87,14 +91,19 @@ pub async fn get_project_images(project_name: String) -> dioxus::Result<Vec<Stri
         .expect("Invalid frame image regex");
 
     let mut images = Vec::new();
+    let mut frame_count: usize = 0;
     let entries = std::fs::read_dir(&images_path).context("Failed to read images directory")?;
     for entry in entries.flatten() {
         if let Ok(path) = entry.path().canonicalize() {
             if path.is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if is_image_file(name) && !frame_pattern.is_match(name) {
-                        debug!(image_name = %name, "Found image file");
-                        images.push(name.to_string());
+                    if is_image_file(name) {
+                        if frame_pattern.is_match(name) {
+                            frame_count += 1;
+                        } else {
+                            debug!(image_name = %name, "Found image file");
+                            images.push(name.to_string());
+                        }
                     }
                 }
             }
@@ -102,8 +111,12 @@ pub async fn get_project_images(project_name: String) -> dioxus::Result<Vec<Stri
     }
 
     images.sort();
-    info!(project_name = %project_name, image_count = images.len(), "Successfully retrieved images list");
-    Ok(images)
+    let total = images.len() + frame_count;
+    info!(project_name = %project_name, image_count = images.len(), frame_count = frame_count, total = total, "Successfully retrieved images list");
+    Ok(ProjectImages {
+        images,
+        frame_count,
+    })
 }
 
 /// Determine the correct MIME type from a file extension.

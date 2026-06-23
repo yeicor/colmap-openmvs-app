@@ -79,10 +79,24 @@
     height: 1rem;
 }
 
+/* On very narrow screens hide button labels, show only icons */
 @media (max-width: 480px) {
     .images-toolbar .action-btn svg {
         width: 0.875rem;
         height: 0.875rem;
+    }
+    .images-toolbar .action-btn .btn-label {
+        display: none;
+    }
+    .images-toolbar .action-btn {
+        padding: 0.35rem 0.45rem;
+    }
+}
+
+/* Reset btn-label visibility for toolbar info badges (always need the number) */
+@media (max-width: 480px) {
+    .images-toolbar .images-info .btn-label {
+        display: none;
     }
 }
 
@@ -96,6 +110,30 @@
 .images-info:hover:not(:disabled) {
     border-color: var(--primary-color-6);
     background: var(--primary-color-4);
+}
+
+/* Frame count badge inside info badges */
+.frame-count-badge {
+    font-size: 0.8rem;
+    opacity: 0.7;
+    margin-left: 0.1rem;
+}
+
+/* Per-video frame count metadata in gallery mode */
+.video-frame-meta {
+    font-size: 0.75rem;
+    opacity: 0.65;
+    display: block;
+    margin-top: 0.15rem;
+}
+
+/* Per-video frame count in list mode */
+.item-frame-count {
+    margin-left: auto;
+    font-size: 0.8rem;
+    opacity: 0.65;
+    padding: 0 0.5rem;
+    white-space: nowrap;
 }
 
 /* ============================================================================

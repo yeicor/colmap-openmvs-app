@@ -2,12 +2,13 @@
 //! These wrap the backend implementations and provide the RPC interface for the client
 
 use dioxus::prelude::*;
+use std::collections::HashMap;
 
 use crate::fullstack_compat::ByteStream;
 
 use colmap_openmvs_api::{
     ConfigSchema, ImageTagInfo, LoadedProjectConfig, OutputFile, PreparedImageInfo, Project,
-    ProjectRunStatus, RuntimeInfo, SavedProjectConfig, Settings, TaskInfo,
+    ProjectImages, ProjectRunStatus, RuntimeInfo, SavedProjectConfig, Settings, TaskInfo,
 };
 
 // Shared HTTP streaming response type used by both image and video bytes endpoints.
@@ -58,7 +59,7 @@ pub async fn update_settings(new_settings: Settings) -> Result<()> {
 }
 
 #[cfg_attr(not(feature = "demo"), get("/api/projects/{project_name}/images"))]
-pub async fn get_project_images(project_name: String) -> Result<Vec<String>> {
+pub async fn get_project_images(project_name: String) -> Result<ProjectImages> {
     backend::get_project_images(project_name).await
 }
 
@@ -228,6 +229,14 @@ pub async fn clear_project_images(project_name: String) -> Result<()> {
 #[cfg_attr(not(feature = "demo"), get("/api/projects/{project_name}/videos"))]
 pub async fn get_project_videos(project_name: String) -> Result<Vec<String>> {
     backend::get_project_videos(project_name).await
+}
+
+#[cfg_attr(
+    not(feature = "demo"),
+    get("/api/projects/{project_name}/videos/frame-counts")
+)]
+pub async fn get_video_frame_counts(project_name: String) -> Result<HashMap<String, usize>> {
+    backend::get_video_frame_counts(project_name).await
 }
 
 #[cfg_attr(

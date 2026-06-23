@@ -20,7 +20,7 @@ pub use project::{
     add_project_image, add_project_video, batch_resize_images, clear_project_images,
     clear_project_videos, delete_project_image, delete_project_video, download_demo_images,
     get_project_image_bytes, get_project_images, get_project_video_bytes, get_project_videos,
-    ImageData, VideoData,
+    get_video_frame_counts, ImageData, VideoData,
 };
 
 mod files;

@@ -160,6 +160,60 @@ pub async fn delete_project_video(project_name: String, video_name: String) -> d
     Ok(())
 }
 
+/// Count extracted frame images for each video in the project.
+///
+/// Frames follow the pattern: `<video_basename>_frame_%06d.jpg`
+/// e.g., `my_video.mp4` produces frames like `my_video_frame_000001.jpg`
+/// Returns a map from video name → number of matching frame images.
+pub async fn get_video_frame_counts(
+    project_name: String,
+) -> dioxus::Result<HashMap<String, usize>> {
+    let settings = crate::get_settings().await?;
+    let images_path =
+        crate::project::project_images_path(&project_name, &settings.projects_folder)?;
+    let videos = get_project_videos(project_name.clone()).await?;
+
+    if !images_path.exists() || videos.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // Pre-compile regex for each video's frame pattern
+    let video_patterns: Vec<(String, Regex)> = videos
+        .iter()
+        .filter_map(|v| {
+            let basename = v.rsplit('.').nth(1)?;
+            let pattern = format!(
+                r"^{}_frame_\d{{6}}\.(jpg|jpeg|png|bmp|gif|webp|tiff)$",
+                regex::escape(basename)
+            );
+            Regex::new(&pattern).ok().map(|re| (v.clone(), re))
+        })
+        .collect();
+
+    let mut result: HashMap<String, usize> = HashMap::new();
+    let entries = match std::fs::read_dir(&images_path) {
+        Ok(e) => e,
+        Err(_) => return Ok(result),
+    };
+
+    for entry in entries.flatten() {
+        if let Some(name) = entry.file_name().to_str() {
+            for (video_name, pattern) in &video_patterns {
+                if pattern.is_match(name) {
+                    *result.entry(video_name.clone()).or_insert(0) += 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    if !result.is_empty() {
+        info!(project_name = %project_name, frame_counts = ?result, "Computed per-video frame counts");
+    }
+
+    Ok(result)
+}
+
 /// Clear all video files from a project's videos/ directory and their frames.
 pub async fn clear_project_videos(project_name: String) -> dioxus::Result<()> {
     debug!(project_name = %project_name, "Clearing all videos from project");

@@ -2,6 +2,7 @@ use crate::components::alert_dialog::{
     AlertDialogAction, AlertDialogActions, AlertDialogCancel, AlertDialogContent, AlertDialogRoot,
     AlertDialogTitle,
 };
+use crate::components::tooltip::{Tooltip, TooltipContent, TooltipTrigger};
 use crate::mycomponents::{Banner, BannerType};
 use crate::task_manager::{drive_task, start_task, TasksCtx};
 use base64::Engine as _;
@@ -438,6 +439,7 @@ fn revoke_display_url(url: &str) {
 fn build_demo_cb(
     project_name: String,
     mut image_paths: Signal<Vec<String>>,
+    mut frame_count: Signal<usize>,
     mut list_version: Signal<u64>,
     mut info_message: Signal<Option<String>>,
     mut error_message: Signal<Option<String>>,
@@ -471,9 +473,10 @@ fn build_demo_cb(
             let p = project_name.clone();
             spawn(async move {
                 match crate::server::get_project_images(p.clone()).await {
-                    Ok(paths) => {
-                        let n = paths.len();
-                        image_paths.set(paths);
+                    Ok(project_images) => {
+                        let n = project_images.images.len();
+                        frame_count.set(project_images.frame_count);
+                        image_paths.set(project_images.images);
                         list_version += 1;
                         info_message.set(Some(format!("Demo ready ({} images).", n)));
                     }
@@ -493,6 +496,7 @@ fn build_demo_cb(
 fn build_resize_cb(
     project_name: String,
     mut image_paths: Signal<Vec<String>>,
+    mut frame_count: Signal<usize>,
     mut list_version: Signal<u64>,
     mut img_cache: Signal<HashMap<String, (String, usize)>>,
     mut info_message: Signal<Option<String>>,
@@ -519,12 +523,13 @@ fn build_resize_cb(
             resize_loading.set(false);
             let p = project_name.clone();
             spawn(async move {
-                if let Ok(paths) = crate::server::get_project_images(p).await {
+                if let Ok(project_images) = crate::server::get_project_images(p).await {
                     // Evict all cached URLs since every image's byte content changed.
                     for (_, (url, _)) in img_cache.write().drain() {
                         revoke_display_url(&url);
                     }
-                    image_paths.set(paths);
+                    frame_count.set(project_images.frame_count);
+                    image_paths.set(project_images.images);
                     list_version += 1;
                 }
             });
@@ -814,6 +819,9 @@ pub fn GalleryTab(project_name: String) -> Element {
     use_effect(move || debug!(project_name = %project_name_clone, "Initializing images tab"));
     let mut tasks_ctx = use_context::<TasksCtx>();
     let mut image_paths = use_signal(Vec::<String>::new);
+    // Number of auto-generated frame images from video processing (not shown
+    // in the gallery, but counted for metadata display).
+    let mut frame_count = use_signal(|| 0usize);
     // Incremented on every mutation that may change image content (upload, delete,
     // resize, demo download).  The blob-URL cache effect depends on this signal
     // and on `image_paths`; a change to either triggers a cache rebuild.
@@ -838,6 +846,7 @@ pub fn GalleryTab(project_name: String) -> Element {
     // Video state
     let mut video_paths = use_signal(Vec::<String>::new);
     let mut video_uploading = use_signal(|| false);
+    let mut video_frame_counts: Signal<HashMap<String, usize>> = use_signal(HashMap::new);
 
     // Size-only cache for list mode (populated via HEAD requests on WASM
     // so we never download full image bytes just to show a file size).
@@ -895,7 +904,7 @@ pub fn GalleryTab(project_name: String) -> Element {
         });
     }
 
-    // ── Load video list on mount ─────────────────────────────────────
+    // ── Load video list + frame counts on mount ───────────────────────
     let project_name_videos = project_name.clone();
     use_effect(move || {
         let project_name = project_name_videos.clone();
@@ -909,6 +918,10 @@ pub fn GalleryTab(project_name: String) -> Element {
                     warn!(project_name = %project_name, error = %e, "Failed to load project videos");
                 }
             }
+            // Fetch per-video frame counts
+            if let Ok(counts) = crate::server::get_video_frame_counts(project_name.clone()).await {
+                video_frame_counts.set(counts);
+            }
         });
     });
 
@@ -920,6 +933,7 @@ pub fn GalleryTab(project_name: String) -> Element {
         let demo_cb = build_demo_cb(
             project_name.clone(),
             image_paths,
+            frame_count,
             list_version,
             info_message,
             error_message,
@@ -928,6 +942,7 @@ pub fn GalleryTab(project_name: String) -> Element {
         let resize_cb = build_resize_cb(
             project_name.clone(),
             image_paths,
+            frame_count,
             list_version,
             img_cache,
             info_message,
@@ -936,10 +951,11 @@ pub fn GalleryTab(project_name: String) -> Element {
         );
         spawn(async move {
             match crate::server::get_project_images(project_name.clone()).await {
-                Ok(imgs) => {
-                    let count = imgs.len();
-                    info!(project_name = %project_name, image_count = count, "Successfully loaded project images");
-                    image_paths.set(imgs);
+                Ok(project_images) => {
+                    let count = project_images.images.len();
+                    info!(project_name = %project_name, image_count = count, frame_count = project_images.frame_count, "Successfully loaded project images");
+                    frame_count.set(project_images.frame_count);
+                    image_paths.set(project_images.images);
                     list_version += 1;
                 }
                 Err(e) => {
@@ -1122,8 +1138,9 @@ pub fn GalleryTab(project_name: String) -> Element {
                 }
                 if deleted_any {
                     match crate::server::get_project_images(project_name.clone()).await {
-                        Ok(imgs) => {
-                            image_paths.set(imgs);
+                        Ok(project_images) => {
+                            frame_count.set(project_images.frame_count);
+                            image_paths.set(project_images.images);
                             list_version += 1;
                         }
                         Err(e) => {
@@ -1159,6 +1176,7 @@ pub fn GalleryTab(project_name: String) -> Element {
             let cb = build_demo_cb(
                 project_name.clone(),
                 image_paths,
+                frame_count,
                 list_version,
                 info_message,
                 error_message,
@@ -1227,6 +1245,7 @@ pub fn GalleryTab(project_name: String) -> Element {
             let cb = build_resize_cb(
                 project_name.clone(),
                 image_paths,
+                frame_count,
                 list_version,
                 img_cache,
                 info_message,
@@ -1300,6 +1319,8 @@ pub fn GalleryTab(project_name: String) -> Element {
     let num_images = image_paths().len();
     let num_selected = selected_images().len() + selected_videos().len();
     let num_videos = video_paths().len();
+    let num_frames = frame_count();
+    let has_frames = num_frames > 0;
 
     // Pre-compute video streaming URLs for the gallery.
     let video_urls: HashMap<String, String> = if has_videos {
@@ -1460,8 +1481,13 @@ pub fn GalleryTab(project_name: String) -> Element {
                         let video_url = video_urls.get(&fullscreen_name).map(|s| s.as_str()).unwrap_or("");
                         let size = file_sizes().get(&fullscreen_name).copied().unwrap_or(0);
                         let size_mb = size as f64 / 1024.0 / 1024.0;
+                        let vf_count = video_frame_counts().get(&fullscreen_name).copied().unwrap_or(0);
                         let cap = if size > 0 {
-                            format!("{} \u{00b7} {:.2} MB", &fullscreen_name, size_mb)
+                            let mut s = format!("{} \u{00b7} {:.2} MB", &fullscreen_name, size_mb);
+                            if vf_count > 0 {
+                                s.push_str(&format!(" \u{00b7} {} frames", vf_count));
+                            }
+                            s
                         } else {
                             fullscreen_name.clone()
                         };
@@ -1648,8 +1674,9 @@ pub fn GalleryTab(project_name: String) -> Element {
                                                 format!("Imported {} image(s). You may want to optimize them using the 'Resize Images' button.", count)
                                             },
                                         ));
-                                        if let Ok(paths) = crate::server::get_project_images(pn).await {
-                                            image_paths.set(paths);
+                                        if let Ok(project_images) = crate::server::get_project_images(pn).await {
+                                            frame_count.set(project_images.frame_count);
+                                            image_paths.set(project_images.images);
                                             list_version += 1;
                                         }
                                     }
@@ -1757,45 +1784,7 @@ pub fn GalleryTab(project_name: String) -> Element {
                     }
                 }
 
-                // ── Second group: video info and management ──────────────
-                div {
-                    class: "toolbar-group",
-
-                    if has_videos {
-                        div {
-                            class: "action-btn images-info",
-                            "{num_videos} " Icon { icon: BsCameraVideo }
-                        }
-                    }
-
-                    if has_videos {
-                        button {
-                            class: "action-btn action-btn-danger",
-                            onclick: {
-                                let project_name = project_name.clone();
-                                move |_| {
-                                    let project_name = project_name.clone();
-                                    spawn(async move {
-                                        match crate::server::clear_project_videos(project_name).await {
-                                            Ok(_) => {
-                                                video_paths.set(Vec::new());
-                                                info_message.set(Some("All videos cleared successfully".to_string()));
-                                            }
-                                            Err(e) => {
-                                                error_message.set(Some(format!("Failed to clear videos: {}", e)));
-                                            }
-                                        }
-                                    });
-                                }
-                            },
-                            title: "Delete all videos",
-                            Icon { icon: BsXCircle }
-                            span { class: "btn-label", "Clear Videos" }
-                        }
-                    }
-                }
-
-                // ── Third group: view toggle and selection actions ───────
+                // ── Second group: info and selection actions ───────────────
                 div {
                     class: "toolbar-group",
 
@@ -1828,10 +1817,75 @@ pub fn GalleryTab(project_name: String) -> Element {
                         }
                     }
 
+                    // ── Info badges ──────────────────────────────────────
                     if has_images {
-                        div {
-                            class: "action-btn images-info",
-                            "{num_images} " Icon { icon: BsImage }
+                        Tooltip {
+                            TooltipTrigger {
+                                div {
+                                    class: "action-btn images-info",
+                                    "{num_images} " Icon { icon: BsImage }
+                                }
+                            }
+                            TooltipContent {
+                                side: dioxus_primitives::ContentSide::Bottom,
+                                "Uploaded images"
+                            }
+                        }
+                    }
+
+                    if has_videos {
+                        Tooltip {
+                            TooltipTrigger {
+                                div {
+                                    class: "action-btn images-info",
+                                    "{num_videos} " Icon { icon: BsCameraVideo }
+                                    if has_frames {
+                                        span {
+                                            class: "frame-count-badge",
+                                            " (+{num_frames})"
+                                        }
+                                    }
+                                }
+                            }
+                            TooltipContent {
+                                side: dioxus_primitives::ContentSide::Bottom,
+                                if has_frames {
+                                    "{num_videos} video(s) — {num_frames} frames extracted"
+                                } else {
+                                    "Uploaded videos"
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Video management ──────────────────────────────────
+                    if has_videos {
+                        button {
+                            class: "action-btn action-btn-danger",
+                            onclick: {
+                                let project_name = project_name.clone();
+                                move |_| {
+                                    let project_name = project_name.clone();
+                                    spawn(async move {
+                                        match crate::server::clear_project_videos(project_name.clone()).await {
+                                            Ok(_) => {
+                                                video_paths.set(Vec::new());
+                                                // Refresh frame counts since frames were also deleted
+                                                if let Ok(counts) = crate::server::get_video_frame_counts(project_name.clone()).await {
+                                                    video_frame_counts.set(counts);
+                                                }
+                                                info_message.set(Some("All videos cleared successfully".to_string()));
+                                            }
+                                            Err(e) => {
+                                                error_message.set(Some(format!("Failed to clear videos: {}", e)));
+                                            }
+                                        }
+                                    });
+                                }
+                            },
+                            title: "Delete all videos",
+                            Icon { icon: BsXCircle }
+                            span { class: "btn-label", "Clear Videos" }
                         }
                     }
 
@@ -1873,6 +1927,7 @@ pub fn GalleryTab(project_name: String) -> Element {
                                     let vname_clone = media_name.clone();
                                     let vname_checkbox = media_name.clone();
                                     let is_vid_selected = selected_videos().contains(media_name);
+                                    let vframe_count = video_frame_counts().get(media_name).copied().unwrap_or(0);
                                     elements.push(rsx! {
                                         div {
                                             key: "{media_name}",
@@ -1905,6 +1960,12 @@ pub fn GalleryTab(project_name: String) -> Element {
                                             div {
                                                 class: "image-name",
                                                 "{media_name}"
+                                                if vframe_count > 0 {
+                                                    span {
+                                                        class: "video-frame-meta",
+                                                        " — {vframe_count} frames"
+                                                    }
+                                                }
                                             }
                                         }
                                     });
@@ -2023,6 +2084,14 @@ pub fn GalleryTab(project_name: String) -> Element {
                                             match sz {
                                                 Some(s) => format!("{:.2} MB", s as f64 / 1048576.0),
                                                 None => String::new(),
+                                            }
+                                        }
+                                    }
+                                    if let Some(fc) = video_frame_counts().get(&media_name).copied() {
+                                        if fc > 0 {
+                                            span {
+                                                class: "item-frame-count",
+                                                "{fc} frames"
                                             }
                                         }
                                     }
