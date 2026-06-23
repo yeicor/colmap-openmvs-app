@@ -1,11 +1,12 @@
 use crate::fullstack_compat::body;
 use colmap_openmvs_api::{
     ConfigSchema, ImageTagInfo, LoadedProjectConfig, OutputFile, PreparedImageInfo, Project,
-    ProjectRunStatus, RuntimeInfo, Settings, TaskEvent, TaskEventBatch, TaskInfo,
+    ProjectImages, ProjectRunStatus, RuntimeInfo, Settings, TaskEvent, TaskEventBatch, TaskInfo,
 };
 use dioxus::Result;
 
 use crate::fullstack_compat::ByteStream;
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -78,8 +79,11 @@ pub async fn get_settings() -> Result<Settings> {
     Ok(get_manifest().settings.clone())
 }
 
-pub async fn get_project_images(_project_name: String) -> Result<Vec<String>> {
-    Ok(get_manifest().project.images.clone())
+pub async fn get_project_images(_project_name: String) -> Result<ProjectImages> {
+    Ok(ProjectImages {
+        images: get_manifest().project.images.clone(),
+        frame_count: 0,
+    })
 }
 
 pub async fn get_project_image_bytes(
@@ -278,6 +282,9 @@ pub async fn clear_project_images(_project_name: String) -> Result<()> {
 
 pub async fn get_project_videos(_project_name: String) -> Result<Vec<String>> {
     Ok(vec![])
+}
+pub async fn get_video_frame_counts(_project_name: String) -> Result<HashMap<String, usize>> {
+    Ok(HashMap::new())
 }
 pub async fn add_project_video(
     _project_name: String,

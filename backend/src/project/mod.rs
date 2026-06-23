@@ -12,5 +12,5 @@ pub(crate) use paths::{
 };
 pub use videos::{
     add_project_video, clear_project_videos, delete_project_video, get_project_video_bytes,
-    get_project_videos, VideoData,
+    get_project_videos, get_video_frame_counts, VideoData,
 };

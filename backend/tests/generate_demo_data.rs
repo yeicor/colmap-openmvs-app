@@ -169,9 +169,10 @@ async fn test_generate_demo_data() {
     // 6. Gather all realistic data
     let projects = backend::get_projects().await.unwrap();
     let project = projects.into_iter().find(|p| p.name == "demo").unwrap();
-    let images = backend::get_project_images("demo".to_string())
+    let project_images = backend::get_project_images("demo".to_string())
         .await
         .unwrap();
+    let images = project_images.images;
     let outputs = backend::list_project_outputs("demo".to_string())
         .await
         .unwrap();
