@@ -314,6 +314,29 @@ fn spawn_pipeline_stream(
                                             pipeline_stage_num: None,
                                         });
                                     }
+                                } else {
+                                    // PipelineRemainingGroups can arrive *after* some stages
+                                    // have already started. Add any not-yet-seen stage names
+                                    // as placeholder entries so the user can see upcoming stages.
+                                    // Matching by name is safe because names are unique and
+                                    // the list is always in sequential group order.
+                                    for name in names {
+                                        if !update.stages.iter().any(|s| s.name == name) {
+                                            let idx = update.stages.len() as u32;
+                                            update.stages.push(StageData {
+                                                index: idx,
+                                                name,
+                                                total_stages: 0,
+                                                lines: vec![],
+                                                progress: None,
+                                                completed: false,
+                                                cached: false,
+                                                skipped: false,
+                                                is_running: false,
+                                                pipeline_stage_num: None,
+                                            });
+                                        }
+                                    }
                                 }
                             }
                             TaskEvent::PipelineStageStarted {
