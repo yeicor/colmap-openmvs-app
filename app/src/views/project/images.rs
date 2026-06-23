@@ -12,8 +12,8 @@ use dioxus::core::use_drop;
 use dioxus::document::eval;
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::bs_icons::{
-    BsArrowsFullscreen, BsBoxArrowUpRight, BsCheckAll, BsCloudDownload, BsGrid, BsImage, BsStar,
-    BsTextareaResize, BsTrash3, BsUpload, BsViewList, BsXCircle,
+    BsArrowsFullscreen, BsBoxArrowUpRight, BsCameraVideo, BsCheckAll, BsCloudDownload, BsGrid,
+    BsImage, BsStar, BsTextareaResize, BsTrash3, BsUpload, BsViewList, BsXCircle,
 };
 use dioxus_free_icons::Icon;
 use std::collections::HashMap;
@@ -45,12 +45,14 @@ fn js_escape(s: &str) -> String {
         .replace('\r', "\\r")
 }
 
-/// Fetch image size via HEAD request using JS eval (non-WASM).
-/// Uses the HTTP endpoint with `get_server_url()` for the correct base URL.
-/// Falls back to calling the Rust server function directly if the JS fetch fails
-/// (e.g. on Android where no TCP server is running).
+/// Fetch media size via HEAD request using JS eval (non-WASM).
+/// Supports both images and videos via the `endpoint_type` parameter.
 #[cfg(all(not(feature = "demo"), not(target_arch = "wasm32")))]
-async fn fetch_image_size_eval(project_name: &str, image_name: &str) -> Result<u64, String> {
+async fn fetch_media_size_eval(
+    project_name: &str,
+    media_name: &str,
+    endpoint_type: &str, // "images" or "videos"
+) -> Result<u64, String> {
     let server_url = {
         #[cfg(feature = "fullstack")]
         {
@@ -63,12 +65,12 @@ async fn fetch_image_size_eval(project_name: &str, image_name: &str) -> Result<u
     };
     let server_url_esc = js_escape(&server_url);
     let project_esc = js_escape(project_name);
-    let image_esc = js_escape(image_name);
+    let media_esc = js_escape(media_name);
 
     let js = format!(
         r#"(async function() {{
     const baseUrl = '{server_url_esc}' || (/^https?:/.test(window.location.origin) ? window.location.origin : 'http://localhost:8080');
-    const url = baseUrl + '/api/projects/' + encodeURIComponent('{project_esc}') + '/images/' + encodeURIComponent('{image_esc}') + '/bytes';
+    const url = baseUrl + '/api/projects/' + encodeURIComponent('{project_esc}') + '/{endpoint_type}/' + encodeURIComponent('{media_esc}') + '/bytes';
     try {{
         const resp = await fetch(url, {{method: 'HEAD'}});
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -89,15 +91,27 @@ async fn fetch_image_size_eval(project_name: &str, image_name: &str) -> Result<u
 
     if let Some(err) = result.strip_prefix("error:") {
         tracing::warn!(
-            "JS HTTP HEAD for image size failed ({}), falling back to Rust server function — performance may be reduced",
-            err
+            "JS HTTP HEAD for {} size failed ({}), falling back to Rust server function — performance may be reduced",
+            endpoint_type, err
         );
-        fetch_image_size_rust_fallback(project_name, image_name).await
+        // Only images have a Rust fallback (videos just return error)
+        if endpoint_type == "images" {
+            fetch_image_size_rust_fallback(project_name, media_name).await
+        } else {
+            Err(err.to_string())
+        }
     } else {
         result
             .parse::<u64>()
             .map_err(|e| format!("Invalid size: {e}"))
     }
+}
+
+/// Fetch image size via HEAD request using JS eval (non-WASM).
+/// Uses the HTTP endpoint with `get_server_url()` for the correct base URL.
+#[cfg(all(not(feature = "demo"), not(target_arch = "wasm32")))]
+async fn fetch_image_size_eval(project_name: &str, image_name: &str) -> Result<u64, String> {
+    fetch_media_size_eval(project_name, image_name, "images").await
 }
 
 /// Fallback: get image size by fetching bytes via the Rust server function.
@@ -263,6 +277,62 @@ async fn fetch_image_bytes_impl(project_name: &str, image_name: &str) -> Result<
         return Ok(bytes.to_vec());
     }
     fetch_image_bytes_eval(project_name, image_name).await
+}
+
+/// Fetch the `Content-Length` of a media file via a HEAD request (WASM only).
+/// This avoids downloading any bytes just to show a file size in list mode.
+#[cfg(target_arch = "wasm32")]
+async fn fetch_media_size_wasm(
+    project_name: &str,
+    media_name: &str,
+    endpoint_type: &str, // "images" or "videos"
+) -> Result<u64, String> {
+    #[cfg(feature = "demo")]
+    if endpoint_type == "images" {
+        if let Some(bytes) = crate::demo::demo_image_bytes(media_name) {
+            return Ok(bytes.len() as u64);
+        }
+    }
+    use js_sys::Promise;
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::wasm_bindgen::JsCast;
+
+    let window = web_sys::window().ok_or("No window available")?;
+    let prefix = crate::backend_url::BACKEND_URL
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let encoded_project = urlencoding::encode(project_name);
+    let encoded_media = urlencoding::encode(media_name);
+    let url =
+        format!("{prefix}/api/projects/{encoded_project}/{endpoint_type}/{encoded_media}/bytes");
+
+    let opts = web_sys::RequestInit::new();
+    opts.set_method("HEAD");
+
+    let request = web_sys::Request::new_with_str_and_init(&url, &opts)
+        .map_err(|e| format!("Failed to create HEAD request: {e:?}"))?;
+
+    let response_promise: Promise = window.fetch_with_request(&request);
+    let response_val = JsFuture::from(response_promise)
+        .await
+        .map_err(|e| format!("HEAD request failed: {e:?}"))?;
+
+    let response: web_sys::Response = response_val
+        .dyn_into()
+        .map_err(|_| "Response is not a Response object".to_string())?;
+
+    if !response.ok() {
+        return Err(format!("HEAD returned HTTP {}", response.status()));
+    }
+
+    response
+        .headers()
+        .get("Content-Length")
+        .map_err(|e| format!("Failed to get Content-Length header: {e:?}"))?
+        .ok_or_else(|| "No Content-Length header in response".to_string())?
+        .parse::<u64>()
+        .map_err(|e| format!("Invalid Content-Length: {e}"))
 }
 
 /// Fetch the `Content-Length` of an image via a HEAD request (WASM only).
@@ -610,6 +680,55 @@ async fn fetch_all_sizes(
     }
 }
 
+/// Fetch video file sizes via HEAD requests (list mode).
+/// Same approach as `fetch_all_sizes` but uses the video bytes endpoint.
+async fn fetch_all_video_sizes(
+    video_names: Vec<String>,
+    _project: String,
+    version: u64,
+    cancelled: Signal<bool>,
+    list_version: Signal<u64>,
+    mut file_sizes: Signal<HashMap<String, u64>>,
+) {
+    for name in &video_names {
+        if cancelled() || list_version() != version {
+            break;
+        }
+
+        let size = {
+            #[cfg(target_arch = "wasm32")]
+            {
+                fetch_media_size_wasm(&_project, name, "videos").await.ok()
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let size = {
+                    #[cfg(feature = "demo")]
+                    {
+                        // Demo mode: no videos, return None.
+                        None::<u64>
+                    }
+                    #[cfg(not(feature = "demo"))]
+                    {
+                        match fetch_media_size_eval(&_project, name, "videos").await {
+                            Ok(size) => Some(size),
+                            Err(e) => {
+                                tracing::debug!(error = %e, "Failed to fetch video size via HEAD");
+                                None
+                            }
+                        }
+                    }
+                };
+                size
+            }
+        };
+
+        if let Some(s) = size {
+            file_sizes.write().insert(name.clone(), s);
+        }
+    }
+}
+
 /// Fetch a single image's bytes and store them in `img_cache`.
 /// Used by the fullscreen viewer when the image isn't cached yet
 /// (e.g. in list mode where we only fetch sizes).
@@ -690,7 +809,7 @@ async fn fetch_image_bytes_wasm_fallback(
 }
 
 #[component]
-pub fn ImagesTab(project_name: String) -> Element {
+pub fn GalleryTab(project_name: String) -> Element {
     let project_name_clone = project_name.clone();
     use_effect(move || debug!(project_name = %project_name_clone, "Initializing images tab"));
     let mut tasks_ctx = use_context::<TasksCtx>();
@@ -704,6 +823,7 @@ pub fn ImagesTab(project_name: String) -> Element {
     // Rebuilt whenever `list_version` or `image_paths` changes.
     let mut img_cache = use_signal(HashMap::<String, (String, usize)>::new);
     let mut selected_images = use_signal(Vec::<String>::new);
+    let mut selected_videos = use_signal(Vec::<String>::new);
     let mut demo_loading = use_signal(|| false);
     let mut demo_dialog_open = use_signal(|| false);
     let mut resize_loading = use_signal(|| false);
@@ -714,6 +834,10 @@ pub fn ImagesTab(project_name: String) -> Element {
     let mut fullscreen_image = use_signal::<Option<String>>(|| None);
     let mut uploading = use_signal(|| false);
     let mut show_images = use_signal(|| cfg!(feature = "demo"));
+
+    // Video state
+    let mut video_paths = use_signal(Vec::<String>::new);
+    let mut video_uploading = use_signal(|| false);
 
     // Size-only cache for list mode (populated via HEAD requests on WASM
     // so we never download full image bytes just to show a file size).
@@ -770,6 +894,23 @@ pub fn ImagesTab(project_name: String) -> Element {
             }
         });
     }
+
+    // ── Load video list on mount ─────────────────────────────────────
+    let project_name_videos = project_name.clone();
+    use_effect(move || {
+        let project_name = project_name_videos.clone();
+        spawn(async move {
+            match crate::server::get_project_videos(project_name.clone()).await {
+                Ok(vids) => {
+                    debug!(project_name = %project_name, video_count = vids.len(), "Loaded project videos");
+                    video_paths.set(vids);
+                }
+                Err(e) => {
+                    warn!(project_name = %project_name, error = %e, "Failed to load project videos");
+                }
+            }
+        });
+    });
 
     // ── Load image list on mount + reconnect any running task ────────────
     let project_name_clone = project_name.clone();
@@ -896,10 +1037,6 @@ pub fn ImagesTab(project_name: String) -> Element {
             .collect();
         drop(cache);
 
-        if needs_fetch.is_empty() {
-            return;
-        }
-
         // ── 2. Create a fresh AbortController for this batch (WASM only) ─
         #[cfg(target_arch = "wasm32")]
         let abort_signal: Option<web_sys::AbortSignal> = {
@@ -919,28 +1056,43 @@ pub fn ImagesTab(project_name: String) -> Element {
         // multi-GB image data just to show a size column.
         if show_images() {
             // ── Gallery mode: fetch full image bytes ────────────────────
-            let project = project_name_cache.clone();
-            spawn(fetch_all_bytes(
-                needs_fetch,
-                project,
-                version,
-                cancelled,
-                list_version,
-                img_cache,
-                #[cfg(target_arch = "wasm32")]
-                abort_signal,
-            ));
+            if !needs_fetch.is_empty() {
+                let project = project_name_cache.clone();
+                spawn(fetch_all_bytes(
+                    needs_fetch,
+                    project,
+                    version,
+                    cancelled,
+                    list_version,
+                    img_cache,
+                    #[cfg(target_arch = "wasm32")]
+                    abort_signal,
+                ));
+            }
         } else {
-            // ── List mode: only fetch sizes ────────────────────────────
+            // ── List mode: fetch sizes for images and videos ────────────
             let project = project_name_cache.clone();
-            spawn(fetch_all_sizes(
-                needs_fetch,
-                project,
-                version,
-                cancelled,
-                list_version,
-                file_sizes,
-            ));
+            if !needs_fetch.is_empty() {
+                spawn(fetch_all_sizes(
+                    needs_fetch,
+                    project.clone(),
+                    version,
+                    cancelled,
+                    list_version,
+                    file_sizes,
+                ));
+            }
+            let vids = video_paths();
+            if !vids.is_empty() {
+                spawn(fetch_all_video_sizes(
+                    vids,
+                    project,
+                    version,
+                    cancelled,
+                    list_version,
+                    file_sizes,
+                ));
+            }
         }
     });
 
@@ -948,24 +1100,49 @@ pub fn ImagesTab(project_name: String) -> Element {
         let project_name = project_name.clone();
         move |_| {
             let project_name = project_name.clone();
-            let to_delete: Vec<String> = selected_images().clone();
+            let to_delete_images: Vec<String> = selected_images().clone();
+            let to_delete_videos: Vec<String> = selected_videos().clone();
             spawn(async move {
-                for image_name in to_delete {
-                    let _ =
-                        crate::server::delete_project_image(project_name.clone(), image_name).await;
+                let mut deleted_any = false;
+                for image_name in to_delete_images {
+                    if crate::server::delete_project_image(project_name.clone(), image_name)
+                        .await
+                        .is_ok()
+                    {
+                        deleted_any = true;
+                    }
                 }
-                match crate::server::get_project_images(project_name).await {
-                    Ok(imgs) => {
-                        image_paths.set(imgs);
-                        list_version += 1;
-                        info_message.set(Some("Images deleted successfully".to_string()));
+                for video_name in to_delete_videos {
+                    if crate::server::delete_project_video(project_name.clone(), video_name)
+                        .await
+                        .is_ok()
+                    {
+                        deleted_any = true;
                     }
-                    Err(e) => {
-                        error_message.set(Some(format!("Failed to reload images: {}", e)));
+                }
+                if deleted_any {
+                    match crate::server::get_project_images(project_name.clone()).await {
+                        Ok(imgs) => {
+                            image_paths.set(imgs);
+                            list_version += 1;
+                        }
+                        Err(e) => {
+                            error_message.set(Some(format!("Failed to reload images: {}", e)));
+                        }
                     }
+                    match crate::server::get_project_videos(project_name.clone()).await {
+                        Ok(vids) => {
+                            video_paths.set(vids);
+                        }
+                        Err(e) => {
+                            warn!(project_name = %project_name, error = %e, "Failed to reload videos after delete");
+                        }
+                    }
+                    info_message.set(Some("Selected items deleted successfully.".to_string()));
                 }
             });
             selected_images.set(Vec::new());
+            selected_videos.set(Vec::new());
         }
     };
 
@@ -1087,19 +1264,74 @@ pub fn ImagesTab(project_name: String) -> Element {
         selected_images2.set(selected);
     };
 
-    let select_all = move |_| {
-        if selected_images().len() == image_paths().len() && !image_paths().is_empty() {
-            selected_images.set(Vec::new());
+    let mut selected_videos2 = selected_videos;
+    let mut toggle_select_video = move |video_name: String| {
+        let mut selected = selected_videos();
+        if selected.contains(&video_name) {
+            selected.retain(|x| x != &video_name);
         } else {
-            selected_images.set(image_paths());
+            selected.push(video_name);
+        }
+        selected_videos2.set(selected);
+    };
+
+    let select_all = move |_| {
+        let img_paths = image_paths();
+        let vid_paths = video_paths();
+        let all_paths: Vec<String> = img_paths.iter().chain(vid_paths.iter()).cloned().collect();
+        let total_count = all_paths.len();
+        let selected_count = selected_images().len() + selected_videos().len();
+        if selected_count == total_count && total_count > 0 {
+            selected_images.set(Vec::new());
+            selected_videos.set(Vec::new());
+        } else {
+            selected_images.set(img_paths);
+            selected_videos.set(vid_paths);
         }
     };
 
     let has_images = !image_paths().is_empty();
-    let has_selection = !selected_images().is_empty();
-    let all_selected = selected_images().len() == image_paths().len() && has_images;
+    let has_videos = !video_paths().is_empty();
+    let has_media = has_images || has_videos;
+    let has_selection = !selected_images().is_empty() || !selected_videos().is_empty();
+    let all_selected = (selected_images().len() + selected_videos().len())
+        == (image_paths().len() + video_paths().len())
+        && has_media;
     let num_images = image_paths().len();
-    let num_selected = selected_images().len();
+    let num_selected = selected_images().len() + selected_videos().len();
+    let num_videos = video_paths().len();
+
+    // Pre-compute video streaming URLs for the gallery.
+    let video_urls: HashMap<String, String> = if has_videos {
+        let base = crate::backend_url::BACKEND_URL
+            .get()
+            .map(|s| s.trim_end_matches('/'))
+            .unwrap_or("");
+        video_paths()
+            .iter()
+            .map(|name| {
+                let url = format!(
+                    "{}/api/projects/{}/videos/{}/bytes",
+                    base,
+                    urlencoding::encode(&project_name),
+                    urlencoding::encode(name),
+                );
+                (name.clone(), url)
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
+
+    // Merged sorted list of all media (images + videos) for unified gallery display.
+    let all_media: Vec<(String, bool)> = {
+        let imgs = image_paths();
+        let vids = video_paths();
+        let mut all: Vec<(String, bool)> = imgs.into_iter().map(|n| (n, false)).collect();
+        all.extend(vids.into_iter().map(|n| (n, true)));
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        all
+    };
 
     rsx! {
         div {
@@ -1217,87 +1449,128 @@ pub fn ImagesTab(project_name: String) -> Element {
                 }
             }
 
-            // ── Fullscreen image viewer (on‑demand fetch) ──────────────────
-            //
-            // When the user opens fullscreen for an image that isn't cached
-            // (e.g. in list mode where we only fetch sizes), we fetch its bytes
-            // on demand and store them in `img_cache` so both list and gallery
-            // modes share the same rendering path.
+            // ── Fullscreen media viewer (on‑demand fetch) ──────────────────
+            // Supports both images and videos.
             {
                 if let Some(fullscreen_name) = fullscreen_image() {
-                    // On‑demand fetch: if the image isn't cached yet (list mode
-                    // cold cache), use_resource fires and populates img_cache.
-                    let cache_entry = img_cache().get(&fullscreen_name).cloned();
-                    let (full_image_url, size_bytes) = cache_entry.unwrap_or_else(|| (String::new(), 0));
+                    let is_video = video_paths().contains(&fullscreen_name);
 
-                    let img_id = format!("fullscreen-img-{}", fullscreen_name);
-                    let metadata_id = format!("metadata-fullscreen-{}", fullscreen_name);
-                    let img_id_onload = img_id.clone();
-                    let metadata_id_onload = metadata_id.clone();
-                    let fname_onload = fullscreen_name.clone();
-                    let cached_size = size_bytes;
-
-                    // Trigger fetch for uncached images.
-                    let fullscreen_img_cache = img_cache;
-                    let fullscreen_fetch_project = project_name.clone();
-                    let fname_for_fetch = fullscreen_name.clone();
-                    let _ = use_resource(move || {
-                        // Clone FnMut captures so the closure stays reusable.
-                        let name = fname_for_fetch.clone();
-                        let project = fullscreen_fetch_project.clone();
-                        async move {
-                            if !fullscreen_img_cache.read().contains_key(&name) {
-                                fetch_and_cache_single(
-                                    name.clone(),
-                                    project.clone(),
-                                    fullscreen_img_cache,
-                                )
-                                .await;
-                            }
-                        }
-                    });
-
-                    let size_mb = cached_size as f64 / 1024.0 / 1024.0;
-                    rsx! {
-                        div {
-                            class: "fullscreen-modal",
-                            onclick: move |_| fullscreen_image.set(None),
-
+                    if is_video {
+                        // ── Video fullscreen ────────────────────────────────
+                        let video_url = video_urls.get(&fullscreen_name).map(|s| s.as_str()).unwrap_or("");
+                        let size = file_sizes().get(&fullscreen_name).copied().unwrap_or(0);
+                        let size_mb = size as f64 / 1024.0 / 1024.0;
+                        let cap = if size > 0 {
+                            format!("{} \u{00b7} {:.2} MB", &fullscreen_name, size_mb)
+                        } else {
+                            fullscreen_name.clone()
+                        };
+                        rsx! {
                             div {
-                                class: "fullscreen-container",
-                                onclick: move |evt| evt.stop_propagation(),
-
-                                button {
-                                    class: "fullscreen-close",
-                                    onclick: move |_| fullscreen_image.set(None),
-                                    title: "Close (ESC)",
-                                    "×"
-                                }
+                                class: "fullscreen-modal",
+                                onclick: move |_| fullscreen_image.set(None),
 
                                 div {
-                                    class: "fullscreen-caption",
-                                    id: metadata_id.clone(),
-                                    if full_image_url.is_empty() { "Loading…" } else { "" }
+                                    class: "fullscreen-container",
+                                    onclick: move |evt| evt.stop_propagation(),
+
+                                    button {
+                                        class: "fullscreen-close",
+                                        onclick: move |_| fullscreen_image.set(None),
+                                        title: "Close (ESC)",
+                                        "\u{00d7}"
+                                    }
+
+                                    div {
+                                        class: "fullscreen-caption",
+                                        "{cap}"
+                                    }
+                                    video {
+                                        src: "{video_url}",
+                                        preload: "auto",
+                                        controls: true,
+                                        class: "fullscreen-video",
+                                        autoplay: true,
+                                    }
                                 }
-                                if !full_image_url.is_empty() {
-                                    img {
-                                        src: full_image_url.clone(),
-                                        alt: fullscreen_name.clone(),
-                                        class: "fullscreen-image",
-                                        id: img_id.clone(),
-                                        onload: move |_| {
-                                            eval(&format!(
-                                                r#"const img = document.getElementById('{id}');
-                                                   const meta = document.getElementById('{mid}');
-                                                   if (img && meta) {{
-                                                     meta.innerHTML = img.naturalWidth + 'x' + img.naturalHeight
-                                                       + ' · {sz:.3} MB · {fname}';
-                                                   }}"#,
-                                                id = img_id_onload,
-                                                mid = metadata_id_onload,
-                                                sz = size_mb,
-                                                fname = fname_onload,
-                                            ));
+                            }
+                        }
+                    } else {
+                        // ── Image fullscreen (on‑demand fetch) ──────────────
+                        // When the user opens fullscreen for an image that isn't cached
+                        // (e.g. in list mode where we only fetch sizes), we fetch its bytes
+                        // on demand and store them in `img_cache`.
+                        let cache_entry = img_cache().get(&fullscreen_name).cloned();
+                        let (full_image_url, size_bytes) = cache_entry.unwrap_or_else(|| (String::new(), 0));
+
+                        let img_id = format!("fullscreen-img-{}", fullscreen_name);
+                        let metadata_id = format!("metadata-fullscreen-{}", fullscreen_name);
+                        let img_id_onload = img_id.clone();
+                        let metadata_id_onload = metadata_id.clone();
+                        let fname_onload = fullscreen_name.clone();
+                        let cached_size = size_bytes;
+
+                        // Trigger fetch for uncached images.
+                        let fullscreen_img_cache = img_cache;
+                        let fullscreen_fetch_project = project_name.clone();
+                        let fname_for_fetch = fullscreen_name.clone();
+                        let _ = use_resource(move || {
+                            let name = fname_for_fetch.clone();
+                            let project = fullscreen_fetch_project.clone();
+                            async move {
+                                if !fullscreen_img_cache.read().contains_key(&name) {
+                                    fetch_and_cache_single(
+                                        name.clone(),
+                                        project.clone(),
+                                        fullscreen_img_cache,
+                                    )
+                                    .await;
+                                }
+                            }
+                        });
+
+                        let size_mb = cached_size as f64 / 1024.0 / 1024.0;
+                        rsx! {
+                            div {
+                                class: "fullscreen-modal",
+                                onclick: move |_| fullscreen_image.set(None),
+
+                                div {
+                                    class: "fullscreen-container",
+                                    onclick: move |evt| evt.stop_propagation(),
+
+                                    button {
+                                        class: "fullscreen-close",
+                                        onclick: move |_| fullscreen_image.set(None),
+                                        title: "Close (ESC)",
+                                        "×"
+                                    }
+
+                                    div {
+                                        class: "fullscreen-caption",
+                                        id: metadata_id.clone(),
+                                        if full_image_url.is_empty() { "Loading…" } else { "" }
+                                    }
+                                    if !full_image_url.is_empty() {
+                                        img {
+                                            src: full_image_url.clone(),
+                                            alt: fullscreen_name.clone(),
+                                            class: "fullscreen-image",
+                                            id: img_id.clone(),
+                                            onload: move |_| {
+                                                eval(&format!(
+                                                    r#"const img = document.getElementById('{id}');
+                                                       const meta = document.getElementById('{mid}');
+                                                       if (img && meta) {{
+                                                         meta.innerHTML = img.naturalWidth + 'x' + img.naturalHeight
+                                                           + ' · {sz:.3} MB · {fname}';
+                                                       }}"#,
+                                                    id = img_id_onload,
+                                                    mid = metadata_id_onload,
+                                                    sz = size_mb,
+                                                    fname = fname_onload,
+                                                ));
+                                            }
                                         }
                                     }
                                 }
@@ -1312,6 +1585,7 @@ pub fn ImagesTab(project_name: String) -> Element {
             div {
                 class: "images-toolbar",
 
+                // ── First group: upload and demo actions ────────────────
                 div {
                     class: "toolbar-group",
 
@@ -1332,11 +1606,11 @@ pub fn ImagesTab(project_name: String) -> Element {
                                 let pn = project_name.clone();
                                 spawn(async move {
                                     // ── File picker (works everywhere: web, desktop, Android) ──
-                                    // Opens the browser's native file-picker via a hidden
-                                    // <input type="file"> element, reads each selected
-                                    // file as bytes in the browser, and uploads them to
-                                    // the server one-by-one through the existing
-                                    // add_project_image endpoint.
+                                                            // Opens the browser's native file-picker via a hidden
+                                                            // <input type="file"> element, reads each selected
+                                                            // file as bytes in the browser, and uploads them to
+                                                            // the server one-by-one through the existing
+                                                            // add_project_image endpoint.
 
                                     let files = crate::picker::pick_files(Some("image/*"), true).await;
 
@@ -1388,7 +1662,63 @@ pub fn ImagesTab(project_name: String) -> Element {
                         Icon { icon: BsUpload }
                         span {
                             class: "btn-label",
-                            if uploading() { "Uploading..." } else { "Upload" }
+                            if uploading() { "Uploading..." } else { "Upload Image" }
+                        }
+                    }
+
+                    // ── Upload Video (direct stream, avoids WASM memory) ──
+                    button {
+                        class: "action-btn action-btn-primary",
+                        title: if video_uploading() { "Uploading..." } else { "Upload videos from disk" },
+                        disabled: video_uploading() || uploading() || demo_loading(),
+                        onclick: {
+                            let project_name = project_name.clone();
+                            move |_| {
+                                video_uploading.set(true);
+                                error_message.set(None);
+                                let pn = project_name.clone();
+                                spawn(async move {
+                                    let base = crate::backend_url::BACKEND_URL
+                                        .get()
+                                        .map(|s| s.trim_end_matches('/'))
+                                        .unwrap_or("");
+                                    let upload_prefix =
+                                        format!("{}/api/projects/{}/videos/",
+                                            base,
+                                            urlencoding::encode(&pn));
+                                    let (uploaded, upload_errors) = crate::picker::upload_files_direct(
+                                        Some("video/*,.mp4,.webm,.mkv,.avi,.mov,.m4v,.mpg,.mpeg,.wmv,.flv,.3gp"),
+                                        true,
+                                        &upload_prefix,
+                                    ).await;
+
+                                    let count = uploaded.len();
+                                    if count > 0 {
+                                        let mut msg = format!("Uploaded {} video(s). Videos are kept in the videos/ folder and will be automatically processed when the pipeline runs.", count);
+                                        if !upload_errors.is_empty() {
+                                            msg.push_str(&format!(" {} upload(s) failed.", upload_errors.len()));
+                                            error_message.set(Some(upload_errors.join("; ")));
+                                        }
+                                        info_message.set(Some(msg));
+                                        if let Ok(vids) = crate::server::get_project_videos(pn).await {
+                                            video_paths.set(vids);
+                                        }
+                                    } else {
+                                        if !upload_errors.is_empty() {
+                                            error_message.set(Some(format!("Video upload failed: {}", upload_errors.join("; "))));
+                                        } else {
+                                            info_message.set(Some("No videos were uploaded.".to_string()));
+                                        }
+                                    }
+
+                                    video_uploading.set(false);
+                                });
+                            }
+                        },
+                        Icon { icon: BsCameraVideo }
+                        span {
+                            class: "btn-label",
+                            if video_uploading() { "Uploading..." } else { "Upload Video" }
                         }
                     }
 
@@ -1427,6 +1757,45 @@ pub fn ImagesTab(project_name: String) -> Element {
                     }
                 }
 
+                // ── Second group: video info and management ──────────────
+                div {
+                    class: "toolbar-group",
+
+                    if has_videos {
+                        div {
+                            class: "action-btn images-info",
+                            "{num_videos} " Icon { icon: BsCameraVideo }
+                        }
+                    }
+
+                    if has_videos {
+                        button {
+                            class: "action-btn action-btn-danger",
+                            onclick: {
+                                let project_name = project_name.clone();
+                                move |_| {
+                                    let project_name = project_name.clone();
+                                    spawn(async move {
+                                        match crate::server::clear_project_videos(project_name).await {
+                                            Ok(_) => {
+                                                video_paths.set(Vec::new());
+                                                info_message.set(Some("All videos cleared successfully".to_string()));
+                                            }
+                                            Err(e) => {
+                                                error_message.set(Some(format!("Failed to clear videos: {}", e)));
+                                            }
+                                        }
+                                    });
+                                }
+                            },
+                            title: "Delete all videos",
+                            Icon { icon: BsXCircle }
+                            span { class: "btn-label", "Clear Videos" }
+                        }
+                    }
+                }
+
+                // ── Third group: view toggle and selection actions ───────
                 div {
                     class: "toolbar-group",
 
@@ -1443,7 +1812,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                         }
                     }
 
-                    if has_images {
+                    if has_images || has_videos {
                         button {
                             class: "action-btn",
                             onclick: select_all,
@@ -1470,7 +1839,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                         button {
                             class: "action-btn action-btn-danger",
                             onclick: on_delete_selected,
-                            title: "Delete selected images",
+                            title: "Delete selected items",
                             Icon { icon: BsTrash3 }
                             span { class: "btn-label", "Delete ({num_selected})" }
                         }
@@ -1488,89 +1857,128 @@ pub fn ImagesTab(project_name: String) -> Element {
                 }
             }
 
-            if has_images {
+            if has_media {
                 if show_images() {
                     div {
                         class: "image-gallery",
                         {
-                            let paths = image_paths();
                             let selected = selected_images();
                             let cache = img_cache();
+                            let urls = &video_urls;
                             let mut elements = Vec::new();
-                            for image_name in paths.into_iter() {
-                                let is_selected = selected.contains(&image_name);
-                                // Blob / data URL from the cache.  Shows nothing until the
-                                // background fetch completes — the img element is simply not
-                                // rendered, keeping the tile visible as a loading placeholder.
-                                let Some((image_url, size_bytes)) = cache.get(&image_name).cloned()
-                                    else { continue; };
-                                let size_mb = size_bytes as f64 / 1024.0 / 1024.0;
-                                // Safe ID (avoid special chars from file names).
-                                let safe_image_name = urlencoding::encode(&image_name);
-                                let img_id = format!("thumbnail-{}", safe_image_name);
-                                let metadata_id = format!("metadata-{}", safe_image_name);
-                                let image_name_for_checkbox = image_name.clone();
-                                let image_name_for_fullscreen = image_name.clone();
-                                let image_name_for_img = image_name.clone();
-                                elements.push(rsx! {
-                                    div {
-                                        key: "{image_name}",
-                                        class: if is_selected { "image-item selected" } else { "image-item" },
-
+                            for (media_name, is_video) in all_media.iter() {
+                                if *is_video {
+                                    // ── Video item ────────────────────────────
+                                    let url = urls.get(media_name).map(|s| s.as_str()).unwrap_or("");
+                                    let vname_clone = media_name.clone();
+                                    let vname_checkbox = media_name.clone();
+                                    let is_vid_selected = selected_videos().contains(media_name);
+                                    elements.push(rsx! {
                                         div {
-                                            class: "image-checkbox",
-                                            input {
-                                                r#type: "checkbox",
-                                                checked: is_selected,
-                                                onchange: move |_| toggle_select(image_name_for_checkbox.clone()),
-                                                id: format!("checkbox-{}", safe_image_name),
+                                            key: "{media_name}",
+                                            class: if is_vid_selected { "image-item selected" } else { "image-item" },
+
+                                            div {
+                                                class: "image-checkbox",
+                                                input {
+                                                    r#type: "checkbox",
+                                                    checked: is_vid_selected,
+                                                    onchange: move |_| toggle_select_video(vname_checkbox.clone()),
+                                                    id: format!("video-checkbox-{}", urlencoding::encode(media_name)),
+                                                }
                                             }
-                                        }
 
-                                        button {
-                                            class: "image-fullscreen-btn",
-                                            title: "View fullscreen",
-                                            onclick: move |_| fullscreen_image.set(Some(image_name_for_fullscreen.clone())),
-                                            Icon { icon: BsArrowsFullscreen }
-                                        }
+                                            button {
+                                                class: "image-fullscreen-btn",
+                                                title: "View fullscreen",
+                                                onclick: move |_| fullscreen_image.set(Some(vname_clone.clone())),
+                                                Icon { icon: BsArrowsFullscreen }
+                                            }
 
-                                        div {
-                                            class: "image-info-overlay",
+                                            video {
+                                                src: "{url}",
+                                                preload: "metadata",
+                                                controls: true,
+                                                class: "thumbnail video-player",
+                                            }
+
                                             div {
                                                 class: "image-name",
-                                                div {
-                                                    class: "image-metadata",
-                                                    id: metadata_id.clone(),
-                                                    "Loading..."
-                                                }
-                                                "{image_name}"
+                                                "{media_name}"
                                             }
                                         }
+                                    });
+                                } else {
+                                    // ── Image item ────────────────────────────
+                                    let is_selected = selected.contains(media_name);
+                                    let Some((image_url, size_bytes)) = cache.get(media_name).cloned()
+                                        else { continue; };
+                                    let size_mb = size_bytes as f64 / 1024.0 / 1024.0;
+                                    let safe_image_name = urlencoding::encode(media_name);
+                                    let img_id = format!("thumbnail-{}", safe_image_name);
+                                    let metadata_id = format!("metadata-{}", safe_image_name);
+                                    let image_name_for_checkbox = media_name.clone();
+                                    let image_name_for_fullscreen = media_name.clone();
+                                    let image_name_for_img = media_name.clone();
+                                    elements.push(rsx! {
+                                        div {
+                                            key: "{media_name}",
+                                            class: if is_selected { "image-item selected" } else { "image-item" },
 
-                                        img {
-                                            src: image_url.clone(),
-                                            alt: image_name.clone(),
-                                            id: img_id.clone(),
-                                            onclick: move |_| toggle_select(image_name_for_img.clone()),
-                                            class: "thumbnail",
-                                            onload: move |_| {
-                                                // Size is already known; read only dimensions from the DOM.
-                                                let js = format!(
-                                                    r#"const img = document.getElementById('{id}');
-                                                       const meta = document.getElementById('{mid}');
-                                                       if (img && meta) {{
-                                                         meta.innerHTML = img.naturalWidth + 'x' + img.naturalHeight
-                                                           + '<br/>{sz:.3} MB';
-                                                       }}"#,
-                                                    id = img_id,
-                                                    mid = metadata_id,
-                                                    sz = size_mb,
-                                                );
-                                                eval(&js);
+                                            div {
+                                                class: "image-checkbox",
+                                                input {
+                                                    r#type: "checkbox",
+                                                    checked: is_selected,
+                                                    onchange: move |_| toggle_select(image_name_for_checkbox.clone()),
+                                                    id: format!("checkbox-{}", safe_image_name),
+                                                }
+                                            }
+
+                                            button {
+                                                class: "image-fullscreen-btn",
+                                                title: "View fullscreen",
+                                                onclick: move |_| fullscreen_image.set(Some(image_name_for_fullscreen.clone())),
+                                                Icon { icon: BsArrowsFullscreen }
+                                            }
+
+                                            div {
+                                                class: "image-info-overlay",
+                                                div {
+                                                    class: "image-name",
+                                                    div {
+                                                        class: "image-metadata",
+                                                        id: metadata_id.clone(),
+                                                        "Loading..."
+                                                    }
+                                                    "{media_name}"
+                                                }
+                                            }
+
+                                            img {
+                                                src: image_url.clone(),
+                                                alt: media_name.clone(),
+                                                id: img_id.clone(),
+                                                onclick: move |_| toggle_select(image_name_for_img.clone()),
+                                                class: "thumbnail",
+                                                onload: move |_| {
+                                                    let js = format!(
+                                                        r#"const img = document.getElementById('{id}');
+                                                           const meta = document.getElementById('{mid}');
+                                                           if (img && meta) {{
+                                                             meta.innerHTML = img.naturalWidth + 'x' + img.naturalHeight
+                                                               + '<br/>{sz:.3} MB';
+                                                           }}"#,
+                                                        id = img_id,
+                                                        mid = metadata_id,
+                                                        sz = size_mb,
+                                                    );
+                                                    eval(&js);
+                                                }
                                             }
                                         }
-                                    }
-                                });
+                                    });
+                                }
                             }
                             rsx! { for element in elements { {element} } }
                         }
@@ -1578,49 +1986,87 @@ pub fn ImagesTab(project_name: String) -> Element {
                 } else {
                     div {
                         class: "image-list-compact",
-                        for image_name in image_paths() {
-                            div {
-                                key: "{image_name}",
-                                class: if selected_images().contains(&image_name) { "image-list-item selected" } else { "image-list-item" },
-                                input {
-                                    r#type: "checkbox",
-                                    checked: selected_images().contains(&image_name),
-                                    onchange: {
-                                        let name = image_name.clone();
-                                        move |_| toggle_select(name.clone())
-                                    },
+                        for (media_name, is_video) in all_media.iter().map(|(n, v)| (n.clone(), *v)) {
+                            if is_video {
+                                div {
+                                    key: "{media_name}",
+                                    class: if selected_videos().contains(&media_name) { "image-list-item selected" } else { "image-list-item" },
+                                    input {
+                                        r#type: "checkbox",
+                                        checked: selected_videos().contains(&media_name),
+                                        onchange: {
+                                            let n = media_name.clone();
+                                            move |_| toggle_select_video(n.clone())
+                                        },
+                                    }
+                                    span {
+                                        class: "item-name video-name",
+                                        onclick: {
+                                            let n = media_name.clone();
+                                            move |_| fullscreen_image.set(Some(n.clone()))
+                                        },
+                                        Icon { icon: BsCameraVideo }
+                                        " {media_name}"
+                                    }
+                                    button {
+                                        class: "list-fullscreen-btn",
+                                        title: "View fullscreen",
+                                        onclick: {
+                                            let n = media_name.clone();
+                                            move |_| fullscreen_image.set(Some(n.clone()))
+                                        },
+                                        Icon { icon: BsArrowsFullscreen }
+                                    }
+                                    span { class: "item-size",
+                                        {
+                                            let sz = file_sizes().get(&media_name).copied();
+                                            match sz {
+                                                Some(s) => format!("{:.2} MB", s as f64 / 1048576.0),
+                                                None => String::new(),
+                                            }
+                                        }
+                                    }
                                 }
-                                span {
-                                    class: "item-name",
-                                    onclick: {
-                                        let name = image_name.clone();
-                                        move |_| fullscreen_image.set(Some(name.clone()))
-                                    },
-                                    "{image_name}"
-                                }
-                                button {
-                                    class: "list-fullscreen-btn",
-                                    title: "View fullscreen",
-                                    onclick: {
-                                        let name = image_name.clone();
-                                        move |_| fullscreen_image.set(Some(name.clone()))
-                                    },
-                                    Icon { icon: BsArrowsFullscreen }
-                                }
-                                span { class: "item-size",
-                                    {
-                                        // In list mode we populate `file_sizes`
-                                        // via HEAD requests so we never
-                                        // download full image bytes just for
-                                        // a size column.
-                                        let sz_from_size_cache =
-                                            file_sizes().get(&image_name).copied();
-                                        let sz_from_img_cache =
-                                            img_cache().get(&image_name).map(|(_, s)| *s as u64);
-                                        let sz = sz_from_size_cache.or(sz_from_img_cache);
-                                        match sz {
-                                            Some(s) => format!("{:.2} MB", s as f64 / 1048576.0),
-                                            None => String::new(),
+                            } else {
+                                div {
+                                    key: "{media_name}",
+                                    class: if selected_images().contains(&media_name) { "image-list-item selected" } else { "image-list-item" },
+                                    input {
+                                        r#type: "checkbox",
+                                        checked: selected_images().contains(&media_name),
+                                        onchange: {
+                                            let n = media_name.clone();
+                                            move |_| toggle_select(n.clone())
+                                        },
+                                    }
+                                    span {
+                                        class: "item-name",
+                                        onclick: {
+                                            let n = media_name.clone();
+                                            move |_| fullscreen_image.set(Some(n.clone()))
+                                        },
+                                        "{media_name}"
+                                    }
+                                    button {
+                                        class: "list-fullscreen-btn",
+                                        title: "View fullscreen",
+                                        onclick: {
+                                            let n = media_name.clone();
+                                            move |_| fullscreen_image.set(Some(n.clone()))
+                                        },
+                                        Icon { icon: BsArrowsFullscreen }
+                                    }
+                                    span { class: "item-size",
+                                        {
+                                            let sz_from_size_cache =
+                                                file_sizes().get(&media_name).copied();
+                                            let sz_from_img_cache =
+                                                img_cache().get(&media_name).map(|(_, s)| *s as u64);
+                                            let sz = sz_from_size_cache.or(sz_from_img_cache);
+                                            match sz {
+                                                Some(s) => format!("{:.2} MB", s as f64 / 1048576.0),
+                                                None => String::new(),
+                                            }
                                         }
                                     }
                                 }
@@ -1636,7 +2082,7 @@ pub fn ImagesTab(project_name: String) -> Element {
                     p { "No images in this project" }
                     p {
                         class: "hint",
-                        "Upload images, capture photos, or download demo images to get started."
+                        "Upload images, capture photos, upload videos, or download demo images to get started."
                     }
                 }
             }

@@ -30,7 +30,7 @@ pub fn ProjectPage() -> Element {
     let route = use_route::<Route>();
     let name = match &route {
         Route::ProjectOverview { name }
-        | Route::ProjectImages { name }
+        | Route::ProjectGallery { name }
         | Route::ProjectConfig { name }
         | Route::ProjectLogs { name }
         | Route::ProjectOutputs { name } => name.clone(),
@@ -52,7 +52,7 @@ pub fn ProjectPage() -> Element {
     use_effect(move || {
         let route = use_route::<Route>();
         let tab = match &route {
-            Route::ProjectImages { .. } | Route::ProjectOverview { .. } => "images",
+            Route::ProjectGallery { .. } | Route::ProjectOverview { .. } => "images",
             Route::ProjectConfig { .. } => "config",
             Route::ProjectLogs { .. } => "logs",
             Route::ProjectOutputs { .. } => "outputs",
@@ -61,7 +61,7 @@ pub fn ProjectPage() -> Element {
         active_tab.set(Some(tab.to_string()));
     });
     let initial_tab = match &route {
-        Route::ProjectImages { .. } | Route::ProjectOverview { .. } => "images",
+        Route::ProjectGallery { .. } | Route::ProjectOverview { .. } => "images",
         Route::ProjectConfig { .. } => "config",
         Route::ProjectLogs { .. } => "logs",
         Route::ProjectOutputs { .. } => "outputs",
@@ -77,7 +77,7 @@ pub fn ProjectPage() -> Element {
         move |tab: String| {
             debug!(project_name = %name, new_tab = %tab, "Switching project tab via route");
             let r = match tab.as_str() {
-                "images" => Route::ProjectImages { name: name.clone() },
+                "images" => Route::ProjectGallery { name: name.clone() },
                 "config" => Route::ProjectConfig { name: name.clone() },
                 "logs" => Route::ProjectLogs { name: name.clone() },
                 "outputs" => Route::ProjectOutputs { name: name.clone() },
@@ -137,7 +137,7 @@ pub fn ProjectPage() -> Element {
                             value: "images".to_string(),
                             index: 0usize,
                             Icon { icon: BsImages }
-                            span { class: "tab-label", "Images" }
+                            span { class: "tab-label", "Gallery" }
                         }
                         TabTrigger {
                             value: "config".to_string(),

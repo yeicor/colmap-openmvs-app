@@ -163,6 +163,31 @@
 }
 
 /* ============================================================================
+   Video Player (inline in gallery)
+   ============================================================================ */
+
+.image-item .video-player {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    background-color: var(--primary-color);
+}
+
+.image-item .video-player::-webkit-media-controls-panel {
+    /* Slightly transparent controls overlay */
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent);
+}
+
+/* List view: video items show a camera-video icon instead of checkbox */
+.image-list-item .video-name svg {
+    vertical-align: middle;
+    margin-right: 0.25rem;
+    width: 1rem;
+    height: 1rem;
+}
+
+/* ============================================================================
    Compact List View (thumbnails hidden)
    ============================================================================ */
 
@@ -458,7 +483,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background-color: rgba(0, 0, 0, 0.9);
+    background-color: color-mix(in srgb, var(--primary-color) 90%, rgba(0, 0, 0, 0.95));
     backdrop-filter: blur(4px);
     animation: fadeIn 0.2s ease-out;
 }
@@ -490,6 +515,13 @@
     height: 100%;
     object-fit: contain;
     object-position: center;
+}
+
+.fullscreen-video {
+    max-width: 100%;
+    max-height: 80vh;
+    object-fit: contain;
+    background: var(--primary-color);
 }
 
 .fullscreen-close {
@@ -829,9 +861,9 @@
     font-size: 0.75em;
     font-weight: 700;
     letter-spacing: 0.02em;
-    color: #f59e0b;
-    background-color: color-mix(in srgb, #f59e0b 15%, transparent);
-    border: 1px solid color-mix(in srgb, #f59e0b 40%, transparent);
+    color: var(--secondary-warning-color);
+    background-color: color-mix(in srgb, var(--secondary-warning-color) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--secondary-warning-color) 40%, transparent);
     border-radius: 9999px;
 }
 

@@ -43,6 +43,11 @@ pub fn project_images_path(project_name: &str, projects_folder: &str) -> dioxus:
     Ok(Path::new(projects_folder).join(project_name).join("images"))
 }
 
+pub fn project_videos_path(project_name: &str, projects_folder: &str) -> dioxus::Result<PathBuf> {
+    validate_project_name(project_name)?;
+    Ok(Path::new(projects_folder).join(project_name).join("videos"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

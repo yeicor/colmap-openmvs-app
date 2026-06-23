@@ -21,7 +21,7 @@ pub mod demo;
 
 use logging::init as init_logging;
 pub use views::{
-    ProjectConfig, ProjectImages, ProjectLogs, ProjectOutputs, ProjectOverview, ProjectPage,
+    ProjectConfig, ProjectGallery, ProjectLogs, ProjectOutputs, ProjectOverview, ProjectPage,
     Projects, ProjectsSidebar, SettingsGeneral, SettingsPageLayout, SettingsRuntime, StartupTasks,
     Viewer,
 };
@@ -44,7 +44,7 @@ pub enum Route {
             #[route("/project/:name")]
             ProjectOverview { name: String },
             #[route("/project/:name/images")]
-            ProjectImages { name: String },
+            ProjectGallery { name: String },
             #[route("/project/:name/config")]
             ProjectConfig { name: String },
             #[route("/project/:name/logs")]
