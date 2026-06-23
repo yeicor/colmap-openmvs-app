@@ -330,7 +330,10 @@ pub enum TaskEvent {
         /// The raw log line
         line: String,
     },
-    /// The list of all expected stage names, emitted once before any ::group markers
+    /// The list of (some of the) remaining stage names, emitted at any point during execution.
+    /// May arrive after some stages have already started/completed, and may be emitted
+    /// multiple times as more pipeline stages are discovered (pipelines are now swappable).
+    /// In the future, this will exclude past and in-progress groups.
     PipelineRemainingGroups(Vec<String>),
     /// A stage started in the pipeline
     PipelineStageStarted {
