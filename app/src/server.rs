@@ -145,10 +145,19 @@ pub async fn get_project_image_bytes(
 
     #[cfg(not(feature = "fullstack"))]
     {
-        let data = backend::get_project_image_bytes(project_name, image_name).await?;
-        use futures::StreamExt;
-        let stream = data.stream.filter_map(|r| async move { r.ok() });
-        Ok(ByteStream::new(stream))
+        // Demo mode: backend returns ByteStream directly
+        #[cfg(feature = "demo")]
+        {
+            backend::get_project_image_bytes(project_name, image_name).await
+        }
+        // Non-demo: real backend returns ImageData with streaming fields
+        #[cfg(not(feature = "demo"))]
+        {
+            let data = backend::get_project_image_bytes(project_name, image_name).await?;
+            use futures::StreamExt;
+            let stream = data.stream.filter_map(|r| async move { r.ok() });
+            Ok(ByteStream::new(stream))
+        }
     }
 }
 
@@ -320,10 +329,19 @@ pub async fn get_project_video_bytes(
 
     #[cfg(not(feature = "fullstack"))]
     {
-        let data = backend::get_project_video_bytes(project_name, video_name).await?;
-        use futures::StreamExt;
-        let stream = data.stream.filter_map(|r| async move { r.ok() });
-        Ok(ByteStream::new(stream))
+        // Demo mode: backend returns ByteStream directly
+        #[cfg(feature = "demo")]
+        {
+            backend::get_project_video_bytes(project_name, video_name).await
+        }
+        // Non-demo: real backend returns VideoData with streaming fields
+        #[cfg(not(feature = "demo"))]
+        {
+            let data = backend::get_project_video_bytes(project_name, video_name).await?;
+            use futures::StreamExt;
+            let stream = data.stream.filter_map(|r| async move { r.ok() });
+            Ok(ByteStream::new(stream))
+        }
     }
 }
 
