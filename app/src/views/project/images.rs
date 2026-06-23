@@ -2001,6 +2001,10 @@ pub fn GalleryTab(project_name: String) -> Element {
                                     }
                                     span {
                                         class: "item-name video-name",
+                                        onclick: {
+                                            let n = media_name.clone();
+                                            move |_| fullscreen_image.set(Some(n.clone()))
+                                        },
                                         Icon { icon: BsCameraVideo }
                                         " {media_name}"
                                     }
