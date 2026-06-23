@@ -271,6 +271,34 @@ pub async fn delete_project_image(_project_name: String, _image_name: String) ->
 pub async fn clear_project_images(_project_name: String) -> Result<()> {
     read_only_error()
 }
+
+// ---------------------------------------------------------------------------
+// Project videos (read-only stub)
+// ---------------------------------------------------------------------------
+
+pub async fn get_project_videos(_project_name: String) -> Result<Vec<String>> {
+    Ok(vec![])
+}
+pub async fn add_project_video(
+    _project_name: String,
+    _video_name: String,
+    _body: ByteStream,
+) -> Result<()> {
+    read_only_error()
+}
+pub async fn delete_project_video(_project_name: String, _video_name: String) -> Result<()> {
+    read_only_error()
+}
+pub async fn clear_project_videos(_project_name: String) -> Result<()> {
+    read_only_error()
+}
+pub async fn get_project_video_bytes(
+    _project_name: String,
+    _video_name: String,
+) -> Result<ByteStream> {
+    read_only_error()
+}
+
 pub async fn batch_resize_images(_project_name: String, _max_dimension: u32) -> Result<String> {
     read_only_error()
 }

@@ -17,8 +17,10 @@ pub use android_settings_validation::AndroidSettingsValidation;
 
 mod project;
 pub use project::{
-    add_project_image, batch_resize_images, clear_project_images, delete_project_image,
-    download_demo_images, get_project_image_bytes, get_project_images, ImageData,
+    add_project_image, add_project_video, batch_resize_images, clear_project_images,
+    clear_project_videos, delete_project_image, delete_project_video, download_demo_images,
+    get_project_image_bytes, get_project_images, get_project_video_bytes, get_project_videos,
+    ImageData, VideoData,
 };
 
 mod files;
@@ -108,8 +110,8 @@ fn walk_for_outputs(
         };
 
         if path.is_dir() {
-            // Skip the images directory at the project root (those are inputs, not outputs)
-            if is_root_dir && name == "images" {
+            // Skip input directories at the project root (images/ and videos/ are inputs, not outputs)
+            if is_root_dir && (name == "images" || name == "videos") {
                 continue;
             }
             walk_for_outputs(root, &path, out)?;
@@ -252,8 +254,8 @@ fn collect_files_for_zip(
         };
 
         if path.is_dir() {
-            // Skip the images directory at the project root
-            if dir == root && name == "images" {
+            // Skip input directories at the project root
+            if dir == root && (name == "images" || name == "videos") {
                 continue;
             }
             // Skip config/settings at root
@@ -407,8 +409,8 @@ pub async fn clear_project_outputs(project_name: String) -> DioxusResult<()> {
         let path = entry.path();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        // Preserve input images and project configuration
-        if name == "images" || name == "config.sh" {
+        // Preserve input directories (images, videos) and project configuration
+        if name == "images" || name == "videos" || name == "config.sh" {
             continue;
         }
 

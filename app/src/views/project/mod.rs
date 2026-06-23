@@ -18,10 +18,10 @@ pub use overview::ProjectOverview;
 /// Tab content for `/project/:name/images` (and overview redirects here).
 #[allow(unused_variables)]
 #[component]
-pub fn ProjectImages(name: String) -> Element {
+pub fn ProjectGallery(name: String) -> Element {
     rsx! {
         div { class: "dx-tabs-content dx-tabs-content-themed",
-            images::ImagesTab { project_name: name.clone() }
+            images::GalleryTab { project_name: name.clone() }
         }
     }
 }

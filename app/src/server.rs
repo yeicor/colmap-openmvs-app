@@ -10,6 +10,12 @@ use colmap_openmvs_api::{
     ProjectRunStatus, RuntimeInfo, SavedProjectConfig, Settings, TaskInfo,
 };
 
+// Shared HTTP streaming response type used by both image and video bytes endpoints.
+#[cfg(feature = "fullstack")]
+type MediaResponse = dioxus::fullstack::http::Response<dioxus::fullstack::body::Body>;
+#[cfg(not(feature = "fullstack"))]
+type MediaResponse = ByteStream;
+
 #[cfg(all(feature = "server", not(feature = "demo")))]
 use colmap_openmvs_backend as backend;
 
@@ -139,8 +145,10 @@ pub async fn get_project_image_bytes(
 
     #[cfg(not(feature = "fullstack"))]
     {
-        // Demo / non-fullstack: dead code, return empty.
-        backend::get_project_image_bytes(project_name, image_name).await
+        let data = backend::get_project_image_bytes(project_name, image_name).await?;
+        use futures::StreamExt;
+        let stream = data.stream.filter_map(|r| async move { r.ok() });
+        Ok(ByteStream::new(stream))
     }
 }
 
@@ -202,6 +210,121 @@ pub async fn delete_project_image(project_name: String, image_name: String) -> R
 #[cfg_attr(not(feature = "demo"), delete("/api/projects/{project_name}/images"))]
 pub async fn clear_project_images(project_name: String) -> Result<()> {
     backend::clear_project_images(project_name).await
+}
+
+// ---------------------------------------------------------------------------
+// Project videos
+// ---------------------------------------------------------------------------
+
+#[cfg_attr(not(feature = "demo"), get("/api/projects/{project_name}/videos"))]
+pub async fn get_project_videos(project_name: String) -> Result<Vec<String>> {
+    backend::get_project_videos(project_name).await
+}
+
+#[cfg_attr(
+    not(feature = "demo"),
+    post("/api/projects/{project_name}/videos/{video_name}")
+)]
+pub async fn add_project_video(
+    project_name: String,
+    video_name: String,
+    body: ByteStream,
+) -> Result<()> {
+    backend::add_project_video(project_name, video_name, body).await
+}
+
+#[cfg_attr(
+    not(feature = "demo"),
+    delete("/api/projects/{project_name}/videos/{video_name}")
+)]
+pub async fn delete_project_video(project_name: String, video_name: String) -> Result<()> {
+    backend::delete_project_video(project_name, video_name).await
+}
+
+#[cfg_attr(not(feature = "demo"), delete("/api/projects/{project_name}/videos"))]
+pub async fn clear_project_videos(project_name: String) -> Result<()> {
+    backend::clear_project_videos(project_name).await
+}
+
+/// Stream a project video with automatic HTTP caching (`ETag` + `304`).
+#[cfg_attr(
+    not(feature = "demo"),
+    get("/api/projects/{project_name}/videos/{video_name}/bytes")
+)]
+pub async fn get_project_video_bytes(
+    project_name: String,
+    video_name: String,
+) -> Result<MediaResponse> {
+    #[cfg(all(feature = "fullstack", not(feature = "demo")))]
+    {
+        use dioxus::fullstack::body::Body;
+        use dioxus::fullstack::http::Response;
+        use futures::StreamExt as _;
+
+        let data = backend::get_project_video_bytes(project_name, video_name).await?;
+
+        // ── Check If-None-Match ────────────────────────────────────
+        let is_match = dioxus::fullstack::FullstackContext::current()
+            .map(|ctx| {
+                let parts = ctx.parts_mut();
+                parts
+                    .headers
+                    .get(http::header::IF_NONE_MATCH)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|inm| inm == &data.etag)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+
+        if is_match {
+            let mut resp = Response::new(Body::empty());
+            *resp.status_mut() = http::StatusCode::NOT_MODIFIED;
+            resp.headers_mut().insert(
+                http::header::CACHE_CONTROL,
+                "public, no-cache".parse().unwrap(),
+            );
+            resp.headers_mut()
+                .insert(http::header::ETAG, data.etag.parse().unwrap());
+            resp.headers_mut()
+                .insert(http::header::CONTENT_TYPE, data.mime.parse().unwrap());
+            return Ok(resp);
+        }
+
+        // ── 200 OK with streaming body ─────────────────────────────
+        let mapped = data
+            .stream
+            .map(|r| r.map_err(|e| std::io::Error::other(e.to_string())));
+        let mut resp = Response::new(Body::from_stream(mapped));
+        resp.headers_mut().insert(
+            http::header::CACHE_CONTROL,
+            "public, no-cache".parse().unwrap(),
+        );
+        resp.headers_mut()
+            .insert(http::header::ETAG, data.etag.parse().unwrap());
+        resp.headers_mut()
+            .insert(http::header::CONTENT_TYPE, data.mime.parse().unwrap());
+        resp.headers_mut().insert(
+            http::header::CONTENT_LENGTH,
+            data.size.to_string().parse().unwrap(),
+        );
+        Ok(resp)
+    }
+
+    #[cfg(all(feature = "fullstack", feature = "demo"))]
+    {
+        let _ = (&project_name, &video_name);
+        Err(dioxus::CapturedError::msg(
+            "fullstack + demo is not a valid combination of features.",
+        ))
+    }
+
+    #[cfg(not(feature = "fullstack"))]
+    {
+        let data = backend::get_project_video_bytes(project_name, video_name).await?;
+        use futures::StreamExt;
+        let stream = data.stream.filter_map(|r| async move { r.ok() });
+        Ok(ByteStream::new(stream))
+    }
 }
 
 #[cfg_attr(

@@ -6,7 +6,7 @@ pub use settings::{SettingsGeneral, SettingsPageLayout, SettingsRuntime};
 
 mod project;
 pub use project::{
-    ProjectConfig, ProjectImages, ProjectLogs, ProjectOutputs, ProjectOverview, ProjectPage,
+    ProjectConfig, ProjectGallery, ProjectLogs, ProjectOutputs, ProjectOverview, ProjectPage,
 };
 
 mod startup_tasks;
