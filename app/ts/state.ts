@@ -52,8 +52,37 @@ export function buildInitialState(initialConfig?: Partial<ConfigState> | null): 
   };
 }
 
-/** Serialise camera + config to a base64 URL-safe blob string. */
+/**
+ * Recursively sort the keys of a JSON-serialisable value so that any two
+ * objects with the same contents always produce the same stringified form
+ * (canonical key ordering).
+ *
+ * - Arrays are left in place (their element order is significant).
+ * - null, boolean, number, string leaf values are returned unchanged.
+ * - Object keys are sorted alphabetically with a consistent tie-breaking
+ *   rule based on localeCompare (en-US, numeric: false, sensitivity: base).
+ */
+function sortObjectKeys<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(sortObjectKeys) as unknown as T;
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    sorted[key] = sortObjectKeys((value as Record<string, unknown>)[key]);
+  }
+  return sorted as T;
+}
+
+/**
+ * Serialise camera + config to a base64 URL-safe blob string.
+ *
+ * Keys are sorted alphabetically (recursively) so that the resulting
+ * base64 string is **canonical** — the same input always produces the
+ * same output, regardless of the build environment, the order in which
+ * properties were defined, or whether the object was round-tripped
+ * through a different JSON parser (e.g. Rust's serde_json with BTreeMap
+ * which also sorts keys alphabetically).
+ */
 export function encodeStateForUrl(cam: CameraState, config: ConfigState): string {
   const blob: StateBlob = { cam, config };
-  return btoa(JSON.stringify(blob));
+  return btoa(JSON.stringify(sortObjectKeys(blob)));
 }

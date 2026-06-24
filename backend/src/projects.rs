@@ -2,6 +2,7 @@ use anyhow::anyhow;
 use colmap_openmvs_api::types::{EnvVarConfig, Project, SavedProjectConfig};
 use dioxus::Result as DioxusResult;
 use std::path::Path;
+use tokio::fs;
 use tracing::{debug, error, info, warn};
 
 pub async fn get_projects() -> DioxusResult<Vec<Project>> {
@@ -42,9 +43,11 @@ pub async fn get_projects() -> DioxusResult<Vec<Project>> {
                     if path.is_dir() {
                         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                             debug!(project_name = %name, project_path = %path.display(), "Found project");
+                            let size = compute_dir_size(&path).await;
                             projects.push(Project {
                                 name: name.to_string(),
                                 path: path.to_string_lossy().to_string(),
+                                size,
                             });
                         }
                     }
@@ -63,6 +66,25 @@ pub async fn get_projects() -> DioxusResult<Vec<Project>> {
         "Successfully retrieved projects list"
     );
     Ok(projects)
+}
+
+/// Recursively compute the total size of a directory in bytes.
+async fn compute_dir_size(path: &Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(mut entries) = fs::read_dir(path).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let metadata = match entry.metadata().await {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if metadata.is_file() {
+                total += metadata.len();
+            } else if metadata.is_dir() {
+                total += Box::pin(compute_dir_size(&entry.path())).await;
+            }
+        }
+    }
+    total
 }
 
 pub async fn create_project(name: String) -> DioxusResult<Project> {
@@ -110,6 +132,7 @@ pub async fn create_project(name: String) -> DioxusResult<Project> {
     Ok(Project {
         name,
         path: project_path.to_string_lossy().to_string(),
+        size: 0,
     })
 }
 
@@ -252,8 +275,10 @@ pub async fn rename_project(name: String, new_name: String) -> DioxusResult<Proj
         })?;
 
     info!(old_name = %name, new_name = %new_name, new_path = %new_path.display(), "Project renamed successfully");
+    let size = compute_dir_size(&new_path).await;
     Ok(Project {
         name: new_name,
         path: new_path.to_string_lossy().to_string(),
+        size,
     })
 }

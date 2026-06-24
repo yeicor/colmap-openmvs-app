@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub struct Project {
     pub name: String,
     pub path: String,
+    /// Total size on disk in bytes
+    pub size: u64,
 }
 
 /// List of project images and metadata about video frames

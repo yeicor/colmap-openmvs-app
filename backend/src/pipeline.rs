@@ -286,7 +286,11 @@ fn process_line(
 ) {
     // ::remaining_groups::A,B,C,...
     if let Some(caps) = REMAINING_RE.captures(line) {
-        let groups: Vec<String> = caps[1].split(',').map(|s| s.trim().to_string()).collect();
+        let groups: Vec<String> = caps[1]
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         crate::task_registry::publish_event(task_id, TaskEvent::PipelineRemainingGroups(groups));
         return;
     }

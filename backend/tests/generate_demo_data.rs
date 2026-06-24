@@ -154,6 +154,31 @@ async fn test_generate_demo_data() {
     )
     .unwrap();
 
+    // 4.5. Save project config with dense pipeline selection
+    //      so the container entrypoint sources PIPELINE=colmap-openmvs-dense
+    //      and produces viewable PLY/GLB outputs.
+    println!("Setting PIPELINE=colmap-openmvs-dense in config...");
+    backend::save_project_config(
+        "demo".to_string(),
+        colmap_openmvs_api::SavedProjectConfig {
+            image_tag: image_tag.to_string(),
+            environment_variables: vec![
+                colmap_openmvs_api::EnvVarConfig {
+                    name: "PIPELINE".to_string(),
+                    value: "colmap-openmvs-dense".to_string(),
+                },
+                // Older version of the back-end used SFM_PIPELINE, so set it too for compatibility.
+                colmap_openmvs_api::EnvVarConfig {
+                    name: "SFM_PIPELINE".to_string(),
+                    value: "colmap-openmvs-dense".to_string(),
+                },
+            ],
+            custom_script: None,
+        },
+    )
+    .await
+    .unwrap();
+
     // 5. Run Pipeline
     println!("Running pipeline...");
     let pipeline_task = backend::run_pipeline("demo".to_string(), false)
