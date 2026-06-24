@@ -982,7 +982,11 @@ export class Viewer3D {
   _persistUrlState(): void {
     if (!this._projectName || !this._filePath) return;
     const cam = this._getCameraState();
-    const cfg = { ...this.state };
+    // Only persist known ConfigState fields so that legacy / future keys
+    // (e.g. `background` from an older version) never leak into the URL.
+    // Destructuring with explicit field names ensures a canonical set.
+    const { textures, wireframe, backfaces, lighting, lightAzimuth, lightElevation, pointsSize, toneMapping, exposure } = this.state;
+    const cfg: ConfigState = { textures, wireframe, backfaces, lighting, lightAzimuth, lightElevation, pointsSize, toneMapping, exposure };
     const b64 = encodeStateForUrl(cam, cfg);
     updateViewerUrl(this._projectName, this._filePath, b64);
   }

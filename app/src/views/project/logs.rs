@@ -298,6 +298,9 @@ fn spawn_pipeline_stream(
 
                         match event {
                             TaskEvent::PipelineRemainingGroups(names) => {
+                                // Filter out empty names (safety against leading comma in pipeline output)
+                                let names: Vec<String> =
+                                    names.into_iter().filter(|n| !n.is_empty()).collect();
                                 let total = names.len() as u32;
                                 if update.stages.is_empty() {
                                     for (i, name) in names.into_iter().enumerate() {

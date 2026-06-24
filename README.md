@@ -1,74 +1,69 @@
 # Photos to 3D Model Offline
 
-
 ## Features
 
 ### 🚀 Photogrammetry Pipeline
 
-- **One-click reconstruction** — Automate the full pipeline: feature extraction, matching, sparse reconstruction, dense reconstruction, meshing, and texturing. Powered by **COLMAP** (state-of-the-art SfM) and **OpenMVS** (multi-view stereo).
-- **Live progress tracking** — Follow every stage with real-time logs and progress bars. Pipelines keep running even if you navigate away, and you can cancel at any time.
-- **Smart caching** — Completed pipeline stages are automatically cached. Re-run with confidence — only the changed steps are recomputed.
-- **Dry-run & log recovery** — Replay logs from a previous run without re-executing, useful for debugging or sharing results.
-- **Web demo** — The live demo uses pre-reconstructed data and requires no uploads. See [screenshots](#screenshots) below or [simply try it out](https://yeicor.github.io/colmap-openmvs-app/).
-
-### 🖱️ 3D Viewer
-
-- **In-browser model inspection** — View point clouds, meshes, and textured models directly without external tools.
-- **Full interaction** — Orbit, pan, zoom controls, distance and area measurement tools, wireframe overlay, and adjustable lighting.
-- **Auto-conversion** — PLY point clouds and meshes are automatically converted to glTF/GLB for seamless browser rendering.
-- **Deep linking** — Link directly to a specific model with a viewport camera preset.
-
-### ⚙️ Pipeline Configuration
-
-- **Visual parameter editor** — A UI generated automatically from each tool's `--help` output lets you tweak every COLMAP and OpenMVS parameter without touching the command line.
-- **Custom scripts** — Inject arbitrary Bash code before or instead of the pipeline for advanced workflows.
-- **Low-resource presets** — Android devices get conservative defaults tuned for stability on mobile hardware.
-
-### 🖼️ Image Management
-
-- **Upload from anywhere** — Add photos from any device via the browser's file picker.
-- **Batch resize** — Resize all images in a project to a max dimension in one click, keeping file sizes manageable.
-- **Sample datasets** — Download built-in demo datasets (ET, Kermit) to test the pipeline immediately.
-- **Thumbnail gallery** — Browse project images with cached thumbnail previews.
-
-### 📁 Output Browser & Export
-
-- **Tree-based file explorer** — Navigate COLMAP's directory structure (sparse models, dense point clouds, meshes, textures) with a familiar tree view.
-- **3D preview** — Click any viewable file (`.ply`, `points3D.bin`) to inspect it instantly in the 3D viewer.
-- **ZIP backup & restore** — Download any output folder as a ZIP archive, or upload one to restore.
-- **Selective cleanup** — Delete individual files or clear all outputs (preserving images and config) with a single click.
-
-### 🐳 Deployment & Runtime
-
-- **Zero-install COLMAP/OpenMVS** — Both tools come pre-packaged in a container image. No compilation or dependency setup needed.
-  - **Automated updates** — Powered by [colmap-openmvs](https://github.com/yeicor-docker/colmap-openmvs), which automatically rebuilds container images whenever COLMAP or OpenMVS update.
-- **Container runtimes:**
-  - **Docker** — Best performance on desktops and servers, but requires the Docker daemon to be installed and running.
-    - **Docker-in-Docker** — Run the app inside a container while it transparently orchestrates pipelines on the host.
-  - **PRoot** — No special privileges required. Auto-downloaded and managed by the app; ideal for Android and restricted environments.
-- **Hardware support:**
-  - **CPU** — Runs the full pipeline end-to-end on any system.
-  - **CUDA** — Mount host GPU drivers for hardware-accelerated reconstruction.
+- **One-click reconstruction**: Full pipeline from feature extraction to texturing.
+- **Live progress tracking**: Real-time logs and progress bars; survives navigation and cancellable.
+- **Smart caching**: Only changed steps are recomputed on re-run.
+- **Dry-run & log recovery**: Replay logs from a previous run without re-executing.
+- **Web demo**: Try it instantly — no uploads needed. See [screenshots](#screenshots) or [the live app](https://yeicor.github.io/colmap-openmvs-app/).
 
 ### 🖥️ Cross-Platform
 
-- **Desktop** — Native bundles for Windows (`.exe`), macOS (`.dmg`), and Linux (`.AppImage`).
-- **Web** — Full-stack web app, deployable behind any reverse proxy.
-- **Android** — APK builds with automatic PRoot runtime setup.
-- **Same code, same UI** — The exact same application runs everywhere.
+- **Desktop**: Native bundles for Windows (`.exe`), macOS (`.dmg`), and Linux (`.AppImage`).
+- **Web**: Full-stack web app, deployable behind any reverse proxy.
+- **Android**: APK builds with automatic PRoot runtime setup.
+- **Same code, same UI**: The exact same application runs everywhere.
+
+### 🖱️ 3D Viewer
+
+- **In-browser model inspection**: View point clouds, meshes, and textured models.
+- **Full interaction**: Orbit, pan, zoom, measurements, wireframe, lighting.
+- **Auto-conversion**: PLY models are automatically converted to glTF/GLB as needed.
+- **Deep linking**: Link directly to a specific model with a viewport camera preset.
+
+### ⚙️ Pipeline Configuration
+
+- **Auto-generated parameter editor**: Includes each tool's `--help` output.
+- **Swappable pipelines**: Select which reconstruction pipeline to run via config.
+- **Custom scripts**: Inject arbitrary Bash code before or instead of the pipeline for advanced workflows.
+- **Low-resource presets**: Android devices get conservative defaults tuned for stability on mobile hardware.
+
+### 🖼️ Media Management
+
+- **Upload images & videos**: Add photos & videos from any device via the browser's file picker.
+- **Unified gallery**: Images & videos displayed together, sorted alphabetically.
+- **Batch resize**: Resize all images to a max dimension in one click.
+- **Sample datasets**: Download built-in demo datasets (ET, Kermit) to test the pipeline immediately.
+
+### 📁 Output Browser & Export
+
+- **Tree-based file explorer**: Navigate all files generated by the pipeline, including intermediate outputs.
+- **3D preview**: Click any viewable file (`.ply`, `points3D.bin`) to inspect it instantly in the 3D viewer.
+- **ZIP backup & restore**: Download any output folder as a ZIP archive, or upload one to restore.
+- **Selective cleanup**: Delete individual files or clear all outputs with one click.
+
+### 🐳 Deployment & Runtime
+
+- **Containerized**: All dependencies are pacakged into a container with automated updates.
+- **Docker runtime**: Best performance, requires the Docker daemon (Docker-in-Docker supported).
+- **PRoot runtime**: No privileges needed; auto-downloaded and managed by the app.
+- **CPU support**: Runs the full pipeline on any system.
+- **CUDA support**: Mount host GPU drivers for hardware-accelerated reconstruction.
 
 ### 🔧 System Tools
 
-- **Background task manager** — A persistent side panel shows all running, completed, and failed tasks with expandable logs and progress bars.
-- **Settings UI** — Configure projects folder, runtime paths, default container image, custom mounts, and theme override from an in-app settings page.
-- **System startup** — Platform-specific initialization (Android runtime setup, path validation) runs automatically on boot.
-- **Dark/light theme** — Automatic theme detection with manual override.
-- **Separable back-end** — The frontend can connect to a remote server by configuring the backend URL.
+- **Background task manager**: A persistent side panel shows all tasks.
+- **Settings UI**: Configure projects folder, runtime paths, default container image, etc.
+- **Dark/light theme**: Automatic theme detection with manual override.
+- **Separable back-end**: The frontend can connect to a remote server by configuring the backend URL.
 
 ### 🔒 Privacy & Licensing
 
-- **100% offline** — After the initial container image download, all processing is local. Your photos and models never leave your device.
-- **MIT License** — Free to use, modify, and distribute. Contributions welcome.
+- **100% offline**: Your photos and models never leave your device.
+- **MIT License**: Free to use, modify, and distribute. Contributions welcome.
 
 
 ## Screenshots

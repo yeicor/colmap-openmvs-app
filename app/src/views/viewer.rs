@@ -23,28 +23,28 @@ use web_sys::{Blob, BlobPropertyBag, Url};
 
 use crate::server::get_project_output_glb;
 
-/// Parse the combined cfg blob (base64 JSON with cam + config).
+/// Decode the cfg URL parameter: base64 → raw JSON string.
 ///
-/// Note: On non-demo builds the GLB bytes are fetched directly by the JS
-/// viewer via an HTTP request to the server, so we no longer import the
-/// `get_project_output_glb` server function at the top level. It is imported
-/// only in demo mode inside `fetch_glb_demo`.
-fn parse_cfg_blob(raw: &str) -> (Option<serde_json::Value>, Option<serde_json::Value>) {
+/// Returns `None` when the parameter is empty/`-` (no persisted state).
+/// Unlike the previous implementation, this function does NOT parse and
+/// re-serialise through `serde_json::Value`, which could produce subtly
+/// different number representations depending on the serde_json version
+/// or feature flags (`preserve_order`, `arbitrary_precision`, etc.)
+/// available in a given build environment.
+///
+/// The raw JSON string is passed directly to the JS side, which performs
+/// `JSON.parse` itself — guaranteeing that the numeric values stored in
+/// the URL are never altered during a Rust round-trip.
+fn parse_cfg_blob_raw(raw: &str) -> Option<String> {
     if raw.is_empty() || raw == "-" {
-        return (None, None);
+        return None;
     }
     // Try standard base64 first (legacy), then URL-safe (newer scripts).
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(raw)
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(raw));
-    if let Ok(bytes) = bytes {
-        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-            let cam = val.get("cam").cloned();
-            let config = val.get("config").cloned();
-            return (cam, config);
-        }
-    }
-    (None, None)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(raw))
+        .ok()?;
+    String::from_utf8(bytes).ok()
 }
 
 // ── Viewer page component ───────────────────────────────────────────────────
@@ -74,7 +74,7 @@ pub fn Viewer(name: String, file_encoded: String, cfg: String) -> Element {
         )
         .unwrap_or_default()
     };
-    let (initial_cam, initial_cfg) = parse_cfg_blob(&cfg);
+    let initial_cfg_raw = parse_cfg_blob_raw(&cfg);
 
     let mut loading: Signal<bool> = use_signal(|| !file_decoded.is_empty());
     let mut error_msg: Signal<Option<String>> = use_signal(|| None);
@@ -114,8 +114,7 @@ pub fn Viewer(name: String, file_encoded: String, cfg: String) -> Element {
         let mut err = error_msg.clone();
         let mut guard = spawn_guard.clone();
         let container_id = container_id_for_effect.clone();
-        let ic_val = initial_cam.clone();
-        let icfg_val = initial_cfg.clone();
+        let icfg_raw = initial_cfg_raw.clone();
         let cancelled = cancelled.clone();
 
         spawn(async move {
@@ -129,14 +128,12 @@ pub fn Viewer(name: String, file_encoded: String, cfg: String) -> Element {
             let project_name_esc = js_escape(&pn);
             let file_path_esc = js_escape(&fp_clone);
 
-            let cam_json = match ic_val {
-                Some(ref v) => serde_json::to_string(v).unwrap_or_else(|_| "null".to_string()),
-                None => "null".to_string(),
-            };
-            let cfg_json = match icfg_val {
-                Some(ref v) => serde_json::to_string(v).unwrap_or_else(|_| "null".to_string()),
-                None => "null".to_string(),
-            };
+            // Pass the raw JSON blob to JS so the numeric values in the
+            // URL are never reinterpreted by Rust's serde_json (which could
+            // change floating-point representation across serde_json versions
+            // or feature-flag configurations).
+            // JS does `JSON.parse(_cfgRaw)` itself.
+            let cfg_raw_json_esc = js_escape(icfg_raw.as_deref().unwrap_or(""));
 
             let viewer_url = asset!(
                 "/assets/viewer3d.bundle.js",
@@ -183,12 +180,13 @@ pub fn Viewer(name: String, file_encoded: String, cfg: String) -> Element {
 	    if (!container) {{ console.error('Viewer container not found'); return; }}
 	    var baseUrl = '{server_url_esc}' || (/^https?:/.test(window.location.origin) ? window.location.origin : 'http://localhost:8080');
 	    var glbUrl = baseUrl + '/api/projects/' + encodeURIComponent('{project_name_esc}') + '/outputs/glb?relative_path=' + encodeURIComponent('{file_path_esc}');
+	    var _cfgRaw = '{cfg_raw_json_esc}' || null;
 	    var viewer = await mod.mountViewer3d(container, {{
 	        projectName: '{project_name_esc}',
 	        filePath: '{file_path_esc}',
 	        glbUrl: glbUrl,
-	        initialCamera: {cam_json},
-	        initialConfig: {cfg_json},
+	        initialCamera: _cfgRaw ? JSON.parse(_cfgRaw).cam : null,
+	        initialConfig: _cfgRaw ? JSON.parse(_cfgRaw).config : null,
 	    }});
 	    window.__viewer3d_instance = viewer;
 	    var el = document.getElementById('{container_id}');
@@ -231,12 +229,13 @@ import(_viewerAbsUrl).then(async function(mod) {{
 try {{
     var container = document.getElementById('{container_id}');
     if (!container) {{ console.error('Viewer container not found'); return; }}
-    var viewer = await mod.mountViewer3d(container, {{
-        projectName: '{project_name_esc}',
-        filePath: '{file_path_esc}',
-        glbUrl: '{glb_url_esc}',
-        initialCamera: {cam_json},
-        initialConfig: {cfg_json},
+	    var _cfgRaw = '{cfg_raw_json_esc}' || null;
+	    var viewer = await mod.mountViewer3d(container, {{
+	        projectName: '{project_name_esc}',
+	        filePath: '{file_path_esc}',
+	        glbUrl: '{glb_url_esc}',
+        initialCamera: _cfgRaw ? JSON.parse(_cfgRaw).cam : null,
+        initialConfig: _cfgRaw ? JSON.parse(_cfgRaw).config : null,
     }});
     window.__viewer3d_instance = viewer;
     var el = document.getElementById('{container_id}');
@@ -261,23 +260,24 @@ import(_viewerAbsUrl).then(async function(mod) {{
 try {{
     var container = document.getElementById('{container_id}');
     if (!container) {{ console.error('Viewer container not found'); return; }}
-    var viewer = await mod.mountViewer3d(container, {{
-        projectName: '{project_name_esc}',
-        filePath: '{file_path_esc}',
-        glbBase64: '{b64_esc}',
-        initialCamera: {cam_json},
-        initialConfig: {cfg_json},
-    }});
-    window.__viewer3d_instance = viewer;
-    var el = document.getElementById('{container_id}');
-    if (el) el.dataset.ready = 'true';
-    dioxus.send('loaded');
-}} catch(err) {{
-    console.error('[Viewer] mount error:', err.stack || err);
-    dioxus.send('error:' + (err.message || 'unknown'));
-}}
-}});
-"#
+	    var _cfgRaw = '{cfg_raw_json_esc}' || null;
+	    var viewer = await mod.mountViewer3d(container, {{
+	        projectName: '{project_name_esc}',
+	        filePath: '{file_path_esc}',
+	        glbBase64: '{b64_esc}',
+	        initialCamera: _cfgRaw ? JSON.parse(_cfgRaw).cam : null,
+	        initialConfig: _cfgRaw ? JSON.parse(_cfgRaw).config : null,
+	    }});
+	    window.__viewer3d_instance = viewer;
+	    var el = document.getElementById('{container_id}');
+	    if (el) el.dataset.ready = 'true';
+	    dioxus.send('loaded');
+	}} catch(err) {{
+	    console.error('[Viewer] mount error:', err.stack || err);
+	    dioxus.send('error:' + (err.message || 'unknown'));
+	}}
+	}});
+	"#
                             )
                         }
                     }
@@ -325,12 +325,13 @@ try {{
 	try {{
 	    var container = document.getElementById('{container_id}');
 	    if (!container) {{ console.error('Viewer container not found'); return; }}
+	    var _cfgRaw = '{cfg_raw_json_esc}' || null;
 	    var viewer = await mod.mountViewer3d(container, {{
 	        projectName: '{project_name_esc}',
 	        filePath: '{file_path_esc}',
 	        glbBase64: '{b64_esc}',
-	        initialCamera: {cam_json},
-	        initialConfig: {cfg_json},
+	        initialCamera: _cfgRaw ? JSON.parse(_cfgRaw).cam : null,
+	        initialConfig: _cfgRaw ? JSON.parse(_cfgRaw).config : null,
 	    }});
 	    window.__viewer3d_instance = viewer;
 	    var el = document.getElementById('{container_id}');

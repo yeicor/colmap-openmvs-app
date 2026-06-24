@@ -1842,7 +1842,7 @@ pub fn GalleryTab(project_name: String) -> Element {
                                     if has_frames {
                                         span {
                                             class: "frame-count-badge",
-                                            " (+{num_frames})"
+                                            " ({num_frames})"
                                         }
                                     }
                                 }

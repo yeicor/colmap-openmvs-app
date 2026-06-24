@@ -167,7 +167,9 @@ async fn get_tool_help(
 }
 
 /// Load and parse project configuration from config.sh in a project directory.
-async fn load_project_config_by_path(project_path: String) -> dioxus::Result<LoadedProjectConfig> {
+pub(crate) async fn load_project_config_by_path(
+    project_path: String,
+) -> dioxus::Result<LoadedProjectConfig> {
     let project_path = Path::new(&project_path);
 
     if !project_path.exists() {
