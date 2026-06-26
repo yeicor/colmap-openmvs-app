@@ -110,20 +110,22 @@ pub async fn create_project(name: String) -> DioxusResult<Project> {
             anyhow!("Failed to create project: {}", e)
         })?;
 
-    // Write a default config.sh that selects the dense pipeline (produces
-    // viewable PLY/GLB outputs). On Android extra conservative settings are
-    // added to prioritise stability on resource-constrained hardware.
-    if let Err(e) = write_default_project_config(&project_path, &settings).await {
-        warn!(
-            project_name = %name,
-            error = %e,
-            "Failed to write default config.sh, continuing without it"
-        );
-    } else {
-        debug!(
-            project_name = %name,
-            "Default config.sh written successfully"
-        );
+    // On Android devices write a default config.sh with conservative settings
+    // that prioritise stability on resource-constrained hardware (single-thread,
+    // reduced quality, lower memory usage).
+    if cfg!(target_os = "android") {
+        if let Err(e) = write_low_resource_project_config(&project_path, &settings).await {
+            warn!(
+                project_name = %name,
+                error = %e,
+                "Failed to write default config.sh, continuing without it"
+            );
+        } else {
+            debug!(
+                project_name = %name,
+                "Default config.sh written successfully"
+            );
+        }
     }
 
     info!(project_name = %name, project_path = %project_path.display(), "Project created successfully");
@@ -134,13 +136,9 @@ pub async fn create_project(name: String) -> DioxusResult<Project> {
     })
 }
 
-/// Write a default config.sh for new projects.
-///
-/// Always selects the dense pipeline (`PIPELINE=colmap-openmvs-dense`) so that
-/// new projects produce viewable PLY/GLB outputs out of the box.
-/// On Android, extra conservative settings are added to prioritise stability on
-/// resource-constrained hardware.
-async fn write_default_project_config(
+/// Write a default config.sh with conservative settings for low-resource / stability-oriented devices.
+/// Only called on Android builds.
+async fn write_low_resource_project_config(
     project_path: &Path,
     settings: &colmap_openmvs_api::Settings,
 ) -> DioxusResult<()> {
@@ -150,23 +148,9 @@ async fn write_default_project_config(
         .unwrap_or("unknown")
         .to_string();
 
-    let mut env_vars = vec![
-        EnvVarConfig {
-            name: "PIPELINE".into(),
-            value: "colmap-openmvs-dense".into(),
-        },
-        // Older version of the back-end used SFM_PIPELINE, so set it too for compatibility.
-        EnvVarConfig {
-            name: "SFM_PIPELINE".into(),
-            value: "colmap-openmvs-dense".into(),
-        },
-    ];
-
-    // On Android devices add conservative settings that prioritise stability
-    // on resource-constrained hardware (single-thread, reduced quality, lower
-    // memory usage).
-    if cfg!(target_os = "android") {
-        env_vars.extend(vec![
+    let config = SavedProjectConfig {
+        image_tag,
+        environment_variables: vec![
             EnvVarConfig {
                 name: "COLMAP_FEATURE_EXTRACTOR_ARGS".into(),
                 value: "--FeatureExtraction.num_threads=1".into(),
@@ -219,12 +203,7 @@ async fn write_default_project_config(
                 name: "OPENMVS_TEXTURE_MESH_DENSE_ARGS".into(),
                 value: "--max-threads=1".into(),
             },
-        ]);
-    }
-
-    let config = SavedProjectConfig {
-        image_tag,
-        environment_variables: env_vars,
+        ],
         custom_script: None,
     };
 
