@@ -6,10 +6,10 @@
   "type": "module",
   "dependencies": {
     "eruda": "3.4.3",
-    "three": "0.184.0"
+    "three": "0.185.1"
   },
   "devDependencies": {
-    "@types/three": "^0.184.0",
+    "@types/three": "^0.185.0",
     "esbuild": "^0.28.0"
   }
 }
