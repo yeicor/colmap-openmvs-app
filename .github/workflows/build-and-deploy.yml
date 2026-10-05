@@ -12,10 +12,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-24.04
+          - os: ubuntu-22.04  # Not using latest to be compatible with more systems
             build-type: desktop
             artifact-find: "-path '*/bundle/*/*.AppImage'"
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-22.04-arm  # Not using latest to be compatible with more systems
             build-type: desktop
             artifact-find: "-path '*/bundle/*/*.AppImage'"
           - os: macos-26-intel
@@ -58,9 +58,30 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
+            libfuse2 \
             lld
       - shell: bash
-        run: curl -sSL https://dioxus.dev/install.sh | bash
+        run: |
+          curl -sSL https://dioxus.dev/install.sh | bash
+          python3 - << 'EOF'
+          import os
+          for path in [os.path.expanduser("~/.dx/bin/dx"), os.path.expanduser("~/.cargo/bin/dx")]:
+              if os.path.exists(path):
+                  with open(path, "rb") as f:
+                      d = bytearray(f.read())
+                  old_h = bytes([0xb9, 0x91, 0x96, 0x06])
+                  new_h = bytes([0xb5, 0x91, 0x96, 0x06])
+                  idx = d.find(old_h)
+                  if idx != -1:
+                      d[idx:idx+4] = new_h
+                      idx2 = d.find(b"GLIBC_2.39\x00")
+                      if idx2 != -1:
+                          d[idx2:idx2+11] = b"GLIBC_2.35\x00"
+                          with open(path, "wb") as f:
+                              f.write(d)
+                          print(f"Patched {path} for glibc 2.35 compatibility")
+          EOF
+          $HOME/.dx/bin/dx --version
       - shell: bash
         if: matrix.build-type == 'desktop'
         run: |
