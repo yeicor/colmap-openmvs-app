@@ -77,8 +77,14 @@ for pass in 1 2; do
                 libname="$(basename "$lib")"
                 case "$libname" in
                     ld-linux*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*|libresolv.so*|\
-                    libGL.so*|libEGL.so*|libOpenGL.so*|libGLdispatch.so*|libGLX.so*|\
-                    libdrm.so*|libgbm.so*|libwayland-client.so*)
+                    libGL.so*|libEGL.so*|libOpenGL.so*|libGLdispatch.so*|libGLX.so*|libGLX_mesa.so*|libEGL_mesa.so*|\
+                    libdrm.so*|libgbm.so*|libvulkan.so*|libepoxy.so*|\
+                    libwayland*.so*|libxcb-dri*|libX11-xcb.so*)
+                        # Host GPU / display stack: must come from the host so it
+                        # matches the running Mesa/drivers. Bundling the Ubuntu
+                        # build-host copy shadows the host one and makes
+                        # eglGetDisplay fail with EGL_BAD_PARAMETER, before any
+                        # WEBKIT_* env var is even read.
                         continue
                         ;;
                     *)
@@ -103,8 +109,29 @@ if [ -d "/usr/share/glib-2.0/schemas" ]; then
 fi
 
 echo "=== Removing blacklisted files ==="
-# libwayland-client is blacklisted by AppImageKit because bundling it breaks host Mesa GPU drivers
-rm -f "$EXTRACT_DIR"/usr/lib/libwayland-client.so* "$EXTRACT_DIR"/usr/lib/*/libwayland-client.so*
+# libwayland-*/libepoxy/libEGL/libGL/libdrm/libgbm are blacklisted by AppImageKit:
+# bundling the build-host copy breaks host Mesa (undefined symbol
+# wl_display_create_queue_with_name -> "Could not create default EGL display:
+# EGL_BAD_PARAMETER. Aborting..."). Their sonames are stable, so defer to host.
+# NOTE: linuxdeploy (via `dx bundle`) bundles these BEFORE this script runs, and
+# older linuxdeploy versions predate the upstream exclusion, so delete them here.
+rm -f "$EXTRACT_DIR"/usr/lib/libwayland*.so* "$EXTRACT_DIR"/usr/lib/*/libwayland*.so*
+rm -f "$EXTRACT_DIR"/usr/lib/libepoxy.so* "$EXTRACT_DIR"/usr/lib/*/libepoxy.so*
+rm -f "$EXTRACT_DIR"/usr/lib/libEGL.so* "$EXTRACT_DIR"/usr/lib/*/libEGL.so* \
+      "$EXTRACT_DIR"/usr/lib/libEGL_mesa.so* "$EXTRACT_DIR"/usr/lib/*/libEGL_mesa.so*
+rm -f "$EXTRACT_DIR"/usr/lib/libGL.so* "$EXTRACT_DIR"/usr/lib/*/libGL.so* \
+      "$EXTRACT_DIR"/usr/lib/libGLX*.so* "$EXTRACT_DIR"/usr/lib/*/libGLX*.so* \
+      "$EXTRACT_DIR"/usr/lib/libOpenGL.so* "$EXTRACT_DIR"/usr/lib/*/libOpenGL.so* \
+      "$EXTRACT_DIR"/usr/lib/libGLdispatch.so* "$EXTRACT_DIR"/usr/lib/*/libGLdispatch.so*
+rm -f "$EXTRACT_DIR"/usr/lib/libdrm.so* "$EXTRACT_DIR"/usr/lib/*/libdrm.so* \
+      "$EXTRACT_DIR"/usr/lib/libgbm.so* "$EXTRACT_DIR"/usr/lib/*/libgbm.so* \
+      "$EXTRACT_DIR"/usr/lib/libvulkan.so* "$EXTRACT_DIR"/usr/lib/*/libvulkan.so*
+# Guard: fail loudly if a future linuxdeploy re-introduces the EGL killers
+if find "$EXTRACT_DIR" -name "libwayland-client.so*" -o -name "libepoxy.so*" | grep -q .; then
+    echo "ERROR: blacklisted graphics libs still present after stripping:"
+    find "$EXTRACT_DIR" -name "libwayland-client.so*" -o -name "libepoxy.so*"
+    exit 1
+fi
 
 echo "=== Installing AppStream metadata ==="
 APPDATA_SRC="$REPO_ROOT/assets/com.github.yeicor.colmap_openmvs_app.appdata.xml"
@@ -156,6 +183,12 @@ export WEBKIT_DISABLE_DMABUF_RENDERER=${WEBKIT_DISABLE_DMABUF_RENDERER:-1}
 export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
 export NO_AT_BRIDGE=1
 export GTK_MODULES=""
+# NOTE: intentionally do NOT set GDK_BACKEND here — forcing x11 breaks native
+# Wayland sessions and does NOT fix EGL init (WebKit creates its own EGL
+# display regardless of backend). Host GPU libs (libwayland-*/libEGL/libGL)
+# are deliberately NOT bundled so the host Mesa is used.
+# If EGL still fails on exotic drivers, users can try (in order):
+#   WEBKIT_DISABLE_DMABUF_RENDERER=1, WEBKIT_DISABLE_COMPOSITING_MODE=1
 
 if [ -f "${APPDIR}/usr/lib/libwebkit_spawn_hook.so" ]; then
     if [ -n "$LD_PRELOAD" ]; then
