@@ -77,14 +77,19 @@ for pass in 1 2; do
                 libname="$(basename "$lib")"
                 case "$libname" in
                     ld-linux*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*|libresolv.so*|\
-                    libGL.so*|libEGL.so*|libOpenGL.so*|libGLdispatch.so*|libGLX.so*|libGLX_mesa.so*|libEGL_mesa.so*|\
+                    libGL.so*|libEGL.so*|libOpenGL.so*|libGLdispatch.so*|libGLX.so*|libGLX_mesa.so*|libEGL_mesa.so*|libglapi.so*|\
                     libdrm.so*|libgbm.so*|libvulkan.so*|libepoxy.so*|\
-                    libwayland*.so*|libxcb-dri*|libX11-xcb.so*)
-                        # Host GPU / display stack: must come from the host so it
-                        # matches the running Mesa/drivers. Bundling the Ubuntu
-                        # build-host copy shadows the host one and makes
-                        # eglGetDisplay fail with EGL_BAD_PARAMETER, before any
-                        # WEBKIT_* env var is even read.
+                    libwayland*.so*|libxcb.so*|libxcb-dri*.so*|libX11.so*|libX11-xcb.so*|\
+                    libfontconfig.so*|libfreetype.so*|libharfbuzz*.so*|libexpat.so*|libz.so*|libuuid.so*)
+                        # Host GPU / display / font stack: must come from the host
+                        # so it matches the running Mesa/drivers/fontconfig.
+                        # Follows AppImageCommunity/pkg2appimage excludelist.
+                        # Bundling the Ubuntu build-host copy shadows the host one
+                        # and makes eglGetDisplay fail with EGL_BAD_PARAMETER
+                        # (e.g. undefined symbol wl_display_create_queue_with_name,
+                        # xcb_send_fd mismatches), before any WEBKIT_* env var is
+                        # even read. Same class of mismatch causes the
+                        # fontconfig "invalid attribute 'xsi:nil'" spam.
                         continue
                         ;;
                     *)
@@ -125,11 +130,25 @@ rm -f "$EXTRACT_DIR"/usr/lib/libGL.so* "$EXTRACT_DIR"/usr/lib/*/libGL.so* \
       "$EXTRACT_DIR"/usr/lib/libGLdispatch.so* "$EXTRACT_DIR"/usr/lib/*/libGLdispatch.so*
 rm -f "$EXTRACT_DIR"/usr/lib/libdrm.so* "$EXTRACT_DIR"/usr/lib/*/libdrm.so* \
       "$EXTRACT_DIR"/usr/lib/libgbm.so* "$EXTRACT_DIR"/usr/lib/*/libgbm.so* \
-      "$EXTRACT_DIR"/usr/lib/libvulkan.so* "$EXTRACT_DIR"/usr/lib/*/libvulkan.so*
+      "$EXTRACT_DIR"/usr/lib/libvulkan.so* "$EXTRACT_DIR"/usr/lib/*/libvulkan.so* \
+      "$EXTRACT_DIR"/usr/lib/libglapi.so* "$EXTRACT_DIR"/usr/lib/*/libglapi.so*
+rm -f "$EXTRACT_DIR"/usr/lib/libxcb.so* "$EXTRACT_DIR"/usr/lib/*/libxcb.so* \
+      "$EXTRACT_DIR"/usr/lib/libxcb-dri*.so* "$EXTRACT_DIR"/usr/lib/*/libxcb-dri*.so* \
+      "$EXTRACT_DIR"/usr/lib/libX11.so* "$EXTRACT_DIR"/usr/lib/*/libX11.so* \
+      "$EXTRACT_DIR"/usr/lib/libX11-xcb.so* "$EXTRACT_DIR"/usr/lib/*/libX11-xcb.so*
+# Font / low-level libs from the official excludelist: the build-host copies are
+# older than modern host configs (hence the fontconfig "xsi:nil" spam) and can
+# break Mesa's library chain. Defer to the host; every desktop ships these.
+rm -f "$EXTRACT_DIR"/usr/lib/libfontconfig.so* "$EXTRACT_DIR"/usr/lib/*/libfontconfig.so* \
+      "$EXTRACT_DIR"/usr/lib/libfreetype.so* "$EXTRACT_DIR"/usr/lib/*/libfreetype.so* \
+      "$EXTRACT_DIR"/usr/lib/libharfbuzz*.so* "$EXTRACT_DIR"/usr/lib/*/libharfbuzz*.so* \
+      "$EXTRACT_DIR"/usr/lib/libexpat.so* "$EXTRACT_DIR"/usr/lib/*/libexpat.so* \
+      "$EXTRACT_DIR"/usr/lib/libz.so* "$EXTRACT_DIR"/usr/lib/*/libz.so* \
+      "$EXTRACT_DIR"/usr/lib/libuuid.so* "$EXTRACT_DIR"/usr/lib/*/libuuid.so*
 # Guard: fail loudly if a future linuxdeploy re-introduces the EGL killers
-if find "$EXTRACT_DIR" -name "libwayland-client.so*" -o -name "libepoxy.so*" | grep -q .; then
+if find "$EXTRACT_DIR" \( -name "libwayland-client.so*" -o -name "libepoxy.so*" -o -name "libxcb.so*" -o -name "libX11.so*" \) -print | grep -q .; then
     echo "ERROR: blacklisted graphics libs still present after stripping:"
-    find "$EXTRACT_DIR" -name "libwayland-client.so*" -o -name "libepoxy.so*"
+    find "$EXTRACT_DIR" \( -name "libwayland-client.so*" -o -name "libepoxy.so*" -o -name "libxcb.so*" -o -name "libX11.so*" \)
     exit 1
 fi
 
