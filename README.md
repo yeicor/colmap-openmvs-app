@@ -1,4 +1,4 @@
-# colmap-openmvs-app: Photos to 3D Model Offline
+# ColmapOpenmvsApp: Photos to 3D Model Offline
 
 ## Features
 

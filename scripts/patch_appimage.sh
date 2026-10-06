@@ -76,11 +76,18 @@ for pass in 1 2; do
             for lib in $DEPS; do
                 libname="$(basename "$lib")"
                 case "$libname" in
+                    libharfbuzz-icu.so*)
+                        # MUST be bundled: WebKitGTK requires libharfbuzz-icu, but minimal host systems do not have it
+                        if [ ! -f "$EXTRACT_DIR/usr/lib/$libname" ] && [ ! -f "$EXTRACT_DIR/usr/lib/${ARCH_TRIPLE:-unknown}/$libname" ]; then
+                            echo "Bundling missing WebKit dependency: $libname (from $lib)"
+                            cp -L "$lib" "$EXTRACT_DIR/usr/lib/" || true
+                        fi
+                        ;;
                     ld-linux*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*|libresolv.so*|\
                     libGL.so*|libEGL.so*|libOpenGL.so*|libGLdispatch.so*|libGLX.so*|libGLX_mesa.so*|libEGL_mesa.so*|libglapi.so*|\
                     libdrm.so*|libgbm.so*|libvulkan.so*|libepoxy.so*|\
                     libwayland*.so*|libxcb.so*|libxcb-dri*.so*|libX11.so*|libX11-xcb.so*|\
-                    libfontconfig.so*|libfreetype.so*|libharfbuzz*.so*|libexpat.so*|libz.so*|libuuid.so*|\
+                    libfontconfig.so*|libfreetype.so*|libharfbuzz.so*|libharfbuzz-gobject.so*|libharfbuzz-subset.so*|libexpat.so*|libz.so*|libuuid.so*|\
                     libstdc++.so*|libgcc_s.so*)
                         # Host GPU / display / font / C++ runtime stack: must come from the host
                         # so it matches the running Mesa/drivers/fontconfig.
@@ -102,6 +109,19 @@ for pass in 1 2; do
         fi
     done < "$WORK_DIR/bin_list.txt"
 done
+
+echo "=== Ensuring libharfbuzz-icu is bundled for WebKitGTK ==="
+HARFBUZZ_ICU="$(find /usr/lib /usr/lib64 /lib /lib64 /usr/lib/*-linux-gnu /lib/*-linux-gnu -maxdepth 2 -name "libharfbuzz-icu.so*" 2>/dev/null | head -n 1 || true)"
+if [ -z "$HARFBUZZ_ICU" ]; then
+    HARFBUZZ_ICU="$(find /usr/lib* /lib* -name "libharfbuzz-icu.so*" 2>/dev/null | head -n 1 || true)"
+fi
+if [ -n "$HARFBUZZ_ICU" ]; then
+    echo "Bundling libharfbuzz-icu from: $HARFBUZZ_ICU"
+    cp -L "$HARFBUZZ_ICU" "$EXTRACT_DIR/usr/lib/" || true
+    if [ ! -f "$EXTRACT_DIR/usr/lib/libharfbuzz-icu.so.0" ]; then
+        cp -L "$HARFBUZZ_ICU" "$EXTRACT_DIR/usr/lib/libharfbuzz-icu.so.0" || true
+    fi
+fi
 
 echo "=== Copying GSettings schemas ==="
 if [ -d "/usr/share/glib-2.0/schemas" ]; then
@@ -138,14 +158,24 @@ rm -f "$EXTRACT_DIR"/usr/lib/libxcb.so* "$EXTRACT_DIR"/usr/lib/*/libxcb.so* \
 # Font / low-level libs from the official excludelist: the build-host copies are
 # older than modern host configs (hence the fontconfig "xsi:nil" spam) and can
 # break Mesa's library chain. Defer to the host; every desktop ships these.
+# NOTE: libharfbuzz-icu.so* must NOT be removed because WebKitGTK needs it and minimal hosts lack it.
 rm -f "$EXTRACT_DIR"/usr/lib/libfontconfig.so* "$EXTRACT_DIR"/usr/lib/*/libfontconfig.so* \
       "$EXTRACT_DIR"/usr/lib/libfreetype.so* "$EXTRACT_DIR"/usr/lib/*/libfreetype.so* \
-      "$EXTRACT_DIR"/usr/lib/libharfbuzz*.so* "$EXTRACT_DIR"/usr/lib/*/libharfbuzz*.so* \
+      "$EXTRACT_DIR"/usr/lib/libharfbuzz.so* "$EXTRACT_DIR"/usr/lib/*/libharfbuzz.so* \
+      "$EXTRACT_DIR"/usr/lib/libharfbuzz-gobject.so* "$EXTRACT_DIR"/usr/lib/*/libharfbuzz-gobject.so* \
+      "$EXTRACT_DIR"/usr/lib/libharfbuzz-subset.so* "$EXTRACT_DIR"/usr/lib/*/libharfbuzz-subset.so* \
       "$EXTRACT_DIR"/usr/lib/libexpat.so* "$EXTRACT_DIR"/usr/lib/*/libexpat.so* \
       "$EXTRACT_DIR"/usr/lib/libz.so* "$EXTRACT_DIR"/usr/lib/*/libz.so* \
       "$EXTRACT_DIR"/usr/lib/libuuid.so* "$EXTRACT_DIR"/usr/lib/*/libuuid.so* \
       "$EXTRACT_DIR"/usr/lib/libstdc++.so* "$EXTRACT_DIR"/usr/lib/*/libstdc++.so* \
       "$EXTRACT_DIR"/usr/lib/libgcc_s.so* "$EXTRACT_DIR"/usr/lib/*/libgcc_s.so*
+
+# Guard: fail loudly if libharfbuzz-icu.so is missing after stripping
+if ! find "$EXTRACT_DIR/usr/lib" -name "libharfbuzz-icu.so*" | grep -q .; then
+    echo "ERROR: libharfbuzz-icu.so is missing from the AppDir!"
+    exit 1
+fi
+
 # Guard: fail loudly if a future linuxdeploy re-introduces graphics/C++ driver killers
 if find "$EXTRACT_DIR/usr" \( -name "libwayland-client.so*" -o -name "libepoxy.so*" -o -name "libxcb.so*" -o -name "libX11.so*" -o -name "libstdc++.so*" \) -print | grep -q .; then
     echo "ERROR: blacklisted graphics/system libs still present after stripping:"
@@ -319,5 +349,17 @@ UPDATE_INFO="gh-releases-zsync|yeicor|colmap-openmvs-app|latest|*${TOOL_ARCH}.Ap
 
 cp -f "$OUTPUT_FILE" "$APPIMAGE_PATH"
 chmod +x "$APPIMAGE_PATH"
+
+# If the AppImage filename starts with lowercase colmap-openmvs-app,
+# rename to PascalCase ColmapOpenmvsApp for consistent cross-platform naming and AppImage catalog recommendations
+APPIMAGE_DIR="$(dirname "$APPIMAGE_PATH")"
+APPIMAGE_BASE="$(basename "$APPIMAGE_PATH")"
+if [[ "$APPIMAGE_BASE" =~ ^colmap-openmvs-app ]]; then
+    NEW_BASE="$(echo "$APPIMAGE_BASE" | sed 's/^colmap-openmvs-app/ColmapOpenmvsApp/')"
+    NEW_PATH="$APPIMAGE_DIR/$NEW_BASE"
+    echo "Renaming $APPIMAGE_PATH to $NEW_PATH for consistent PascalCase naming"
+    mv -f "$APPIMAGE_PATH" "$NEW_PATH"
+    APPIMAGE_PATH="$NEW_PATH"
+fi
 
 echo "=== Successfully patched AppImage: $APPIMAGE_PATH ==="
