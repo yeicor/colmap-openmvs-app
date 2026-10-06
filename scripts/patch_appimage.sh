@@ -350,16 +350,4 @@ UPDATE_INFO="gh-releases-zsync|yeicor|colmap-openmvs-app|latest|*${TOOL_ARCH}.Ap
 cp -f "$OUTPUT_FILE" "$APPIMAGE_PATH"
 chmod +x "$APPIMAGE_PATH"
 
-# If the AppImage filename starts with lowercase colmap-openmvs-app,
-# rename to PascalCase ColmapOpenmvsApp for consistent cross-platform naming and AppImage catalog recommendations
-APPIMAGE_DIR="$(dirname "$APPIMAGE_PATH")"
-APPIMAGE_BASE="$(basename "$APPIMAGE_PATH")"
-if [[ "$APPIMAGE_BASE" =~ ^colmap-openmvs-app ]]; then
-    NEW_BASE="$(echo "$APPIMAGE_BASE" | sed 's/^colmap-openmvs-app/ColmapOpenmvsApp/')"
-    NEW_PATH="$APPIMAGE_DIR/$NEW_BASE"
-    echo "Renaming $APPIMAGE_PATH to $NEW_PATH for consistent PascalCase naming"
-    mv -f "$APPIMAGE_PATH" "$NEW_PATH"
-    APPIMAGE_PATH="$NEW_PATH"
-fi
-
 echo "=== Successfully patched AppImage: $APPIMAGE_PATH ==="
