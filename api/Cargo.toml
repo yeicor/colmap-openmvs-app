@@ -2,6 +2,7 @@
 name = "colmap-openmvs-api"
 authors.workspace = true
 edition.workspace = true
+version.workspace = true
 
 [dependencies]
 serde = { workspace = true }

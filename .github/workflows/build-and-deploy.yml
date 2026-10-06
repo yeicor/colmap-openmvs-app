@@ -59,7 +59,8 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libfuse2 \
-            lld
+            lld \
+            appstream
       - shell: bash
         run: |
           curl -sSL https://dioxus.dev/install.sh | bash
@@ -87,6 +88,12 @@ jobs:
         run: |
           # cargo build --release --features server,desktop -vv # helps detect errors
           $HOME/.dx/bin/dx bundle --release --${{ matrix.build-type }} --features server --verbose
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            for appimage in $(find target -type f -name "*.AppImage"); do
+              echo "Patching AppImage: $appimage"
+              bash scripts/patch_appimage.sh "$appimage"
+            done
+          fi
           RUST_LOG=debug,h2=info cargo test --workspace --all-targets -- --show-output
       - shell: bash
         if: startsWith(matrix.build-type, 'web')

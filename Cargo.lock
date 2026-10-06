@@ -773,14 +773,14 @@ dependencies = [
 
 [[package]]
 name = "colmap-openmvs-api"
-version = "0.0.0"
+version = "0.2.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "colmap-openmvs-app"
-version = "0.0.0"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "base64 0.23.0",
@@ -809,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "colmap-openmvs-backend"
-version = "0.0.0"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-trait",

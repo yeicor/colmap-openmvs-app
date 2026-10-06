@@ -2,6 +2,7 @@
 name = "colmap-openmvs-app"
 authors.workspace = true
 edition.workspace = true
+version.workspace = true
 
 [dependencies]
 colmap-openmvs-api = { path = "../api" }

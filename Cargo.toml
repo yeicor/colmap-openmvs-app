@@ -6,6 +6,7 @@ resolver = "2"
 [workspace.package]
 authors = ["Yeicor <yeicor+no-reply@github.com>"]
 edition = "2021"
+version = "0.2.2"
 
 # Shared common dependencies across workspace
 [workspace.dependencies]
