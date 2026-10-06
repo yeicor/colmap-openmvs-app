@@ -141,6 +141,7 @@ mkdir -p "$EXTRACT_DIR/usr/lib"
 gcc -shared -fPIC -O2 -Wall "$HOOK_SRC" -o "$EXTRACT_DIR/usr/lib/libwebkit_spawn_hook.so" -ldl
 
 echo "=== Generating robust AppRun launcher ==="
+rm -f "$EXTRACT_DIR/AppRun"
 cat << 'EOF' > "$EXTRACT_DIR/AppRun"
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
@@ -152,7 +153,9 @@ export XDG_DATA_DIRS="${APPDIR}/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr
 export GSETTINGS_SCHEMA_DIR="${APPDIR}/usr/share/glib-2.0/schemas:${GSETTINGS_SCHEMA_DIR:-/usr/share/glib-2.0/schemas}"
 export WEBKIT_INJECTED_BUNDLE_PATH="${APPDIR}/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/injected-bundle:${APPDIR}/usr/lib/aarch64-linux-gnu/webkit2gtk-4.1/injected-bundle:${APPDIR}/usr/lib/webkit2gtk-4.1/injected-bundle"
 export WEBKIT_DISABLE_DMABUF_RENDERER=${WEBKIT_DISABLE_DMABUF_RENDERER:-1}
+export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
 export NO_AT_BRIDGE=1
+export GTK_MODULES=""
 
 if [ -f "${APPDIR}/usr/lib/libwebkit_spawn_hook.so" ]; then
     if [ -n "$LD_PRELOAD" ]; then
