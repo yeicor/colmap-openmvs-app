@@ -280,9 +280,11 @@ fn registry_fetch(registry: &str, path: &str, accept: Option<&str>, token: &str)
     response
         .body_mut()
         .with_config()
-        .limit(200 * 1024 * 1024) // 200 MB limit for image layers
+        .limit(2 * 1024 * 1024 * 1024) // 2 GB limit for image layers
         .read_to_vec()
-        .expect("read registry response body")
+        .unwrap_or_else(|e| {
+            panic!("read registry response body failed for {registry}{path}: {e}");
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +519,12 @@ pub(crate) fn pull_and_extract_image(
     // Download and extract every layer directly into target_dir.
     for (i, layer_digest) in layers.iter().enumerate() {
         let path = format!("/v2/{repo}/blobs/{layer_digest}");
+        tracing::info!(
+            "[{}/{}] Downloading layer {}...",
+            i + 1,
+            layers.len(),
+            &layer_digest[..12.min(layer_digest.len())]
+        );
         let data = registry_fetch(&registry, &path, None, &token);
         tracing::info!(
             "[{}/{}] Layer {}: {} bytes",
@@ -539,3 +547,4 @@ pub(crate) fn pull_and_extract_image(
         created,
     })
 }
+

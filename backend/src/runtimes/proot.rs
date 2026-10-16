@@ -429,7 +429,7 @@ impl PRoot {
         let bytes = response
             .body_mut()
             .with_config()
-            .limit(200 * 1024 * 1024)
+            .limit(2 * 1024 * 1024 * 1024)
             .read_to_vec()
             .map_err(|e| anyhow::anyhow!("Failed to read download: {}", e))?;
 
@@ -530,7 +530,7 @@ impl PRoot {
         let bytes = response
             .body_mut()
             .with_config()
-            .limit(200 * 1024 * 1024)
+            .limit(2 * 1024 * 1024 * 1024)
             .read_to_vec()
             .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", package_name, e))?;
 

@@ -135,12 +135,36 @@ jobs:
             librsvg2-dev \
             lld
 
+      # Auto-sync the dx CLI with the project's dioxus crate version.
+      # install.sh defaults to the latest release, which may be incompatible
+      # with the dioxus version in Cargo.lock and break the build ("dx and
+      # dioxus versions are incompatible!"). The resolved version from
+      # Cargo.lock is mapped to the matching `vX.Y.Z` dx release tag, so a
+      # Renovate bump of dioxus automatically pulls the matching dx.
       - shell: bash
-        run: curl -sSL https://dioxus.dev/install.sh | bash
+        run: |
+          set -euo pipefail
+          DIOXUS_VERSION=$(grep -A1 '^name = "dioxus"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
+          if [ -z "$DIOXUS_VERSION" ]; then
+            echo "::error::Could not determine dioxus version from Cargo.lock"
+            exit 1
+          fi
+          TAG="v$DIOXUS_VERSION"
+          echo "Syncing dx CLI to dioxus $TAG (from Cargo.lock)"
+          # ubuntu runners are x86_64 Linux; fall back to latest dx if the
+          # matching release asset does not exist (e.g. version bump landed
+          # before its dx release was published).
+          ASSET_URL="https://github.com/DioxusLabs/dioxus/releases/download/${TAG}/dx-x86_64-unknown-linux-gnu.zip"
+          if [ "$(curl -sSL -o /dev/null -w '%{http_code}' "$ASSET_URL")" != "200" ]; then
+            echo "::warning::No dx release asset for ${TAG}; falling back to latest dx"
+            curl -sSL https://dioxus.dev/install.sh | bash
+          else
+            curl -sSL https://dioxus.dev/install.sh | bash -s -- "$TAG"
+          fi
 
       - shell: bash
         run: |
-          dx bundle --android --package-types ${{ matrix.package-type }} --features server --target ${{ matrix.target }} --release
+          dx bundle --android --verbose --package-types ${{ matrix.package-type }} --features server --target ${{ matrix.target }} --release
 
       - shell: bash
         if: matrix.package-type == 'aab'
