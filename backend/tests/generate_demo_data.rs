@@ -67,7 +67,7 @@ async fn test_generate_demo_data() {
         .expect("Failed to update settings");
 
     // Try PRoot or Docker
-    let runtime_info = match backend::get_runtime_info().await {
+    let mut runtime_info = match backend::get_runtime_info().await {
         Ok(info) if info.installed || info.supported => {
             if !info.installed {
                 println!("PRoot not installed but supported, will attempt to download and use PRoot runtime");
@@ -79,7 +79,9 @@ async fn test_generate_demo_data() {
                     if versions.is_empty() {
                         anyhow::bail!("No PRoot versions available");
                     }
-                    if let Err(e) = download_runtime_version(versions.first().unwrap().to_string()).await {
+                    if let Err(e) =
+                        download_runtime_version(versions.first().unwrap().to_string()).await
+                    {
                         anyhow::bail!("{e}");
                     }
                     Ok::<(), anyhow::Error>(())
@@ -172,6 +174,45 @@ async fn test_generate_demo_data() {
         other => panic!("Unknown runtime prefix: {other}"),
     };
     poll_task_until_done(&prep_task_id).await;
+
+    // 2.5. Make sure PRoot can actually execute the prepared image.
+    //      Some distribution builds install and start correctly but fail every
+    //      command inside the guest rootfs.  For example, the aarch64 build of
+    //      PRoot 5.1.0 (the newest one that runs with the glibc of Ubuntu
+    //      22.04) exits immediately with code 255 without printing anything,
+    //      so every pipeline run fails.  Docker is available on the CI runners
+    //      and works there, so fall back to it in that case.
+    if runtime == "proot" && !proot_can_run_image(image_tag).await {
+        println!("PRoot installed but cannot run the prepared image, falling back to Docker...");
+        let mut docker_info = backend::get_docker_runtime_info()
+            .await
+            .expect("Docker check failed");
+        if cfg!(windows) && docker_info.supported && std::env::var("GITHUB_ACTIONS").is_ok() {
+            docker_info.supported = false;
+            docker_info.unsupported_reason =
+                Some("Docker is not supported on Windows GitHub Actions runners".to_string());
+        }
+        if !docker_info.supported {
+            let reason = docker_info
+                .unsupported_reason
+                .as_deref()
+                .unwrap_or("unknown");
+            println!(
+                "Skipping test: neither PRoot nor Docker can run the image.\n  Docker unsupported reason: {reason}"
+            );
+            return;
+        }
+
+        let mut s = settings.clone();
+        s.default_image_tag =
+            Some("docker:mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest".to_string());
+        backend::update_settings(s).await.unwrap();
+        let prep_task_id = backend::prepare_docker_image(image_tag.to_string())
+            .await
+            .expect("Failed to prepare docker image");
+        poll_task_until_done(&prep_task_id).await;
+        runtime_info = docker_info;
+    }
 
     // 3. Create Project
     println!("Creating project...");
@@ -398,6 +439,51 @@ fn raw_to_glb_path(relative_path: &str) -> String {
         format!("{}.glb", without_ext)
     } else {
         format!("{}.glb", relative_path)
+    }
+}
+
+/// Check whether the installed PRoot runtime can execute a command inside the
+/// prepared image.
+///
+/// A PRoot binary that starts (`--version` works) but cannot translate the
+/// guest rootfs is unusable, so its failure has to be detected before the
+/// pipeline is started.  The image entrypoint is asked to print its usage with
+/// `--help-entrypoint`, which exits before it needs the project directory.
+async fn proot_can_run_image(image_tag: &str) -> bool {
+    use backend::runtimes::{PRoot, Runtime};
+
+    let settings = match backend::get_settings().await {
+        Ok(settings) => settings,
+        Err(e) => {
+            println!("WARNING: Failed to read settings for the PRoot probe: {e}");
+            return false;
+        }
+    };
+    let runtime = PRoot::new(
+        PathBuf::from(&settings.proot_binary_dir),
+        PathBuf::from(&settings.proot_images_dir),
+    );
+
+    let args = vec!["--help-entrypoint".to_string()];
+    let probe = async {
+        let mut handle = runtime.run(image_tag, &args, &[], &[]).await.ok()?;
+        handle.wait().await.ok()
+    };
+
+    match tokio::time::timeout(Duration::from_secs(120), probe).await {
+        Ok(Some(status)) if status.success() => true,
+        Ok(Some(status)) => {
+            println!("PRoot probe failed with exit status {status}");
+            false
+        }
+        Ok(None) => {
+            println!("PRoot probe could not be started");
+            false
+        }
+        Err(_) => {
+            println!("PRoot probe timed out");
+            false
+        }
     }
 }
 
