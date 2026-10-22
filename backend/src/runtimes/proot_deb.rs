@@ -1022,6 +1022,13 @@ mod tests {
     /// linker at the runtime directory.
     #[tokio::test]
     async fn launcher_starts_the_bundled_binary() {
+        #[cfg(windows)]
+        {
+            // The launcher is a POSIX shell script; it cannot run natively on
+            // Windows, so skip this test there.
+            return;
+        }
+
         let runtime_dir = std::env::temp_dir().join("colmap-openmvs-proot-launcher-test");
         let _ = tokio::fs::remove_dir_all(&runtime_dir).await;
         tokio::fs::create_dir_all(&runtime_dir)

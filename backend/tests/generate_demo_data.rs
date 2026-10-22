@@ -71,18 +71,55 @@ async fn test_generate_demo_data() {
         Ok(info) if info.installed || info.supported => {
             if !info.installed {
                 println!("PRoot not installed but supported, will attempt to download and use PRoot runtime");
-                download_runtime_version(
-                    get_available_runtime_versions()
+                let result = async {
+                    let versions = match get_available_runtime_versions().await {
+                        Ok(v) => v,
+                        Err(e) => anyhow::bail!("{e}"),
+                    };
+                    if versions.is_empty() {
+                        anyhow::bail!("No PRoot versions available");
+                    }
+                    if let Err(e) = download_runtime_version(versions.first().unwrap().to_string()).await {
+                        anyhow::bail!("{e}");
+                    }
+                    Ok::<(), anyhow::Error>(())
+                }
+                .await;
+                if let Err(e) = result {
+                    println!("Failed to download PRoot runtime: {e}, falling back to Docker...");
+                    let mut docker_info = backend::get_docker_runtime_info()
                         .await
-                        .expect("Failed to get available runtime versions")
-                        .first()
-                        .unwrap()
-                        .to_string(),
-                )
-                .await
-                .expect("Failed to download PRoot runtime");
+                        .expect("Docker check failed");
+                    if cfg!(windows)
+                        && docker_info.supported
+                        && std::env::var("GITHUB_ACTIONS").is_ok()
+                    {
+                        docker_info.supported = false;
+                        docker_info.unsupported_reason = Some(
+                            "Docker is not supported on Windows GitHub Actions runners".to_string(),
+                        );
+                    }
+                    if !docker_info.supported {
+                        let reason = docker_info
+                            .unsupported_reason
+                            .as_deref()
+                            .unwrap_or("unknown");
+                        println!(
+                            "Skipping test: neither PRoot nor Docker are supported on this platform.\n  Docker unsupported reason: {reason}"
+                        );
+                        return;
+                    }
+                    let mut s = settings.clone();
+                    s.default_image_tag =
+                        Some("docker:mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest".to_string());
+                    backend::update_settings(s.clone()).await.unwrap();
+                    docker_info
+                } else {
+                    info
+                }
+            } else {
+                info
             }
-            info
         }
         _ => {
             println!("PRoot not installed, falling back to Docker...");

@@ -39,6 +39,11 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.2.5" date="2026-10-22">
+      <description>
+        <p>Release 0.2.5: PRoot is now installed from the Debian/Ubuntu packages on every Linux platform, including aarch64, and works on the kernels that are affected by the seccomp bug of PRoot.</p>
+      </description>
+    </release>
     <release version="0.2.2" date="2026-10-06">
       <description>
         <p>Release 0.2.2: Self-contained AppImage with bundled WebKitGTK helper processes, AppStream metadata, and Linux compatibility improvements.</p>
