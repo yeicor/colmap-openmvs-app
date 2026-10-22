@@ -36,6 +36,9 @@ image = { version = "0.25.10" }
 # XZ compression for proot
 xz2 = { version = "0.1" }
 
+# Zstandard compression (used by the distribution packages of proot)
+zstd = "0.13"
+
 # Tar archive handling
 tar = { version = "0.4" }
 

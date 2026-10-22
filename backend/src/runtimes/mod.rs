@@ -4,6 +4,7 @@ use tracing::{debug, error, info};
 mod docker;
 pub(crate) mod docker_dind;
 mod proot;
+pub(crate) mod proot_deb;
 mod registry;
 #[allow(dead_code)]
 pub(crate) mod shared;

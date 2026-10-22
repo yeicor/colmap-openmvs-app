@@ -1,9 +1,8 @@
 use super::{
-    shared, shared::*, ImageHash, ImageTag, Mount, PrepareProgressTx, PreparedImage, ProcessHandle,
-    Runtime, RuntimeResult,
+    proot_deb, shared, shared::*, ImageHash, ImageTag, Mount, PrepareProgressTx, PreparedImage,
+    ProcessHandle, Runtime, RuntimeResult,
 };
 use async_trait::async_trait;
-use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tracing::{debug, error, info, trace, warn};
@@ -94,6 +93,19 @@ fn setup_proot_command(proot_bin: &str) -> Command {
     let cmd = Command::new(proot_bin);
     info!(proot_bin = %proot_bin, "setup_proot_command: initializing");
     cmd
+}
+
+/// Apply the environment variables that PRoot itself needs on this platform.
+///
+/// These variables configure the PRoot process itself, they are not part of
+/// the environment of the guest.
+fn setup_proot_environment(cmd: &mut Command) {
+    // PRoot accelerates the syscall interception with a seccomp filter that
+    // is broken on the kernels affected by Ubuntu bug #1202161: the guest
+    // then dies with SIGBUS or its paths are translated wrongly, so every
+    // command fails.  PRoot itself suggests this variable as the workaround.
+    #[cfg(target_os = "linux")]
+    cmd.env("PROOT_NO_SECCOMP", "1");
 }
 
 // ---------------------------------------------------------------------------
@@ -196,34 +208,27 @@ impl PRoot {
     // Version fetching
     // -----------------------------------------------------------------------
 
+    /// List the PRoot versions that can be installed on Linux.
+    ///
+    /// The versions are the ones of the distribution packages that are
+    /// published for the architecture of the host.
     async fn fetch_linux_versions(&self) -> RuntimeResult<Vec<String>> {
-        let url = "https://gitlab.com/api/v4/projects/proot%2Fproot/repository/tags";
+        let packages = proot_deb::fetch_proot_packages()
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .user_agent("colmap-openmvs-app")
-            .build()
-            .into();
+        let versions: Vec<String> = packages
+            .iter()
+            .filter(|info| info.compatible)
+            .map(|info| info.package.version.clone())
+            .collect();
 
-        let response = agent
-            .get(url)
-            .call()
-            .map_err(|e| anyhow::anyhow!("Failed to fetch versions: {}", e))?;
-
-        #[derive(Deserialize)]
-        struct GitLabTag {
-            name: String,
+        if versions.is_empty() {
+            return Err(anyhow::anyhow!(
+                "No PRoot package compatible with this system was found"
+            ));
         }
 
-        let body = response
-            .into_body()
-            .read_to_vec()
-            .map_err(|e| anyhow::anyhow!("Failed to read versions response: {}", e))?;
-        let tags: Vec<GitLabTag> = serde_json::from_slice(&body)
-            .map_err(|e| anyhow::anyhow!("Failed to parse versions: {}", e))?;
-
-        let mut versions: Vec<String> = tags.into_iter().map(|t| t.name).collect();
-        versions.sort();
-        versions.reverse();
         Ok(versions)
     }
 
@@ -379,74 +384,27 @@ impl PRoot {
     // Download helpers
     // -----------------------------------------------------------------------
 
+    /// Install PRoot on Linux from a distribution package.
+    ///
+    /// Upstream only publishes a pre-compiled binary for `x86_64`, so the
+    /// binary is taken from the Debian/Ubuntu package pools.  The binary is
+    /// extracted from the `.deb` package and — if the host does not provide
+    /// `libtalloc` — the required shared library is bundled next to it.
     async fn download_linux(&self, version: &str) -> RuntimeResult<()> {
-        let latest_versions = self.fetch_linux_versions().await?;
-        let latest = latest_versions
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("No versions available"))?
-            .clone();
-
-        // Extract the base version number from the requested version
-        // (handles both "5.3.1", "v5.3.1", and "5.3.1-99a84175" formats)
-        let version_cleaned = version.trim_start_matches('v');
-        let base_version = version_cleaned.split('-').next().unwrap_or(version_cleaned);
-
-        // Extract base from latest and remove 'v' prefix
-        let latest_cleaned = latest.trim_start_matches('v');
-        let latest_base = latest_cleaned.split('-').next().unwrap_or(latest_cleaned);
-
-        debug!(
-            requested = %version,
-            base = %base_version,
-            latest = %latest,
-            latest_base = %latest_base,
-            "download_linux: version comparison"
+        info!(
+            version = %version,
+            "download_linux: installing PRoot from a distribution package"
         );
 
-        // Allow download if the base version matches (ignoring 'v' prefix and suffixes)
-        if base_version != latest_base {
-            return Err(anyhow::anyhow!(
-                "Only the latest version ({}) is available for download, requested: {}",
-                latest,
-                version
-            ));
-        }
-
-        tokio::fs::create_dir_all(&self.runtime_dir)
+        let installed = proot_deb::install_proot(&self.runtime_dir, version)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to create runtime directory: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-        let url = "https://proot.gitlab.io/proot/bin/proot";
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .user_agent("colmap-openmvs-app")
-            .build()
-            .into();
-
-        let mut response = agent
-            .get(url)
-            .call()
-            .map_err(|e| anyhow::anyhow!("Failed to download proot: {}", e))?;
-        let bytes = response
-            .body_mut()
-            .with_config()
-            .limit(2 * 1024 * 1024 * 1024)
-            .read_to_vec()
-            .map_err(|e| anyhow::anyhow!("Failed to read download: {}", e))?;
-
-        let proot_path = self.runtime_dir.join("proot");
-        tokio::fs::write(&proot_path, &bytes)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to write proot binary: {}", e))?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o755);
-            tokio::fs::set_permissions(&proot_path, perms)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to set executable bit: {}", e))?;
-        }
-
+        info!(
+            version = %installed,
+            runtime_dir = %self.runtime_dir.display(),
+            "download_linux: PRoot installed"
+        );
         Ok(())
     }
 
@@ -820,10 +778,10 @@ impl Runtime for PRoot {
         }
 
         match (target_arch, target_os) {
-            ("x86_64", "linux") => Ok(()),
+            ("x86_64", "linux") | ("aarch64", "linux") => Ok(()),
             ("aarch64", "android") | ("x86_64", "android") => Ok(()),
             (arch, os) => Err(anyhow::anyhow!(
-                "PRoot cannot be automatically installed on this platform \\n                 (arch: {arch}, os: {os}). Supported: x86_64-linux, *-android. \\n                 Install proot manually and add it to $PATH to use it on other platforms."
+                "PRoot cannot be automatically installed on this platform \\n                 (arch: {arch}, os: {os}). Supported: x86_64-linux, aarch64-linux, *-android. \\n                 Install proot manually and add it to $PATH to use it on other platforms."
             )),
         }
     }
@@ -845,7 +803,18 @@ impl Runtime for PRoot {
             String::from_utf8_lossy(&output.stderr)
         );
         debug!(output = %combined, "version: proot output");
-        let version = Self::parse_proot_version(&combined)?;
+        let version = match Self::parse_proot_version(&combined) {
+            Ok(version) => version,
+            Err(e) => {
+                // The distribution builds of PRoot do not print their version,
+                // so the version of the installed package is used instead.
+                let installed = proot_deb::installed_version(&self.runtime_dir)
+                    .await
+                    .ok_or(e)?;
+                info!(version = %installed, "version: using the version of the installed package");
+                installed
+            }
+        };
         info!(version = %version, "version: parsed version");
         Ok(version)
     }
@@ -886,6 +855,13 @@ impl Runtime for PRoot {
                         return Ok(vec![v]);
                     }
                 }
+
+                // The distribution builds of PRoot do not print their version,
+                // so the version of the installed package is used instead.
+                if let Some(v) = proot_deb::installed_version(&self.runtime_dir).await {
+                    info!(version = %v, "available_versions: returning the version of the installed package");
+                    return Ok(vec![v]);
+                }
             }
             Err(_) => {
                 debug!("available_versions: proot not found, fetching from repository");
@@ -894,7 +870,7 @@ impl Runtime for PRoot {
 
         debug!(arch = %std::env::consts::ARCH, os = %std::env::consts::OS, "available_versions: fetching from repository");
         match (std::env::consts::ARCH, std::env::consts::OS) {
-            ("x86_64", "linux") => self.fetch_linux_versions().await,
+            ("x86_64", "linux") | ("aarch64", "linux") => self.fetch_linux_versions().await,
             ("aarch64", "android") | ("x86_64", "android") => {
                 self.fetch_android_latest_version().await
             }
@@ -915,15 +891,16 @@ impl Runtime for PRoot {
             return Ok(());
         }
 
-        // Check if proot is already available via any other strategy
-        if find_proot_binary(&self.runtime_dir).await.is_ok() {
-            debug!("download: proot is already available");
+        // A proot binary that is provided by the system must not be replaced —
+        // the binary in the runtime directory however can be updated.
+        if which::which("proot").is_ok() && !self.runtime_dir.join("proot").exists() {
+            debug!("download: a system proot is already available");
             return Ok(());
         }
 
         debug!(arch = %std::env::consts::ARCH, os = %std::env::consts::OS, "download: platform info");
         match (std::env::consts::ARCH, std::env::consts::OS) {
-            ("x86_64", "linux") => self.download_linux(version).await,
+            ("x86_64", "linux") | ("aarch64", "linux") => self.download_linux(version).await,
             ("aarch64", "android") | ("x86_64", "android") => self.download_android(version).await,
             _ => Err(anyhow::anyhow!("Unsupported platform for download")),
         }
@@ -1115,6 +1092,9 @@ impl Runtime for PRoot {
         // Clear all inherited environment variables from the parent process
         // Only the container's environment will be used
         cmd.env_clear();
+
+        // Environment variables that PRoot itself needs on this platform.
+        setup_proot_environment(&mut cmd);
 
         // On Android, bind the jniLibs directory so that ELF symlinks
         // (librootfs-<hash>.so) resolve inside the container.
@@ -1374,6 +1354,9 @@ impl Runtime for PRoot {
                 tokio::fs::remove_file(&runtime_proot)
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to delete proot binary: {}", e))?;
+                // Remove the auxiliary files of a package based installation
+                // (the launcher script, the binary and the bundled libtalloc).
+                proot_deb::remove_bundled_files(&self.runtime_dir).await;
                 info!(
                     path = %runtime_proot.display(),
                     "delete_binary: deleted proot binary"
@@ -1386,6 +1369,137 @@ impl Runtime for PRoot {
                 proot_bin
             ))
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Install PRoot through the regular runtime API and verify that the
+    /// installed binary can be started.
+    ///
+    /// The test uses the packages of the architecture of the host, so it
+    /// verifies the installation on every supported platform.
+    #[tokio::test]
+    #[ignore = "requires network access"]
+    async fn installs_and_runs_proot() {
+        let runtime_dir = std::env::temp_dir().join("colmap-openmvs-proot-runtime-test");
+        let _ = tokio::fs::remove_dir_all(&runtime_dir).await;
+        let runtime = PRoot::new_simple(runtime_dir.clone());
+
+        runtime.is_supported().expect("platform supported");
+
+        let versions = runtime.available_versions().await.expect("versions");
+        assert!(!versions.is_empty(), "no versions found");
+        println!("available versions: {versions:?}");
+
+        runtime.download(&versions[0]).await.expect("download");
+        assert!(
+            runtime_dir.join("proot").exists(),
+            "the proot binary was not installed"
+        );
+
+        let version = runtime.version().await.expect("version");
+        assert!(!version.is_empty());
+
+        // Installing again must replace the previous installation.
+        runtime.download(&versions[0]).await.expect("update");
+        assert!(runtime_dir.join("proot").exists());
+
+        runtime.delete_binary().await.expect("delete");
+        assert!(!runtime_dir.join("proot").exists());
+
+        let _ = tokio::fs::remove_dir_all(&runtime_dir).await;
+    }
+
+    /// Install PRoot and verify that it can run a command inside a guest
+    /// rootfs.
+    ///
+    /// A PRoot build that is unable to translate the paths of the guest
+    /// rootfs starts up without any error but fails every command.
+    ///
+    /// PRoot needs a working ptrace, so this test can only run on a native
+    /// host.  It fails inside an emulated environment, for example when an
+    /// aarch64 binary is executed by qemu-user on an x86_64 host.
+    #[tokio::test]
+    #[ignore = "requires network access and a native ptrace"]
+    async fn runs_a_command_inside_a_guest_rootfs() {
+        let runtime_dir = std::env::temp_dir().join("colmap-openmvs-proot-guest-test");
+        let _ = tokio::fs::remove_dir_all(&runtime_dir).await;
+        let runtime = PRoot::new_simple(runtime_dir.clone());
+
+        let versions = runtime.available_versions().await.expect("versions");
+        assert!(!versions.is_empty(), "no versions found");
+
+        runtime.download(&versions[0]).await.expect("download");
+        assert!(
+            run_guest_probe(&runtime_dir.join("proot")).await,
+            "the installed proot cannot run a command inside a guest rootfs"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&runtime_dir).await;
+    }
+
+    /// Run a command inside a guest rootfs and check that it is executed.
+    ///
+    /// The host directories that provide the guest shell and its libraries
+    /// are bound into the guest, while the script that has to be read lives
+    /// inside the guest rootfs.  PRoot builds that cannot translate the
+    /// paths of the guest rootfs fail to find it.
+    async fn run_guest_probe(proot_bin: &std::path::Path) -> bool {
+        const MARKER: &str = "COLMAP_OPENMVS_PROOT_PROBE";
+
+        if !std::path::Path::new("/bin/sh").exists() {
+            return true;
+        }
+
+        let probe_dir =
+            std::env::temp_dir().join(format!("colmap-openmvs-proot-probe-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&probe_dir).await;
+        if tokio::fs::create_dir_all(&probe_dir).await.is_err() {
+            return false;
+        }
+        if tokio::fs::write(probe_dir.join("probe.sh"), format!("echo {MARKER}\n"))
+            .await
+            .is_err()
+        {
+            return false;
+        }
+
+        let mut cmd = Command::new(proot_bin);
+        cmd.env_clear();
+        setup_proot_environment(&mut cmd);
+        cmd.arg("-r").arg(&probe_dir);
+        for dir in [
+            "/bin",
+            "/sbin",
+            "/lib",
+            "/lib32",
+            "/lib64",
+            "/libx32",
+            "/usr/lib",
+            "/usr/lib32",
+            "/usr/lib64",
+            "/usr/libx32",
+        ] {
+            if std::path::Path::new(dir).exists() {
+                cmd.arg("-b").arg(dir);
+            }
+        }
+        cmd.arg("/bin/sh").arg("/probe.sh");
+
+        let output = match cmd.output().await {
+            Ok(output) => output,
+            Err(_) => return false,
+        };
+        let _ = tokio::fs::remove_dir_all(&probe_dir).await;
+
+        String::from_utf8_lossy(&output.stdout).contains(MARKER)
     }
 }
 

@@ -845,6 +845,7 @@ dependencies = [
  "windows 0.62.2",
  "xz2",
  "zip",
+ "zstd",
 ]
 
 [[package]]

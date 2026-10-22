@@ -49,7 +49,7 @@
 
 - **Containerized**: All dependencies are pacakged into a container with automated updates.
 - **Docker runtime**: Best performance, requires the Docker daemon (Docker-in-Docker supported).
-- **PRoot runtime**: No privileges needed; auto-downloaded and managed by the app.
+- **PRoot runtime**: No privileges needed; auto-downloaded and managed by the app. On Linux the pre-built Debian/Ubuntu package for the host architecture is used — automatic installation works on `x86_64` and `aarch64`, as well as on Android.
 - **CPU support**: Runs the full pipeline on any system.
 - **CUDA support**: Mount host GPU drivers for hardware-accelerated reconstruction.
 
