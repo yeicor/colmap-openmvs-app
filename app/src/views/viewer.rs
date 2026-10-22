@@ -109,13 +109,13 @@ pub fn Viewer(name: String, file_encoded: String, cfg: String) -> Element {
 
         let pn = name_for_effect.clone();
         let fp_clone = fp.clone();
-        let mut loading = loading.clone();
+        let mut loading = loading;
         #[cfg_attr(not(feature = "demo"), allow(unused_mut, unused_variables))]
-        let mut err = error_msg.clone();
-        let mut guard = spawn_guard.clone();
+        let mut err = error_msg;
+        let mut guard = spawn_guard;
         let container_id = container_id_for_effect.clone();
         let icfg_raw = initial_cfg_raw.clone();
-        let cancelled = cancelled.clone();
+        let cancelled = cancelled;
 
         spawn(async move {
             if cancelled() {
@@ -167,10 +167,10 @@ pub fn Viewer(name: String, file_encoded: String, cfg: String) -> Element {
                     }
                     #[cfg(not(feature = "fullstack"))]
                     {
-                        String::new()
+                        ""
                     }
                 };
-                let server_url_esc = js_escape(&server_url);
+                let server_url_esc = js_escape(server_url);
                 format!(
                     r#"
 	var _viewerAbsUrl = new URL('{viewer_url}', window.location.href).href;
@@ -404,7 +404,7 @@ if (el) el.innerHTML = '';"#
     let file_for_overlay = file_decoded.clone();
     let file_display_for_overlay = file_display.clone();
     let container_id_for_back = container_id.clone();
-    let mut cancelled_for_back = cancelled.clone();
+    let mut cancelled_for_back = cancelled;
 
     // Info overlay toggle
     let mut show_info = use_signal(|| false);

@@ -30,11 +30,11 @@ pub fn Banner(
 
     // Auto-dismiss info/error toasts after 6 s (but not progress toasts).
     if on_close.is_some() && progress.is_none() {
-        let handler = on_close.clone();
+        let handler = on_close;
         let msg = message.clone();
         use_effect(move || {
             if !msg.is_empty() {
-                let handler = handler.clone();
+                let handler = handler;
                 spawn(async move {
                     let _ = eval("await new Promise(r => setTimeout(r, 6000))").await;
                     if let Some(h) = handler {

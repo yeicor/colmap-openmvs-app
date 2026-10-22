@@ -430,7 +430,7 @@ impl Runtime for Docker {
                     );
                     cmd.arg("-v").arg(format!(
                         "{}:{}",
-                        normalize_for_docker(&std::path::Path::new(&resolved_host_path)),
+                        normalize_for_docker(std::path::Path::new(&resolved_host_path)),
                         container_path
                     ));
                 } else if cfg_host_path != resolved_host_path
@@ -447,7 +447,7 @@ impl Runtime for Docker {
                     );
                     cmd.arg("-v").arg(format!(
                         "{}:{}",
-                        normalize_for_docker(&std::path::Path::new(&cfg_host_path)),
+                        normalize_for_docker(std::path::Path::new(&cfg_host_path)),
                         container_path
                     ));
                 } else {

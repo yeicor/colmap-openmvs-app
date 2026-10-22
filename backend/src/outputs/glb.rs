@@ -19,6 +19,9 @@
 use anyhow::anyhow;
 use std::io::Read;
 
+/// The positions and the optional per-point colors of a point cloud.
+type PointCloud = (Vec<[f32; 3]>, Option<Vec<[u8; 3]>>);
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Extract all `comment TextureFile <name>` entries from the PLY header.
@@ -162,7 +165,7 @@ pub fn generate_glb(file_name: &str, project_path: &std::path::Path) -> anyhow::
 
 // ── points3D.bin → GLB ────────────────────────────────────────────────────────
 
-fn parse_points3d_bin(data: &[u8]) -> anyhow::Result<(Vec<[f32; 3]>, Option<Vec<[u8; 3]>>)> {
+fn parse_points3d_bin(data: &[u8]) -> anyhow::Result<PointCloud> {
     let mut cursor = std::io::Cursor::new(data);
     let num_points = read_u64(&mut cursor)? as usize;
 
@@ -496,8 +499,8 @@ impl<'a> BinReader<'a> {
         }
         // For float/double colors (range [0,1]), convert to [0,255]
         let f = self.read_scalar_f32(s)?;
-        if f >= 0.0 && f <= 1.0 && (s == Scalar::Float || s == Scalar::Double) {
-            Ok((f * 255.0).round().max(0.0).min(255.0) as u8)
+        if (0.0..=1.0).contains(&f) && (s == Scalar::Float || s == Scalar::Double) {
+            Ok((f * 255.0).round().clamp(0.0, 255.0) as u8)
         } else {
             Ok(f as u8)
         }
@@ -840,8 +843,8 @@ fn parse_ascii(hdr: &Header, data: &[u8], out: &mut ParsedPly) -> anyhow::Result
                     out.positions.push([get(xi), get(yi), get(zi)]);
                     if has_col {
                         let to_u8 = |v: f32| -> u8 {
-                            if v >= 0.0 && v <= 1.0 && v.fract() != 0.0 {
-                                (v * 255.0).round().max(0.0).min(255.0) as u8
+                            if (0.0..=1.0).contains(&v) && v.fract() != 0.0 {
+                                (v * 255.0).round().clamp(0.0, 255.0) as u8
                             } else {
                                 v as u8
                             }

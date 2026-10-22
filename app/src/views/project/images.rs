@@ -61,10 +61,10 @@ async fn fetch_media_size_eval(
         }
         #[cfg(not(feature = "fullstack"))]
         {
-            String::new()
+            ""
         }
     };
-    let server_url_esc = js_escape(&server_url);
+    let server_url_esc = js_escape(server_url);
     let project_esc = js_escape(project_name);
     let media_esc = js_escape(media_name);
 
@@ -139,10 +139,10 @@ async fn fetch_image_bytes_eval(project_name: &str, image_name: &str) -> Result<
         }
         #[cfg(not(feature = "fullstack"))]
         {
-            String::new()
+            ""
         }
     };
-    let server_url_esc = js_escape(&server_url);
+    let server_url_esc = js_escape(server_url);
     let project_esc = js_escape(project_name);
     let image_esc = js_escape(image_name);
 
@@ -493,6 +493,7 @@ fn build_demo_cb(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_resize_cb(
     project_name: String,
     mut image_paths: Signal<Vec<String>>,
@@ -547,6 +548,13 @@ fn build_resize_cb(
 // cleanly between gallery mode (full bytes) and list mode (sizes only).
 // ---------------------------------------------------------------------------
 
+/// The result of a single image fetch: the image name and its bytes (or the
+/// error that occurred while fetching them).
+type FetchResult = (String, Result<Vec<u8>, String>);
+
+/// A boxed future that fetches a single image.
+type FetchFuture = Pin<Box<dyn Future<Output = FetchResult>>>;
+
 /// Fetch full image bytes with bounded concurrency, populating `img_cache`.
 /// This is the gallery‑mode code path (the original behaviour).
 async fn fetch_all_bytes(
@@ -561,10 +569,8 @@ async fn fetch_all_bytes(
     use futures::stream::FuturesUnordered;
     use futures::StreamExt as _;
 
-    let mut results: Vec<(String, Result<Vec<u8>, String>)> = Vec::with_capacity(needs_fetch.len());
-    let mut in_flight: FuturesUnordered<
-        Pin<Box<dyn Future<Output = (String, Result<Vec<u8>, String>)>>>,
-    > = FuturesUnordered::new();
+    let mut results: Vec<FetchResult> = Vec::with_capacity(needs_fetch.len());
+    let mut in_flight: FuturesUnordered<FetchFuture> = FuturesUnordered::new();
     let mut iter = needs_fetch.into_iter();
 
     #[cfg(target_arch = "wasm32")]
@@ -1540,7 +1546,7 @@ pub fn GalleryTab(project_name: String) -> Element {
                         let fullscreen_img_cache = img_cache;
                         let fullscreen_fetch_project = project_name.clone();
                         let fname_for_fetch = fullscreen_name.clone();
-                        let _ = use_resource(move || {
+                        use_resource(move || {
                             let name = fname_for_fetch.clone();
                             let project = fullscreen_fetch_project.clone();
                             async move {

@@ -273,7 +273,7 @@ fn generate_demo_assets(manifest_dir: &Path) {
     let mut output_files: Vec<DemoFile> = Vec::new();
 
     if images_dir.exists() {
-        fs::create_dir_all(&base64_dir.join("images")).unwrap();
+        fs::create_dir_all(base64_dir.join("images")).unwrap();
         for entry in fs::read_dir(&images_dir).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
@@ -321,7 +321,7 @@ fn generate_demo_assets(manifest_dir: &Path) {
 
     // ── Section 2: OnceLock statics for each file ──────────────────────────
     if !image_files.is_empty() || !output_files.is_empty() {
-        out.push_str("\n");
+        out.push('\n');
     }
     for f in image_files.iter().chain(output_files.iter()) {
         out.push_str(&format!(
@@ -774,7 +774,7 @@ fn embed_android_icon_and_app_name(manifest_dir: &Path, app_name: &str) {
 
         // ── Flat (non-adaptive) icon — used as fallback on pre-API-26 ──
         let flat = img.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
-        if let Err(e) = flat.save(&mipmap_dir.join("ic_launcher.webp")) {
+        if let Err(e) = flat.save(mipmap_dir.join("ic_launcher.webp")) {
             eprintln!("cargo:warning=Failed to write ic_launcher.webp (mipmap-{density}): {e}");
         } else {
             any_written = true;
@@ -783,7 +783,7 @@ fn embed_android_icon_and_app_name(manifest_dir: &Path, app_name: &str) {
         // ── Adaptive-icon foreground — full-bleed, same as flat icon ─────
         // The user prefers the icon as large as possible and accepts that the
         // device mask (squircle, circle, etc.) may clip edges.
-        if let Err(e) = flat.save(&mipmap_dir.join("ic_launcher_foreground.webp")) {
+        if let Err(e) = flat.save(mipmap_dir.join("ic_launcher_foreground.webp")) {
             eprintln!(
                 "cargo:warning=Failed to write ic_launcher_foreground.webp (mipmap-{density}): {e}"
             );

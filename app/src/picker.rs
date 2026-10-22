@@ -242,7 +242,10 @@ pub async fn upload_files_direct(
                 tracing::error!("Eval channel error during upload: {:?}", e);
                 // Eval channel died — add any remaining files as errors
                 if remaining > 0 {
-                    errors.push(format!("Upload channel closed unexpectedly ({} pending)", remaining));
+                    errors.push(format!(
+                        "Upload channel closed unexpectedly ({} pending)",
+                        remaining
+                    ));
                 }
                 break;
             }

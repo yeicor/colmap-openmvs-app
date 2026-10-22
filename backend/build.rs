@@ -411,11 +411,11 @@ fn download_and_extract_deb(
             }
         } else if package == "libandroid-shmem" {
             if let Some(name) = path.file_name() {
-                if name.to_string_lossy() == "libandroid-shmem.so" {
-                    if !entry.header().entry_type().is_symlink() {
-                        entry.unpack(dest_bin).expect("extract libandroid-shmem");
-                        eprintln!("  [libandroid-shmem] → libandroid-shmem.so");
-                    }
+                if name.to_string_lossy() == "libandroid-shmem.so"
+                    && !entry.header().entry_type().is_symlink()
+                {
+                    entry.unpack(dest_bin).expect("extract libandroid-shmem");
+                    eprintln!("  [libandroid-shmem] → libandroid-shmem.so");
                 }
             }
         }
@@ -549,7 +549,7 @@ fn build_rootfs_artifacts(cache: &CacheDir, tag: String, pulled: PulledImage) {
     }
 
     // Write deduplicated non-ELF entries to the zip archive.
-    let zf = std::fs::File::create(&cache.rootfs_zip()).expect("create rootfs.zip");
+    let zf = std::fs::File::create(cache.rootfs_zip()).expect("create rootfs.zip");
     let mut zip = ZipWriter::new(zf);
     for (zip_path_str, (data, mode)) in zip_entries {
         let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
@@ -812,8 +812,8 @@ fn copy_assets_to_jnilibs(profile: &str, cache: &CacheDir) {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
             if name_str != arch_abi && entry.path().is_dir() {
-                std::fs::remove_dir_all(&entry.path())
-                    .expect(&format!("remove stale jniLibs/{name_str}"));
+                std::fs::remove_dir_all(entry.path())
+                    .unwrap_or_else(|_| panic!("remove stale jniLibs/{name_str}"));
                 eprintln!("  Removed stale jniLibs/{name_str}");
             }
         }
@@ -834,7 +834,7 @@ fn copy_assets_to_jnilibs(profile: &str, cache: &CacheDir) {
         if !src.exists() {
             panic!("required source {} not found", src.display());
         }
-        std::fs::copy(&src, &dst).expect(&format!("copy {src_name} → {dst_name}"));
+        std::fs::copy(&src, &dst).unwrap_or_else(|_| panic!("copy {src_name} → {dst_name}"));
         set_executable(&dst);
         eprintln!("  Copied {src_name} → {dst_name}");
     }
@@ -881,7 +881,7 @@ fn copy_assets_to_jnilibs(profile: &str, cache: &CacheDir) {
         }
         let dst_name = format!("librootfs-{name_str}.so");
         let dst = jni_dir.join(&dst_name);
-        std::fs::copy(&entry.path(), &dst).expect(&format!("copy ELF {name_str}"));
+        std::fs::copy(entry.path(), &dst).unwrap_or_else(|_| panic!("copy ELF {name_str}"));
     }
     eprintln!("  Copied ELF binaries → jniLibs/");
 }
@@ -1169,7 +1169,7 @@ fn set_executable(path: &Path) {
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-            .expect(&format!("chmod 755 {}", path.display()));
+            .unwrap_or_else(|_| panic!("chmod 755 {}", path.display()));
     }
 }
 

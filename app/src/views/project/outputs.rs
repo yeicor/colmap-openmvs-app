@@ -160,10 +160,10 @@ async fn trigger_download_from_url(
         }
         #[cfg(not(feature = "fullstack"))]
         {
-            String::new()
+            ""
         }
     };
-    let server_url_esc = js_escape(&server_url);
+    let server_url_esc = js_escape(server_url);
 
     let js = format!(
         r#"(async function() {{
@@ -761,8 +761,8 @@ pub fn OutputsTab(project_name: String) -> Element {
                         move |_| {
                             dl.set(Some(String::new()));
                             let pn2 = pn.clone();
-                            let mut dl2 = dl.clone();
-                            let tc2 = tc.clone();
+                            let mut dl2 = dl;
+                            let tc2 = tc;
                             spawn(async move {
                                 trigger_download_zip(
                                     &pn2, "", &format!("{}-backup.zip", pn2), tc2,
@@ -788,9 +788,9 @@ pub fn OutputsTab(project_name: String) -> Element {
                         move |_| {
                             rst.set(true);
                             let pn2 = pn.clone();
-                            let mut rst2 = rst.clone();
-                            let rc2 = rc.clone();
-                            let tc2 = tc.clone();
+                            let mut rst2 = rst;
+                            let rc2 = rc;
+                            let tc2 = tc;
                             spawn(async move {
                                 restore_files(&pn2, "", rc2, tc2).await;
                                 rst2.set(false);
@@ -814,7 +814,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                                 confirming_clear_all.set(false);
                                 clearing_all.set(true);
                                 let pn = pn.clone();
-                                let mut tc = tc.clone();
+                                let mut tc = tc;
                                 spawn(async move {
                                     match clear_project_outputs(pn.clone()).await {
                                         Ok(()) => {
@@ -1001,8 +1001,8 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                                     let pn2 = pn.clone();
                                                                     let fp2 = fp.clone();
                                                                     let fn2 = fn_.clone();
-                                                                    let mut dl2 = dl.clone();
-                                                                    let tc2 = tc.clone();
+                                                                    let mut dl2 = dl;
+                                                                    let tc2 = tc;
                                                                     spawn(async move {
                                                                         let zip_name = format!("{}-{}.zip", pn2, fn2);
                                                                         trigger_download_zip(
@@ -1205,7 +1205,7 @@ pub fn OutputsTab(project_name: String) -> Element {
                                                     let pn2 = pn.clone();
                                                     let rp2 = rp.clone();
                                                     let fname2 = fname.clone();
-                                                    let tc2 = tc.clone();
+                                                    let tc2 = tc;
                                                     spawn(async move {
                                                         #[cfg(not(feature = "demo"))]
                                                         {
@@ -1277,7 +1277,7 @@ setTimeout(() => {{ document.body.removeChild(a); URL.revokeObjectURL(a.href); }
                                                         let pn2 = pn.clone();
                                                         let rp2 = rp.clone();
                                                         let fname2 = fname.clone();
-                                                        let tc2 = tc.clone();
+                                                        let tc2 = tc;
                                                         // Derive a .glb filename from the original name
                                                         let glb_name = if let Some((base, _)) = fname2.rsplit_once('.') {
                                                             format!("{base}.glb")

@@ -279,8 +279,8 @@ fn spawn_pipeline_stream(
                     let mut update = BatchUpdate {
                         stages: stages.peek().clone(),
                         pipeline_status: pipeline_status.peek().clone(),
-                        expanded_stage: expanded_stage.peek().clone(),
-                        pipeline_progress: pipeline_progress_ctx.peek().clone(),
+                        expanded_stage: *expanded_stage.peek(),
+                        pipeline_progress: *pipeline_progress_ctx.peek(),
                         active_task_id: active_task_id.peek().clone(),
                     };
                     let mut should_terminate = false;

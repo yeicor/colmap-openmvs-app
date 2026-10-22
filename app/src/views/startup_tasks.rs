@@ -119,10 +119,10 @@ pub fn StartupTasks() -> Element {
     });
 
     // React to the shared completion flags so we redirect to origin.
-    let is_running = match (local_task_state(), startup.is_startup_completed()) {
-        (Some(TaskState::Running), _) | (None, false) => true,
-        _ => false,
-    };
+    let is_running = matches!(
+        (local_task_state(), startup.is_startup_completed()),
+        (Some(TaskState::Running), _) | (None, false)
+    );
 
     let on_retry = move |_: Event<MouseData>| {
         // Reset shared state and restart the startup task.

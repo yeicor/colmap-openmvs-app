@@ -154,7 +154,7 @@ pub fn Projects(
     let handle_toast_ctx = toast_ctx;
     let refresh_toast_ctx = toast_ctx;
     let refresh_projects = move || {
-        let mut tc = refresh_toast_ctx.clone();
+        let mut tc = refresh_toast_ctx;
         debug!("Refreshing projects list");
         spawn({
             async move {
@@ -185,7 +185,7 @@ pub fn Projects(
     use_effect(refresh_projects);
 
     let handle_confirm = move |_: ()| {
-        let mut tc = handle_toast_ctx.clone();
+        let mut tc = handle_toast_ctx;
         spawn({
             async move {
                 if let Some(dialog) = dialog_type() {

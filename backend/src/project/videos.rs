@@ -272,12 +272,10 @@ async fn delete_video_frames(project_name: &str, video_name: &str, projects_fold
     for entry in entries.flatten() {
         let path = entry.path();
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if re.is_match(name) {
-                if std::fs::remove_file(&path).is_ok() {
-                    if let Some(name_str) = path.file_name().and_then(|n| n.to_str()) {
-                        debug!(frame = %name_str, "Deleted frame image associated with video");
-                        deleted += 1;
-                    }
+            if re.is_match(name) && std::fs::remove_file(&path).is_ok() {
+                if let Some(name_str) = path.file_name().and_then(|n| n.to_str()) {
+                    debug!(frame = %name_str, "Deleted frame image associated with video");
+                    deleted += 1;
                 }
             }
         }
@@ -313,10 +311,8 @@ async fn delete_all_frames(project_name: &str, projects_folder: &str) {
     for entry in entries.flatten() {
         let path = entry.path();
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if re.is_match(name) {
-                if std::fs::remove_file(&path).is_ok() {
-                    deleted += 1;
-                }
+            if re.is_match(name) && std::fs::remove_file(&path).is_ok() {
+                deleted += 1;
             }
         }
     }
