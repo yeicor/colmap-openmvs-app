@@ -21,9 +21,123 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 // Import from build-dependencies.
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 use zip::{CompressionMethod, ZipWriter};
 // bring in types & utils shared with src/runtimes/proot.rs
 include!("src/runtimes/shared.rs");
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+//
+// `dx` runs cargo with a JSON message format and aborts as soon as it sees
+// `build-finished { success: false }` — *before* cargo's plain-text error line
+// is read. A panicking build script therefore surfaces as a bare
+// "cargo build finished with errors" with no diagnostics at all.
+//
+// To keep that debuggable, every stage is logged to `target/android-build.log`
+// (printed by the CI failure step) and panics are echoed via
+// `cargo:warning=`, which cargo does forward as a rendered diagnostic.
+static BUILD_LOG: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
+
+/// Minimum free disk space required to keep going. The split step writes
+/// ~1 GiB of ELF binaries and `copy_assets_to_jnilibs` then copies them again,
+/// so getting much below this means an imminent (and far less obvious)
+/// `ENOSPC`. Failing here names the stage that was running.
+const MIN_FREE_DISK_BYTES: u64 = 1024 * 1024 * 1024;
+
+fn build_log_path() -> PathBuf {
+    project_root().join("target").join("android-build.log")
+}
+
+fn init_build_log() {
+    let path = build_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(file) = std::fs::File::create(&path) {
+        let _ = BUILD_LOG.set(Mutex::new(file));
+    }
+
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info
+            .to_string()
+            .trim_start_matches("panicked at ")
+            .replace('\n', " | ");
+        log_line(&format!("PANIC: {msg}"));
+        // Make the panic visible in `dx bundle` output instead of swallowing it.
+        println!("cargo:warning=android build script panicked: {msg}");
+        default_hook(info);
+    }));
+}
+
+fn log_line(msg: &str) {
+    eprintln!("  {msg}");
+    if let Some(file) = BUILD_LOG.get() {
+        if let Ok(mut file) = file.lock() {
+            let _ = writeln!(file, "{msg}");
+        }
+    }
+}
+
+/// Free space (in bytes) on the filesystem holding the current directory.
+fn free_disk_bytes() -> Option<u64> {
+    let out = Command::new("df").args(["-Pk", "."]).output().ok()?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let available_kib: u64 = stdout
+        .lines()
+        .nth(1)?
+        .split_whitespace()
+        .nth(3)?
+        .parse()
+        .ok()?;
+    Some(available_kib * 1024)
+}
+
+fn free_disk_human() -> String {
+    match free_disk_bytes() {
+        Some(bytes) => format!("{:.1} GiB free", bytes as f64 / (1024.0 * 1024.0 * 1024.0)),
+        None => "free space unknown".to_string(),
+    }
+}
+
+/// Run one build step, logging its duration and the remaining disk space.
+fn stage<T>(name: &str, f: impl FnOnce() -> T) -> T {
+    if let Some(free) = free_disk_bytes() {
+        if free < MIN_FREE_DISK_BYTES {
+            panic!(
+                "not enough free disk space for the Android rootfs ({name}): only {free} bytes left"
+            );
+        }
+    }
+    log_line(&format!("== {name} (start, {})", free_disk_human()));
+    let started = Instant::now();
+    let result = f();
+    log_line(&format!(
+        "== {name} (done in {:.1}s, {})",
+        started.elapsed().as_secs_f32(),
+        free_disk_human()
+    ));
+    result
+}
+
+/// True when `rootfs.zip` exists, carries a manifest and was produced for this
+/// cache dir (which is keyed on the image digest).
+fn rootfs_artifacts_ready(cache: &CacheDir) -> bool {
+    if !cache.stamp("split").exists() || !cache.rootfs_zip().exists() {
+        return false;
+    }
+    std::fs::File::open(cache.rootfs_zip())
+        .ok()
+        .and_then(|f| {
+            let mut archive = zip::ZipArchive::new(f).ok()?;
+            archive.by_name(".rootfs_manifest.json").ok()?;
+            Some(())
+        })
+        .is_some()
+}
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -46,6 +160,8 @@ fn main() {
         return;
     }
 
+    init_build_log();
+
     let rootfs_zip_dest = out_dir.join("rootfs.zip");
 
     // ── Android-specific setup ──────────────────────────────────────────
@@ -59,24 +175,53 @@ fn main() {
         _ => panic!("Unsupported Android target: {target}"),
     };
 
-    let cache = CacheDir::new(&docker_image, docker_platform, &target);
+    log_line(&format!(
+        "android build script: target={target} platform={docker_platform} image={docker_image}"
+    ));
+    let cache = stage("resolve cache dir", || {
+        CacheDir::new(&docker_image, docker_platform, &target)
+    });
 
     // Step 1 – Download runtime prerequisites (proot, loader, libtalloc, libandroid-shmem).
-    download_prerequisites(&cache, termux_arch);
+    stage("download runtime prerequisites", || {
+        download_prerequisites(&cache, termux_arch)
+    });
 
-    // Step 2 – Pull and extract the Docker image directly to a directory.
-    let pulled = pull_and_extract_image(
-        &docker_image,
-        docker_platform,
-        &cache.rootfs_extracted_dir(),
-    )
-    .expect("pull_and_extract_image failed");
+    // Steps 2 & 3 – Pull the image and split the rootfs. Both are skipped when
+    // the cached artifacts for this image digest are still valid: the extracted
+    // tree is ~1 GiB and the image is ~400 MiB, which is expensive (and, on CI
+    // runners with ~14 GiB of disk, risky) to redo on every build.
+    if rootfs_artifacts_ready(&cache) {
+        log_line("cached rootfs artifacts are up to date — skipping image pull");
+    } else {
+        // Step 2 – Pull and extract the Docker image directly to a directory.
+        let pulled = stage("pull and extract rootfs image", || {
+            pull_and_extract_image(
+                &docker_image,
+                docker_platform,
+                &cache.rootfs_extracted_dir(),
+            )
+            .expect("pull_and_extract_image failed")
+        });
 
-    // Step 3 – Split rootfs: ELF → rootfs_binaries/ (by hash), non-ELF → rootfs.zip.
-    build_rootfs_artifacts(&cache, docker_image.clone(), pulled);
+        // Step 3 – Split rootfs: ELF → rootfs_binaries/ (by hash), non-ELF → rootfs.zip.
+        stage("split rootfs into ELF binaries + zip", || {
+            build_rootfs_artifacts(&cache, docker_image.clone(), pulled)
+        });
+    }
+
+    // The extracted tree is only an input for the split step; drop it so the
+    // Android build does not need ~1 GiB of extra headroom on disk.
+    if cache.rootfs_extracted_dir().exists() {
+        stage("remove extracted rootfs", || {
+            std::fs::remove_dir_all(cache.rootfs_extracted_dir()).expect("remove extracted rootfs")
+        });
+    }
 
     // Step 4 – Copy rootfs.zip to OUT_DIR so include_bytes! picks it up.
-    std::fs::copy(cache.rootfs_zip(), &rootfs_zip_dest).expect("copy rootfs.zip to OUT_DIR");
+    stage("copy rootfs.zip to OUT_DIR", || {
+        std::fs::copy(cache.rootfs_zip(), &rootfs_zip_dest).expect("copy rootfs.zip to OUT_DIR")
+    });
 
     // Step 5 – Set EMBEDDED_IMAGE_TAG for runtime use.
     println!("cargo:rustc-env=EMBEDDED_IMAGE_TAG={}", docker_image);
@@ -84,19 +229,25 @@ fn main() {
     // Step 6 – Write a marker with the cache path so that the Gradle project
     //          (or external tooling) can find the rootfs cache after dx bundle
     //          has finished its own project generation.
-    write_cache_marker(&profile, &cache);
+    stage("write cache marker", || {
+        write_cache_marker(&profile, &cache)
+    });
 
     // Step 7 – Patch the Gradle project (useLegacyPackaging, SDK versions,
     //          versionCode, extractNativeLibs) and copy assets directly
     //          into jniLibs (proot, loader, libtalloc, ELF files).
     //          Also removes stale ABI jniLibs and the Gradle build cache so
     //          that a sequential arm64 + x86_64 build succeeds without error.
-    patch_gradle_project(&profile);
+    stage("patch Gradle project", || patch_gradle_project(&profile));
     // Patch the cached proot binary BEFORE copying it to jniLibs so the
     // patched version (RPATH=$ORIGIN, NEEDED libtalloc.so) ends up in the APK.
-    patch_proot_binary(&cache);
-    copy_assets_to_jnilibs(&profile, &cache);
-    remove_stale_build_artifacts(&profile);
+    stage("patch proot binary", || patch_proot_binary(&cache));
+    stage("copy assets to jniLibs", || {
+        copy_assets_to_jnilibs(&profile, &cache)
+    });
+    stage("remove stale build artifacts", || {
+        remove_stale_build_artifacts(&profile)
+    });
 
     // ── Change-detection for cargo ───────────────────────────────────────
     //
@@ -298,28 +449,17 @@ fn find_latest_deb(html: &str, package: &str, arch: &str) -> Option<String> {
 
 fn build_rootfs_artifacts(cache: &CacheDir, tag: String, pulled: PulledImage) {
     // Validate cached rootfs.zip: it MUST contain `.rootfs_manifest.json`.
-    if cache.stamp("split").exists() && cache.rootfs_zip().exists() {
-        let manifest_valid = std::fs::File::open(cache.rootfs_zip())
-            .ok()
-            .and_then(|f| {
-                let mut archive = zip::ZipArchive::new(f).ok()?;
-                archive.by_name(".rootfs_manifest.json").ok()?;
-                Some(())
-            })
-            .is_some();
-        if manifest_valid {
-            return;
-        }
-        eprintln!("  Cached rootfs.zip is stale — regenerating");
+    if rootfs_artifacts_ready(cache) {
+        return;
+    }
+    if cache.stamp("split").exists() {
+        log_line("cached rootfs artifacts are stale — regenerating");
         if cache.rootfs_zip().exists() {
             std::fs::remove_file(cache.rootfs_zip()).expect("remove stale rootfs.zip");
         }
-        let sp = cache.stamp("split");
-        if sp.exists() {
-            std::fs::remove_file(&sp).expect("remove stale .stamp_split");
-        }
+        std::fs::remove_file(cache.stamp("split")).expect("remove stale .stamp_split");
     }
-    eprintln!("  Splitting rootfs into ELF / non-ELF …");
+    log_line("Splitting rootfs into ELF / non-ELF …");
 
     let files_dir = cache.rootfs_binaries_dir();
     if files_dir.exists() {
@@ -368,25 +508,38 @@ fn build_rootfs_artifacts(cache: &CacheDir, tag: String, pulled: PulledImage) {
             continue;
         }
 
-        let data = std::fs::read(&path).expect("read file");
-        let size = data.len();
         let rel = format!("/{rel_name}");
-        let is_elf = data.len() >= 4 && data[..4] == [0x7f, b'E', b'L', b'F'];
+        let size = meta.len();
+
+        // Only the first four bytes are needed to classify the file; reading
+        // it whole would spike RSS on the 140 MB binaries in the image.
+        let mut magic = [0u8; 4];
+        let is_elf = std::fs::File::open(&path)
+            .and_then(|mut file| file.read_exact(&mut magic))
+            .map(|()| magic == *b"\x7fELF")
+            .unwrap_or(false);
 
         if is_elf {
             let hash = fnv1a_hex(&rel);
             let h16: String = hash.chars().take(16).collect();
-            std::fs::write(files_dir.join(&h16), &data).expect("write ELF file");
-            set_executable(&files_dir.join(&h16));
+            let dest = files_dir.join(&h16);
+            // Move rather than copy: the extracted tree is discarded right
+            // after this step, so copying would double the peak disk usage of
+            // the whole Android build (~1 GiB).
+            if std::fs::rename(&path, &dest).is_err() {
+                std::fs::copy(&path, &dest).expect("copy ELF file");
+            }
+            set_executable(&dest);
             files.insert(
                 h16,
                 FileEntry {
                     path: rel,
                     mode: 0o755,
-                    size: Some(size as u64),
+                    size: Some(size),
                 },
             );
         } else {
+            let data = std::fs::read(&path).expect("read file");
             #[cfg(unix)]
             let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o777;
             #[cfg(not(unix))]
@@ -992,23 +1145,23 @@ fn project_root() -> PathBuf {
 }
 
 fn fetch_url(url: &str) -> String {
-    let response = ureq::get(url)
-        .call()
-        .unwrap_or_else(|e| panic!("HTTP GET failed for {url}: {e}"));
-    response
-        .into_body()
-        .read_to_string()
-        .expect("response body is valid UTF-8")
+    retry_http(&format!("HTTP GET {url}"), || {
+        let response = ureq::get(url).call().map_err(|e| e.to_string())?;
+        response
+            .into_body()
+            .read_to_string()
+            .map_err(|e| e.to_string())
+    })
 }
 
 fn fetch_url_bytes(url: &str) -> Vec<u8> {
-    let response = ureq::get(url)
-        .call()
-        .unwrap_or_else(|e| panic!("HTTP GET failed for {url}: {e}"));
-    response
-        .into_body()
-        .read_to_vec()
-        .expect("read response body")
+    retry_http(&format!("HTTP GET {url}"), || {
+        let response = ureq::get(url).call().map_err(|e| e.to_string())?;
+        response
+            .into_body()
+            .read_to_vec()
+            .map_err(|e| e.to_string())
+    })
 }
 
 fn set_executable(path: &Path) {

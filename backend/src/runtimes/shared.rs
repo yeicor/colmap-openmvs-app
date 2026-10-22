@@ -156,6 +156,27 @@ pub(crate) fn parse_image_ref(image: &str) -> (String, String, String) {
 // OCI Registry HTTP helpers (ureq-based, sync)
 // ---------------------------------------------------------------------------
 
+/// Retry an HTTP operation with exponential backoff. Registry/CDN blips are
+/// common enough (429/5xx, dropped connections) that a single failure should
+/// not abort a build that has already downloaded hundreds of megabytes.
+fn retry_http<T>(what: &str, mut op: impl FnMut() -> Result<T, String>) -> T {
+    const ATTEMPTS: u32 = 4;
+    let mut last_error = String::new();
+    for attempt in 1..=ATTEMPTS {
+        match op() {
+            Ok(value) => return value,
+            Err(err) => {
+                tracing::warn!("{what} failed (attempt {attempt}/{ATTEMPTS}): {err}");
+                last_error = err;
+                if attempt < ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_secs(1 << (attempt - 1)));
+                }
+            }
+        }
+    }
+    panic!("{what} failed after {ATTEMPTS} attempts: {last_error}");
+}
+
 fn registry_token(registry: &str, _repo: &str) -> String {
     let probe_url = format!("https://{}/v2/", registry);
     let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -227,14 +248,16 @@ fn registry_token(registry: &str, _repo: &str) -> String {
         token_url.push_str(&format!("&scope={scope}"));
     }
 
-    let body = agent
-        .get(&token_url)
-        .header("Accept", "application/json")
-        .call()
-        .unwrap_or_else(|e| panic!("Failed to get registry token from {realm}: {e}"))
-        .into_body()
-        .read_to_string()
-        .expect("token response UTF-8");
+    let body = retry_http(&format!("GET {token_url}"), || {
+        agent
+            .get(&token_url)
+            .header("Accept", "application/json")
+            .call()
+            .map_err(|e| e.to_string())?
+            .into_body()
+            .read_to_string()
+            .map_err(|e| e.to_string())
+    });
 
     #[derive(serde::Deserialize)]
     struct TokenResponse {
@@ -251,7 +274,19 @@ fn registry_token(registry: &str, _repo: &str) -> String {
     }
 }
 
+/// Fetch a registry resource, retrying transient network / 5xx failures.
 fn registry_fetch(registry: &str, path: &str, accept: Option<&str>, token: &str) -> Vec<u8> {
+    retry_http(&format!("registry fetch {registry}{path}"), || {
+        registry_fetch_once(registry, path, accept, token)
+    })
+}
+
+fn registry_fetch_once(
+    registry: &str,
+    path: &str,
+    accept: Option<&str>,
+    token: &str,
+) -> Result<Vec<u8>, String> {
     let url = format!("https://{registry}{path}");
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(std::time::Duration::from_secs(30)))
@@ -266,15 +301,12 @@ fn registry_fetch(registry: &str, path: &str, accept: Option<&str>, token: &str)
         req = req.header("Authorization", &format!("Bearer {token}"));
     }
 
-    let mut response = req.call().unwrap_or_else(|e| {
-        panic!("registry_fetch failed for {registry}{path}: {e}");
-    });
+    let mut response = req
+        .call()
+        .map_err(|e| format!("request failed for {registry}{path}: {e}"))?;
 
     if !response.status().is_success() {
-        panic!(
-            "registry_fetch got HTTP {} for {registry}{path}",
-            response.status()
-        );
+        return Err(format!("HTTP {} for {registry}{path}", response.status()));
     }
 
     response
@@ -282,9 +314,7 @@ fn registry_fetch(registry: &str, path: &str, accept: Option<&str>, token: &str)
         .with_config()
         .limit(2 * 1024 * 1024 * 1024) // 2 GB limit for image layers
         .read_to_vec()
-        .unwrap_or_else(|e| {
-            panic!("read registry response body failed for {registry}{path}: {e}");
-        })
+        .map_err(|e| format!("read response body failed for {registry}{path}: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -547,4 +577,3 @@ pub(crate) fn pull_and_extract_image(
         created,
     })
 }
-

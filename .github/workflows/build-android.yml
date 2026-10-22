@@ -111,9 +111,41 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # GitHub-hosted ubuntu-24.04 runners only have ~14 GB of SSD, while a
+      # cold x86_64 Android release build needs most of it (800 crates, a
+      # ~2 GiB extracted rootfs cache, jniLibs copies and the Gradle output).
+      # Reclaim the preinstalled toolchains this job never uses. This runs
+      # before the cache restore so the freed space is actually available to
+      # the build.
+      - name: Free disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/share/boost \
+            /usr/share/swift \
+            "${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}/CodeQL" || true
+          sudo apt-get clean
+          df -h /
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # All four matrix legs report the same job id ("build"), so without
+          # an explicit key they compete for a single cache entry: the first
+          # leg to save wins and the others restore a cache full of *foreign*
+          # target artifacts (near-zero hit rate) and rebuild ~800 crates from
+          # scratch on every run. Keying on the target triple gives each
+          # architecture its own `target/<triple>` cache.
+          key: ${{ matrix.target }}
+          # A leg that fails late (Gradle, bundling) still produced hundreds of
+          # valid dependency artifacts; keeping them means the next run makes
+          # progress instead of starting from zero every night.
+          cache-on-failure: true
 
       - uses: actions/setup-node@v7
         with:
@@ -133,7 +165,8 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            lld
+            lld \
+            patchelf
 
       # Auto-sync the dx CLI with the project's dioxus crate version.
       # install.sh defaults to the latest release, which may be incompatible
@@ -165,6 +198,31 @@ jobs:
       - shell: bash
         run: |
           dx bundle --android --verbose --package-types ${{ matrix.package-type }} --features server --target ${{ matrix.target }} --release
+
+      # `dx` parses cargo output as JSON and bails on `build-finished` before
+      # reading cargo's plain-text error, so build-script panics and OOM/disk
+      # kills show up as a bare "cargo build finished with errors" with no
+      # diagnostics. Dump everything that can identify the real failure.
+      - name: Diagnose build failure
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          echo "::group::Disk"
+          df -h /
+          echo "::endgroup::"
+          echo "::group::Memory"
+          free -m
+          echo "::endgroup::"
+          echo "::group::OOM / kernel messages"
+          sudo dmesg | tail -50
+          echo "::endgroup::"
+          echo "::group::Build script log"
+          cat target/android-build.log 2>/dev/null || echo "(no target/android-build.log)"
+          echo "::endgroup::"
+          echo "::group::Target sizes"
+          du -sh target/* 2>/dev/null | sort -h
+          echo "::endgroup::"
 
       - shell: bash
         if: matrix.package-type == 'aab'
