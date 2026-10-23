@@ -132,10 +132,21 @@ fn tracer_pid_from_status(status: &str) -> Option<u32> {
         .and_then(|pid| pid.trim().parse::<u32>().ok())
 }
 
-/// Set once the installed PRoot has been verified to work in a nested sandbox.
+/// The PRoot build that is downloaded as a last resort when the installed
+/// binary cannot run in a nested sandbox.
+///
+/// Upstream 5.4.0 is the newest release that still works inside the Termux
+/// PRoot fork used by DroidDeck.  5.1.x crashes with SIGSEGV and 5.4.1+ also
+/// crashes, so this exact version matters.
 #[cfg(target_os = "linux")]
-static NESTED_PROOT_CHECKED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+const PORTABLE_NESTED_PROOT_VERSION: &str = "5.4.0";
+
+/// The PRoot binary that was verified to work in a nested sandbox.
+///
+/// This is a path, not just a flag: the fallback may be a portable binary
+/// stored next to the installed one rather than replacing it.
+#[cfg(target_os = "linux")]
+static NESTED_PROOT_SELECTION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Serializes the one-time nested-PRoot check between concurrent pipeline runs.
 #[cfg(target_os = "linux")]
@@ -145,7 +156,27 @@ static NESTED_PROOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new
 /// binary was replaced or removed.
 #[cfg(target_os = "linux")]
 fn reset_nested_proot_check() {
-    NESTED_PROOT_CHECKED.store(false, std::sync::atomic::Ordering::Relaxed);
+    *NESTED_PROOT_SELECTION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// Return the cached nested-PRoot selection if its binary still exists.
+#[cfg(target_os = "linux")]
+fn cached_nested_proot() -> Option<String> {
+    let selection = NESTED_PROOT_SELECTION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    selection.filter(|path| Path::new(path).is_file())
+}
+
+/// Remember which PRoot binary can run in a nested sandbox.
+#[cfg(target_os = "linux")]
+fn cache_nested_proot(path: &str) {
+    *NESTED_PROOT_SELECTION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(path.to_string());
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -159,7 +190,35 @@ fn nested_sandbox_detected() -> bool {
 
 #[cfg(target_os = "linux")]
 fn nested_sandbox_detected() -> bool {
+    // `TracerPid` is the reliable signal, but DroidDeck also exports
+    // `PROOT_LOADER`/`PROOT_TMP_DIR` to every process it starts.  Checking
+    // them as well keeps the detection working on kernels where `/proc` is
+    // restricted or emulated.
     is_running_under_ptrace()
+        || std::env::var_os("PROOT_LOADER").is_some()
+        || std::env::var_os("PROOT_TMP_DIR").is_some()
+}
+
+/// Guest command used to check whether a PRoot binary can start processes.
+///
+/// `/bin/true` is the cheapest option, but some images only ship a shell or
+/// BusyBox.  A probe that cannot find any executable would otherwise be
+/// mistaken for "this PRoot does not work".
+#[cfg(target_os = "linux")]
+fn probe_guest_command(rootfs_dir: &Path) -> Vec<&'static str> {
+    if rootfs_dir.join("bin/true").exists() {
+        vec!["/bin/true"]
+    } else if rootfs_dir.join("bin/sh").exists() {
+        vec!["/bin/sh", "-c", "true"]
+    } else if rootfs_dir.join("usr/bin/env").exists() {
+        vec!["/usr/bin/env", "true"]
+    } else if rootfs_dir.join("bin/busybox").exists() {
+        vec!["/bin/busybox"]
+    } else {
+        // Let PRoot report the missing executable.  This yields `Failed`
+        // rather than `Incompatible`, so the installed binary is kept.
+        vec!["/bin/true"]
+    }
 }
 
 /// Result of probing whether a PRoot binary can start guest programs.
@@ -847,11 +906,20 @@ impl PRoot {
         let mut cmd = setup_proot_command(proot_bin);
         cmd.env_clear();
         setup_proot_environment(&mut cmd);
-        cmd.arg("-R")
-            .arg(rootfs_dir)
-            .arg("-w")
-            .arg("/")
-            .arg("/bin/true");
+
+        // PRoot extracts its loader into a temporary directory.  Use a
+        // directory owned by the app instead of relying on `/tmp`, which may
+        // be missing or read-only in the guest image.
+        let tmp_dir = self.images_dir.join(".proot-tmp");
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        if let Some(tmp_str) = tmp_dir.to_str() {
+            cmd.env("PROOT_TMP_DIR", tmp_str);
+        }
+
+        cmd.arg("-R").arg(rootfs_dir).arg("-w").arg("/");
+        for arg in probe_guest_command(rootfs_dir) {
+            cmd.arg(arg);
+        }
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped());
@@ -894,15 +962,100 @@ impl PRoot {
         }
     }
 
+    /// Return a portable PRoot 5.4.0 build that can run nested.
+    ///
+    /// Distribution packages are built for the newest Debian/Ubuntu release,
+    /// so on older guests (for example the Debian 12 rootfs used by
+    /// DroidDeck) the only nested-compatible version cannot be installed at
+    /// all: its binary requires a newer glibc.  Release builds therefore
+    /// publish a statically linked 5.4.0 binary for x86_64 and aarch64, which
+    /// is downloaded here when needed.
+    #[cfg(target_os = "linux")]
+    async fn portable_nested_proot(&self) -> RuntimeResult<String> {
+        let arch = std::env::consts::ARCH;
+        if !matches!(arch, "x86_64" | "aarch64") {
+            return Err(anyhow::anyhow!(
+                "no portable PRoot build is available for {arch}"
+            ));
+        }
+
+        let file_name = format!("proot-{PORTABLE_NESTED_PROOT_VERSION}-{arch}");
+        let local = self.runtime_dir.join(&file_name);
+        if local.is_file() {
+            return Ok(local.to_string_lossy().into_owned());
+        }
+
+        // Release builds may also ship the binary next to the application.
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                for name in [
+                    format!("proot-{PORTABLE_NESTED_PROOT_VERSION}-linux-{arch}"),
+                    file_name.clone(),
+                ] {
+                    let candidate = dir.join(name);
+                    if candidate.is_file() {
+                        return Ok(candidate.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+
+        let url = format!(
+            "https://github.com/yeicor/colmap-openmvs-app/releases/latest/download/proot-{}-linux-{}",
+            PORTABLE_NESTED_PROOT_VERSION, arch
+        );
+        info!(url = %url, "nested PRoot: downloading portable build");
+
+        tokio::fs::create_dir_all(&self.runtime_dir)
+            .await
+            .map_err(|e| anyhow::anyhow!("cannot create the PRoot runtime directory: {e}"))?;
+        let destination = local.clone();
+        let download_url = url.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .user_agent(concat!("colmap-openmvs-app/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .into();
+            let mut response = agent
+                .get(&download_url)
+                .call()
+                .map_err(|e| anyhow::anyhow!("failed to download the portable PRoot build: {e}"))?;
+            let bytes = response
+                .body_mut()
+                .with_config()
+                .limit(64 * 1024 * 1024)
+                .read_to_vec()
+                .map_err(|e| anyhow::anyhow!("failed to read the portable PRoot build: {e}"))?;
+            if !bytes.starts_with(b"\x7fELF") {
+                return Err(anyhow::anyhow!(
+                    "the portable PRoot download is not an ELF binary"
+                ));
+            }
+            let temporary = destination.with_file_name(format!("{file_name}.part"));
+            std::fs::write(&temporary, &bytes)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o755))?;
+            }
+            std::fs::rename(&temporary, &destination)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("portable PRoot download task failed: {e}"))??;
+
+        Ok(local.to_string_lossy().into_owned())
+    }
+
     /// Make sure the installed PRoot can run guest programs when this process
     /// is itself running under another ptrace sandbox (nested PRoot).
     ///
-    /// Not every PRoot build can be nested: for example, Debian's 5.4.x dies
-    /// with exit status 182 when nested under the 5.1.x build shipped by
-    /// DroidDeck, while the 5.1.x branch works.  When the installed binary
-    /// fails the probe, try the other compatible distribution versions
-    /// (oldest first, which matches the Termux/Android PRoot generation) and
-    /// install the first one that works.
+    /// Not every PRoot build can be nested: 5.1.x crashes with SIGSEGV and
+    /// 5.4.1+ crashes as well when started inside the Termux PRoot fork used
+    /// by DroidDeck.  Upstream 5.4.0 is the version that works.  When the
+    /// installed binary fails the probe, try the portable 5.4.0 build and
+    /// then the compatible distribution versions (newest first, so both the
+    /// Android/DroidDeck and the older-glibc cases are covered).
     ///
     /// Returns the binary that should be used for the actual run.
     async fn ensure_nested_proot_works(
@@ -914,79 +1067,138 @@ impl PRoot {
         #[cfg(target_os = "linux")]
         {
             if nested {
-                if NESTED_PROOT_CHECKED.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Ok(proot_bin);
+                if let Some(selected) = cached_nested_proot() {
+                    return Ok(selected);
                 }
 
                 let _guard = NESTED_PROOT_LOCK.lock().await;
-                if NESTED_PROOT_CHECKED.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Ok(proot_bin);
+                if let Some(selected) = cached_nested_proot() {
+                    return Ok(selected);
                 }
 
                 match self.probe_rootfs(rootfs_dir, &proot_bin).await {
                     RootfsProbe::Ok => {
-                        NESTED_PROOT_CHECKED.store(true, std::sync::atomic::Ordering::Relaxed);
+                        cache_nested_proot(&proot_bin);
                         return Ok(proot_bin);
                     }
                     RootfsProbe::Failed => {
                         warn!(
-                            "nested PRoot: the probe could not run /bin/true; \
+                            proot_bin = %proot_bin,
+                            "nested PRoot: the probe could not run a guest command; \
                              keeping the installed PRoot"
                         );
                         return Ok(proot_bin);
                     }
-                    RootfsProbe::Incompatible => {}
+                    RootfsProbe::Incompatible => {
+                        warn!(
+                            proot_bin = %proot_bin,
+                            "nested PRoot: the installed PRoot cannot start guest processes"
+                        );
+                    }
                 }
 
-                warn!(
-                    "PRoot cannot run inside another ptrace sandbox (nested PRoot), \
-                     trying older compatible versions"
-                );
-                let installed = self.version().await.ok();
-                let mut versions = self.installable_versions().await.unwrap_or_default();
-                // `installable_versions` is newest first; older versions are the
-                // ones that can be nested under the PRoot used by DroidDeck.
-                versions.reverse();
+                let mut tried = vec![format!("{proot_bin} (installed)")];
 
+                // Prefer the portable static build: it works independently of
+                // the guest's glibc, which is what makes 5.4.0 usable on the
+                // older Debian/Ubuntu rootfs images used by DroidDeck.  Unit
+                // tests may pre-place a portable binary; without one they
+                // must not start a download.
+                let portable_local = self.runtime_dir.join(format!(
+                    "proot-{PORTABLE_NESTED_PROOT_VERSION}-{}",
+                    std::env::consts::ARCH
+                ));
+                if !cfg!(test) || portable_local.is_file() {
+                    match self.portable_nested_proot().await {
+                        Ok(candidate) => {
+                            info!(
+                                candidate = %candidate,
+                                "nested PRoot: probing portable build"
+                            );
+                            match self.probe_rootfs(rootfs_dir, &candidate).await {
+                                RootfsProbe::Ok => {
+                                    info!(
+                                        candidate = %candidate,
+                                        "nested PRoot: using portable build"
+                                    );
+                                    cache_nested_proot(&candidate);
+                                    return Ok(candidate);
+                                }
+                                other => {
+                                    warn!(
+                                        candidate = %candidate,
+                                        probe = ?other,
+                                        "nested PRoot: portable build cannot start guest processes"
+                                    );
+                                    tried.push(format!(
+                                        "portable {} ({other:?})",
+                                        PORTABLE_NESTED_PROOT_VERSION
+                                    ));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "nested PRoot: portable build is not available");
+                            tried.push(format!(
+                                "portable {} (unavailable)",
+                                PORTABLE_NESTED_PROOT_VERSION
+                            ));
+                        }
+                    }
+                }
+
+                let installed = self.version().await.ok();
+                let versions = self.installable_versions().await.unwrap_or_default();
                 for version in &versions {
                     if installed.as_deref() == Some(version.as_str()) {
                         continue;
                     }
                     info!(version = %version, "nested PRoot: trying fallback version");
-                    if self.download(version).await.is_err() {
+                    if let Err(e) = self.download_linux(version).await {
+                        debug!(
+                            version = %version,
+                            error = %e,
+                            "nested PRoot: fallback download failed"
+                        );
+                        tried.push(format!("{version} (download failed)"));
                         continue;
                     }
                     let candidate = match find_proot_binary(&self.runtime_dir).await {
                         Ok(candidate) => candidate,
-                        Err(_) => continue,
+                        Err(_) => {
+                            tried.push(format!("{version} (binary not found)"));
+                            continue;
+                        }
                     };
                     debug!(
                         version = %version,
                         candidate = %candidate,
                         "nested PRoot: probing fallback version"
                     );
-                    if self.probe_rootfs(rootfs_dir, &candidate).await == RootfsProbe::Ok {
-                        info!(
-                            version = %version,
-                            "nested PRoot: using fallback version"
-                        );
-                        NESTED_PROOT_CHECKED.store(true, std::sync::atomic::Ordering::Relaxed);
-                        return Ok(candidate);
+                    match self.probe_rootfs(rootfs_dir, &candidate).await {
+                        RootfsProbe::Ok => {
+                            info!(version = %version, "nested PRoot: using fallback version");
+                            cache_nested_proot(&candidate);
+                            return Ok(candidate);
+                        }
+                        other => {
+                            debug!(
+                                version = %version,
+                                probe = ?other,
+                                "nested PRoot: fallback probe failed"
+                            );
+                            tried.push(format!("{version} ({other:?})"));
+                        }
                     }
                 }
 
-                let tried = if versions.is_empty() {
-                    "no downloadable versions".to_string()
-                } else {
-                    versions.join(", ")
-                };
                 return Err(anyhow::anyhow!(
                     "PRoot cannot run inside another PRoot sandbox (nested PRoot). \
                      This happens when the Linux build is started from DroidDeck on \
-                     Android, where the app already runs under PRoot. None of the \
-                     compatible PRoot versions could start a guest program (tried: \
-                     {tried}). Use the Android app build, or start the Linux build \
-                     outside DroidDeck."
+                     Android, where the app already runs under PRoot. No compatible \
+                     PRoot build could start a guest program (tried: {}). Use the \
+                     Android app build, or start the Linux build outside DroidDeck.",
+                    tried.join(", ")
                 ));
             }
         }
@@ -1350,6 +1562,18 @@ impl Runtime for PRoot {
         // Environment variables that PRoot itself needs on this platform.
         setup_proot_environment(&mut cmd);
 
+        // PRoot extracts its loader into a temporary directory.  On Linux
+        // (including the Linux build running inside DroidDeck) keep that
+        // directory under the app's data dir instead of relying on `/tmp`.
+        #[cfg(target_os = "linux")]
+        {
+            let tmp_dir = self.images_dir.join(".proot-tmp");
+            let _ = std::fs::create_dir_all(&tmp_dir);
+            if let Some(tmp_str) = tmp_dir.to_str() {
+                cmd.env("PROOT_TMP_DIR", tmp_str);
+            }
+        }
+
         // On Android, bind the jniLibs directory so that ELF symlinks
         // (librootfs-<hash>.so) resolve inside the container.
         #[cfg(target_os = "android")]
@@ -1654,6 +1878,82 @@ mod tests {
         assert_eq!(tracer_pid_from_status("Name:\tapp\n"), None);
     }
 
+    /// The nested probe must use a command that actually exists in the image;
+    /// otherwise a missing `/bin/true` looks like a broken PRoot and the
+    /// fallback is skipped.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn probe_uses_an_executable_present_in_the_image() {
+        let base = std::env::temp_dir().join(format!(
+            "colmap-openmvs-probe-command-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("bin")).unwrap();
+
+        assert_eq!(probe_guest_command(&base), vec!["/bin/true"]);
+
+        std::fs::write(base.join("bin/sh"), b"").unwrap();
+        assert_eq!(probe_guest_command(&base), vec!["/bin/sh", "-c", "true"]);
+
+        std::fs::remove_file(base.join("bin/sh")).unwrap();
+        std::fs::create_dir_all(base.join("usr/bin")).unwrap();
+        std::fs::write(base.join("usr/bin/env"), b"").unwrap();
+        assert_eq!(probe_guest_command(&base), vec!["/usr/bin/env", "true"]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// When the installed PRoot cannot be nested, a portable binary placed in
+    /// the runtime directory is selected and the choice is remembered.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn uses_a_portable_proot_when_the_installed_one_cannot_run_nested() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = NESTED_TEST_LOCK.lock().await;
+        reset_nested_proot_check();
+
+        let runtime_dir = std::env::temp_dir().join(format!(
+            "colmap-openmvs-portable-proot-test-{}",
+            std::process::id()
+        ));
+        let _ = tokio::fs::remove_dir_all(&runtime_dir).await;
+        tokio::fs::create_dir_all(&runtime_dir).await.unwrap();
+
+        let installed = runtime_dir.join("proot");
+        tokio::fs::write(&installed, "#!/bin/sh\nexit 182\n")
+            .await
+            .unwrap();
+        std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let portable = runtime_dir.join(format!(
+            "proot-{PORTABLE_NESTED_PROOT_VERSION}-{}",
+            std::env::consts::ARCH
+        ));
+        tokio::fs::write(&portable, "#!/bin/sh\nexit 0\n")
+            .await
+            .unwrap();
+        std::fs::set_permissions(&portable, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let runtime = PRoot::new_simple(runtime_dir.clone());
+        let installed = installed.to_string_lossy().into_owned();
+        let selected = runtime
+            .ensure_nested_proot_works(std::path::Path::new("/"), installed.clone(), true)
+            .await
+            .expect("the portable PRoot should be selected");
+        assert_eq!(selected, portable.to_string_lossy());
+
+        // The cached selection must not fall back to the broken binary.
+        let cached = runtime
+            .ensure_nested_proot_works(std::path::Path::new("/"), installed, true)
+            .await
+            .expect("the cached selection should be reused");
+        assert_eq!(cached, selected);
+
+        let _ = tokio::fs::remove_dir_all(&runtime_dir).await;
+    }
+
     /// A nested-incompatible PRoot build fails its loader probe with status
     /// 182; the runtime has to replace it with a version that can run.
     #[cfg(target_os = "linux")]
@@ -1698,9 +1998,10 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&runtime_dir).await;
     }
 
-    /// The newest PRoot package (5.4.x) is the one installed by default but
-    /// it cannot run inside another PRoot (exit status 182), so the runtime
-    /// has to replace it with an older compatible build.
+    /// The newest PRoot package (5.4.x) is the one installed by default.  It
+    /// works inside DroidDeck's Termux PRoot, but not inside older Debian
+    /// PRoot builds, where the runtime has to replace it with an older
+    /// compatible build.  Both outcomes have to leave a working binary.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     #[ignore = "requires network access and an outer PRoot sandbox"]
@@ -1734,10 +2035,9 @@ mod tests {
                 .await,
             RootfsProbe::Ok
         );
-        assert_ne!(
-            runtime.version().await.expect("version"),
-            versions[0],
-            "the newest build is expected to be replaced"
+        assert!(
+            runtime.version().await.is_ok(),
+            "the runtime must report the version of the binary it selected"
         );
 
         let _ = tokio::fs::remove_dir_all(&runtime_dir).await;

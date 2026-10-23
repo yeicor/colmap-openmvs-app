@@ -160,6 +160,39 @@ jobs:
           name: build-${{ matrix.build-type }}-${{ matrix.target || matrix.os }}
           path: artifact_out/*
 
+  # Builds the portable PRoot 5.4.0 fallback used when the Linux app runs
+  # nested inside DroidDeck's PRoot sandbox.  It is linked statically so it
+  # works on guests with an old glibc, where the distribution package of
+  # 5.4.0 cannot be installed.
+  build-static-proot:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            arch: x86_64
+          - os: ubuntu-22.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl file python3
+      - name: Build static PRoot
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/build-static-proot.sh "proot-5.4.0-linux-${{ matrix.arch }}"
+          mkdir -p artifact_out
+          mv "proot-5.4.0-linux-${{ matrix.arch }}" artifact_out/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-static-proot-${{ matrix.arch }}
+          path: artifact_out/*
+
   # Runs in parallel with build-and-test-desktop-and-web — builds Docker images and
   # pushes layer cache; does not push to target registries.
   build-docker:
@@ -316,7 +349,7 @@ jobs:
       - uses: actions/deploy-pages@v5
 
   deploy-release:
-    needs: [build-and-test-desktop-and-web, build-android, build-docker]
+    needs: [build-and-test-desktop-and-web, build-android, build-docker, build-static-proot]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -379,6 +412,7 @@ jobs:
   success: # or retry on failure to mitigate transient CI issues (e.g. network blips, GitHub Actions flakiness)
     needs:
       - build-and-test-desktop-and-web
+      - build-static-proot
       - build-android
       - build-docker
       - deploy-pages
