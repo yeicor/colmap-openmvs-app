@@ -47,7 +47,7 @@ pub async fn get_runtime_info() -> Result<RuntimeInfo> {
 /// List available PRoot versions that can be downloaded, most-recent first.
 pub async fn get_available_runtime_versions() -> Result<Vec<String>> {
     let rt = RuntimeFactory::proot().await;
-    rt.available_versions()
+    rt.installable_versions()
         .await
         .map_err(|e| anyhow::anyhow!("{}", e).into())
 }

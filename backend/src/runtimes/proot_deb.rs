@@ -206,7 +206,7 @@ pub(crate) async fn install_proot(runtime_dir: &Path, requested_version: &str) -
     // packages (newest first) so that an incompatible build does not block
     // the installation completely.
     let mut candidates: Vec<&PackageInfo> = packages.iter().filter(|p| p.compatible).collect();
-    candidates.sort_by_key(|info| !version_matches(&info.package.version, requested_version));
+    candidates.sort_by_key(|info| version_rank(&info.package.version, requested_version));
 
     for info in packages.iter().filter(|info| !info.compatible) {
         debug!(
@@ -458,6 +458,23 @@ fn version_matches(candidate: &str, requested: &str) -> bool {
         .next()
         .unwrap_or(requested);
     candidate_base == requested_base
+}
+
+/// Rank a package for a requested version.
+///
+/// An exact match wins, then a package of the same upstream version (for
+/// example `5.1.0-1.3+b1` when `5.1.0-1.3` was requested) and finally every
+/// other package.  The exact match has to come first: the binary rebuilds
+/// (`+b1`) are not interchangeable, some of them cannot run nested inside
+/// another PRoot while the original build can.
+fn version_rank(candidate: &str, requested: &str) -> u8 {
+    if candidate == requested {
+        0
+    } else if version_matches(candidate, requested) {
+        1
+    } else {
+        2
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -956,6 +973,20 @@ mod tests {
         assert!(version_matches("5.4.0-3", "5.4.0"));
         assert!(version_matches("5.4.0-3", "v5.4.0"));
         assert!(!version_matches("5.4.0-3", "5.1.0"));
+    }
+
+    #[test]
+    fn prefers_the_exact_package_over_a_rebuild() {
+        assert_eq!(version_rank("5.1.0-1.3", "5.1.0-1.3"), 0);
+        assert_eq!(version_rank("5.1.0-1.3+b1", "5.1.0-1.3"), 1);
+        assert_eq!(version_rank("5.4.0-3", "5.1.0-1.3"), 2);
+        assert_eq!(version_rank("5.4.0-3", "5.4.0"), 1);
+
+        // Sorting a newest-first package list must keep the exact build in
+        // front of the binary rebuilds of the same upstream version.
+        let mut versions = vec!["5.4.0-3", "5.1.0-1.3+b1", "5.1.0-1.3"];
+        versions.sort_by_key(|version| version_rank(version, "5.1.0-1.3"));
+        assert_eq!(versions, vec!["5.1.0-1.3", "5.1.0-1.3+b1", "5.4.0-3"]);
     }
 
     #[test]
