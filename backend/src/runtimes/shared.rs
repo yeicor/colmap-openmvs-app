@@ -480,18 +480,171 @@ fn fetch_image_config(
 
 /// Decompress a gzip-compressed tar layer, then extract its contents into
 /// `target_dir`.
+///
+/// This mirrors [`tar::Archive::unpack`], which cannot be used directly because
+/// it recreates hard links with `link(2)`.  Android's SELinux policy forbids
+/// that for apps (`neverallow untrusted_app file_type:file link`), so layers
+/// containing hard links (for example `usr/bin/perl5.38.2 -> usr/bin/perl` in
+/// the Debian base image) would fail to extract.  Hard links therefore fall
+/// back to copying the already-extracted target file.
 fn extract_gzip_layer_to_dir(data: &[u8], target_dir: &std::path::Path) -> Result<(), String> {
     let mut decoder = flate2::read::GzDecoder::new(data);
     let mut tar_bytes = Vec::new();
     std::io::Read::read_to_end(&mut decoder, &mut tar_bytes)
         .map_err(|e| format!("gunzip layer failed: {e}"))?;
 
+    if target_dir.symlink_metadata().is_err() {
+        std::fs::create_dir_all(target_dir).map_err(|e| {
+            format!(
+                "extract tar into dir failed: failed to create `{}`: {e}",
+                target_dir.display()
+            )
+        })?;
+    }
+    let target_dir = &target_dir
+        .canonicalize()
+        .unwrap_or_else(|_| target_dir.to_path_buf());
+
     let cursor = std::io::Cursor::new(tar_bytes);
     let mut archive = tar::Archive::new(cursor);
-    archive
-        .unpack(target_dir)
-        .map_err(|e| format!("extract tar into dir failed: {e}"))?;
+
+    // Directory entries are applied after all other entries so that restrictive
+    // directory permissions cannot prevent creating their descendants.
+    let mut directories = Vec::new();
+    let entries = archive
+        .entries()
+        .map_err(|e| format!("extract tar into dir failed: failed to iterate over archive: {e}"))?;
+    for entry in entries {
+        let mut entry = entry.map_err(|e| {
+            format!("extract tar into dir failed: failed to iterate over archive: {e}")
+        })?;
+        if entry.header().entry_type().is_dir() {
+            directories.push(entry);
+        } else {
+            unpack_layer_entry(&mut entry, target_dir)?;
+        }
+    }
+    // Deepest directories first, so that restrictive permissions on a parent
+    // cannot block applying the permissions of its children.
+    directories.sort_by(|a, b| b.path_bytes().cmp(&a.path_bytes()));
+    for mut entry in directories {
+        entry
+            .unpack_in(target_dir)
+            .map_err(|e| format!("extract tar into dir failed: {e}"))?;
+    }
+
     Ok(())
+}
+
+/// Extract a single (non-directory) layer entry, copying hard links when the
+/// filesystem does not allow creating them.
+fn unpack_layer_entry<R: std::io::Read>(
+    entry: &mut tar::Entry<'_, R>,
+    target_dir: &std::path::Path,
+) -> Result<(), String> {
+    let is_hard_link = entry.header().entry_type().is_hard_link();
+    match entry.unpack_in(target_dir) {
+        Ok(_) => Ok(()),
+        // Hard links are the one entry type that cannot be recreated on
+        // Android, so unpack the file contents instead of linking to them.
+        Err(link_err) if is_hard_link => copy_hard_link_entry(entry, target_dir).map_err(|e| {
+            let path = entry
+                .path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "<unknown>".to_string());
+            format!(
+                "extract tar into dir failed: failed to unpack `{path}`: {e} (hard link fallback after: {link_err})"
+            )
+        }),
+        Err(e) => Err(format!("extract tar into dir failed: {e}")),
+    }
+}
+
+/// Copy the target of a hard-link entry into the link's location.
+///
+/// `tar` validates that both paths stay inside the extraction root; the same
+/// checks are repeated here before touching the filesystem.
+fn copy_hard_link_entry<R: std::io::Read>(
+    entry: &mut tar::Entry<'_, R>,
+    target_dir: &std::path::Path,
+) -> std::io::Result<()> {
+    let path = entry.path()?;
+    let link_name = entry.link_name()?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "hard link listed but no link name found",
+        )
+    })?;
+
+    let Some(dst) = join_layer_path(target_dir, &path) else {
+        // The entry path contains `..`; `tar` silently skips such entries.
+        return Ok(());
+    };
+    if dst == target_dir {
+        return Ok(());
+    }
+    let Some(src) = join_layer_path(target_dir, &link_name) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "hard link target escapes the rootfs: {}",
+                link_name.display()
+            ),
+        ));
+    };
+
+    let Some(parent) = dst.parent() else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(parent)?;
+    // An earlier layer may have replaced a directory with a symlink, so make
+    // sure the destination still resolves inside the extraction root.
+    let canon_target = std::fs::canonicalize(target_dir)?;
+    let canon_parent = std::fs::canonicalize(parent)?;
+    if !canon_parent.starts_with(&canon_target) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "hard link destination escapes the rootfs: {}",
+                dst.display()
+            ),
+        ));
+    }
+
+    let canon_src = std::fs::canonicalize(&src)?;
+    if !canon_src.starts_with(&canon_target) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("hard link target escapes the rootfs: {}", src.display()),
+        ));
+    }
+
+    // Match `tar`'s overwrite behaviour, and unlink first so that an existing
+    // symlink cannot redirect the copy outside the rootfs.
+    match std::fs::remove_file(&dst) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    // `fs::copy` also copies the permission bits, matching the hard link.
+    std::fs::copy(&canon_src, &dst)?;
+    Ok(())
+}
+
+/// Join an archive-relative path onto the extraction root, skipping `.` and
+/// leading `/` components and rejecting `..`, like `tar` does.
+fn join_layer_path(base: &std::path::Path, path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut joined = base.to_path_buf();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(..)
+            | std::path::Component::RootDir
+            | std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => return None,
+            std::path::Component::Normal(part) => joined.push(part),
+        }
+    }
+    Some(joined)
 }
 
 /// Resolve the manifest digest for an image tag (lightweight registry call).
@@ -576,4 +729,79 @@ pub(crate) fn pull_and_extract_image(
         image_config,
         created,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// A gzip-compressed layer with a regular file and a hard link to it,
+    /// matching the Debian base layer layout that fails on Android.
+    fn layer_with_hard_link() -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+
+        let data = b"perl binary";
+        let mut file_header = tar::Header::new_gnu();
+        file_header.set_size(data.len() as u64);
+        file_header.set_mode(0o755);
+        file_header.set_entry_type(tar::EntryType::Regular);
+        builder
+            .append_data(&mut file_header, "usr/bin/perl", &data[..])
+            .unwrap();
+
+        let mut link_header = tar::Header::new_gnu();
+        link_header.set_size(0);
+        link_header.set_mode(0o755);
+        link_header.set_entry_type(tar::EntryType::Link);
+        link_header.set_link_name("usr/bin/perl").unwrap();
+        builder
+            .append_data(&mut link_header, "usr/bin/perl5.38.2", std::io::empty())
+            .unwrap();
+
+        let tar_bytes = builder.into_inner().unwrap();
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&tar_bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn extracts_hard_links_by_copying_when_linking_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("rootfs");
+        std::fs::create_dir_all(target.join("usr/bin")).unwrap();
+
+        // Pre-create the link destination: `link(2)` fails with `AlreadyExists`,
+        // which is what Android effectively does for every hard link.
+        std::fs::write(target.join("usr/bin/perl5.38.2"), b"stale").unwrap();
+
+        extract_gzip_layer_to_dir(&layer_with_hard_link(), &target).unwrap();
+
+        let perl = std::fs::read(target.join("usr/bin/perl")).unwrap();
+        let link = std::fs::read(target.join("usr/bin/perl5.38.2")).unwrap();
+        assert_eq!(perl, b"perl binary");
+        assert_eq!(link, b"perl binary");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(target.join("usr/bin/perl5.38.2"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
+    }
+
+    #[test]
+    fn join_layer_path_rejects_parent_components() {
+        let base = std::path::Path::new("/rootfs");
+        assert_eq!(
+            join_layer_path(base, std::path::Path::new("/usr/bin/perl")),
+            Some(std::path::PathBuf::from("/rootfs/usr/bin/perl"))
+        );
+        assert_eq!(
+            join_layer_path(base, std::path::Path::new("../../etc/passwd")),
+            None
+        );
+    }
 }
