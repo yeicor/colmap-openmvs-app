@@ -70,9 +70,12 @@ echo "=== Building static PRoot ${PROOT_VERSION} ==="
 (
     cd "$WORK_DIR/proot/src"
     make clean >/dev/null 2>&1 || true
+    # CPPFLAGS/LDFLAGS are passed through the environment (not as make
+    # arguments) so that the makefile can still append its own flags.
+    CPPFLAGS="-I$WORK_DIR/talloc" \
+    LDFLAGS="$WORK_DIR/libtalloc.a -static" \
     make -j"$(getconf _NPROCESSORS_ONLN)" \
-        PYTHON=/bin/false \
-        LDFLAGS="$WORK_DIR/libtalloc.a -static"
+        PYTHON=/bin/false
 )
 
 if ! file "$WORK_DIR/proot/src/proot" | grep -q "statically linked"; then
