@@ -195,8 +195,42 @@ fn nested_sandbox_detected() -> bool {
     // them as well keeps the detection working on kernels where `/proc` is
     // restricted or emulated.
     is_running_under_ptrace()
-        || std::env::var_os("PROOT_LOADER").is_some()
+        || inherited_proot_loader().is_some()
         || std::env::var_os("PROOT_TMP_DIR").is_some()
+}
+
+/// The loader exported by an outer PRoot sandbox, if any.
+///
+/// DroidDeck sets `PROOT_LOADER` to the loader of the PRoot instance that
+/// runs the Linux application.  Reusing it is the only reliable way to nest:
+/// PRoot maps its loader at a fixed address, so an inner loader built by a
+/// different toolchain collides with the outer one and the guest crashes or
+/// the loader exits with status 182.  The outer loader always understands the
+/// outer sandbox, and the loader script format did not change between the
+/// PRoot versions used here.
+#[cfg(target_os = "linux")]
+fn inherited_proot_loader() -> Option<std::ffi::OsString> {
+    std::env::var_os("PROOT_LOADER").filter(|path| !path.is_empty())
+}
+
+/// Apply the environment a PRoot instance needs when it runs inside another
+/// PRoot sandbox.
+///
+/// `PROOT_LOADER` has to be forwarded explicitly because both the probe and
+/// the real run start with an empty environment.  The temporary directory is
+/// kept under the app's data directory instead of `/tmp`, which may be
+/// missing or read-only inside the guest image.
+#[cfg(target_os = "linux")]
+fn setup_nested_proot_environment(cmd: &mut Command, images_dir: &Path) {
+    if let Some(loader) = inherited_proot_loader() {
+        cmd.env("PROOT_LOADER", loader);
+    }
+
+    let tmp_dir = images_dir.join(".proot-tmp");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    if let Some(tmp_str) = tmp_dir.to_str() {
+        cmd.env("PROOT_TMP_DIR", tmp_str);
+    }
 }
 
 /// Guest command used to check whether a PRoot binary can start processes.
@@ -906,15 +940,7 @@ impl PRoot {
         let mut cmd = setup_proot_command(proot_bin);
         cmd.env_clear();
         setup_proot_environment(&mut cmd);
-
-        // PRoot extracts its loader into a temporary directory.  Use a
-        // directory owned by the app instead of relying on `/tmp`, which may
-        // be missing or read-only in the guest image.
-        let tmp_dir = self.images_dir.join(".proot-tmp");
-        let _ = std::fs::create_dir_all(&tmp_dir);
-        if let Some(tmp_str) = tmp_dir.to_str() {
-            cmd.env("PROOT_TMP_DIR", tmp_str);
-        }
+        setup_nested_proot_environment(&mut cmd, &self.images_dir);
 
         cmd.arg("-R").arg(rootfs_dir).arg("-w").arg("/");
         for arg in probe_guest_command(rootfs_dir) {
@@ -1562,17 +1588,11 @@ impl Runtime for PRoot {
         // Environment variables that PRoot itself needs on this platform.
         setup_proot_environment(&mut cmd);
 
-        // PRoot extracts its loader into a temporary directory.  On Linux
-        // (including the Linux build running inside DroidDeck) keep that
-        // directory under the app's data dir instead of relying on `/tmp`.
+        // Reuse the outer sandbox's loader when this app runs inside another
+        // PRoot (DroidDeck), and keep PRoot's temporary files in the app's
+        // data directory.
         #[cfg(target_os = "linux")]
-        {
-            let tmp_dir = self.images_dir.join(".proot-tmp");
-            let _ = std::fs::create_dir_all(&tmp_dir);
-            if let Some(tmp_str) = tmp_dir.to_str() {
-                cmd.env("PROOT_TMP_DIR", tmp_str);
-            }
-        }
+        setup_nested_proot_environment(&mut cmd, &self.images_dir);
 
         // On Android, bind the jniLibs directory so that ELF symlinks
         // (librootfs-<hash>.so) resolve inside the container.
