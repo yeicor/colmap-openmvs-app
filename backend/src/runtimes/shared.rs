@@ -206,7 +206,7 @@ fn retry_http<T>(what: &str, mut op: impl FnMut() -> Result<T, String>) -> T {
     panic!("{what} failed after {ATTEMPTS} attempts: {last_error}");
 }
 
-fn registry_token(registry: &str, _repo: &str) -> String {
+fn registry_token(registry: &str, repo: &str) -> String {
     // Read optional credentials from the environment.  When set, they are
     // forwarded as HTTP Basic auth to the token endpoint so that the returned
     // pull token carries an authenticated identity (Docker Hub: 5 000
@@ -303,6 +303,10 @@ fn registry_token(registry: &str, _repo: &str) -> String {
     if realm.is_empty() {
         tracing::warn!("No realm in auth challenge: {auth_header}");
         return String::new();
+    }
+
+    if scope.is_empty() && !repo.is_empty() {
+        scope = format!("repository:{repo}:pull");
     }
 
     let mut token_url = format!("{realm}?service={service}");
@@ -894,5 +898,12 @@ mod tests {
         assert_eq!(registry, "registry-1.docker.io");
         assert_eq!(repo, "yeicor/colmap-openmvs");
         assert_eq!(tag, "cpu-latest");
+    }
+
+    #[test]
+    fn test_fetch_digest_live() {
+        let digest = image_digest("docker.io/yeicor/colmap-openmvs:cpu-latest", "linux/amd64");
+        println!("Got digest: {digest}");
+        assert!(!digest.is_empty());
     }
 }
