@@ -129,8 +129,12 @@ pub(crate) fn decompress_xz(data: &[u8]) -> Result<Vec<u8>, String> {
 /// Supports formats:
 ///   - registry/repo:tag
 ///   - registry/repo (default tag: latest)
-///   - repo:tag (default registry: docker.io)
+///   - repo:tag (default registry: registry-1.docker.io)
 ///   - repo (default registry and tag)
+///
+/// `docker.io` and `index.docker.io` are normalised to `registry-1.docker.io`
+/// because the bare `docker.io` hostname redirects to the marketing site and
+/// does not serve the OCI registry API.
 pub(crate) fn parse_image_ref(image: &str) -> (String, String, String) {
     let (registry, rest) = if let Some(slash) = image.find('/') {
         let part = &image[..slash];
@@ -141,6 +145,12 @@ pub(crate) fn parse_image_ref(image: &str) -> (String, String, String) {
         }
     } else {
         ("registry-1.docker.io".to_string(), image)
+    };
+
+    // Normalise Docker Hub aliases that don't serve the OCI API directly.
+    let registry = match registry.as_str() {
+        "docker.io" | "index.docker.io" => "registry-1.docker.io".to_string(),
+        _ => registry,
     };
 
     let (repo, tag) = if let Some(colon) = rest.rfind(':') {
@@ -847,5 +857,27 @@ mod tests {
             join_layer_path(base, std::path::Path::new("../../etc/passwd")),
             None
         );
+    }
+
+    #[test]
+    fn parse_image_ref_normalises_docker_io_aliases() {
+        // Bare `docker.io` and `index.docker.io` must be rewritten to the real
+        // OCI registry endpoint; the bare hostnames redirect to the marketing site.
+        for alias in &["docker.io", "index.docker.io"] {
+            let (registry, repo, tag) =
+                parse_image_ref(&format!("{alias}/yeicor/colmap-openmvs:cpu-latest"));
+            assert_eq!(
+                registry, "registry-1.docker.io",
+                "{alias} should be normalised"
+            );
+            assert_eq!(repo, "yeicor/colmap-openmvs");
+            assert_eq!(tag, "cpu-latest");
+        }
+        // Already-canonical form must pass through unchanged.
+        let (registry, repo, tag) =
+            parse_image_ref("registry-1.docker.io/yeicor/colmap-openmvs:cpu-latest");
+        assert_eq!(registry, "registry-1.docker.io");
+        assert_eq!(repo, "yeicor/colmap-openmvs");
+        assert_eq!(tag, "cpu-latest");
     }
 }
