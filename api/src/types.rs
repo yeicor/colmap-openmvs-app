@@ -32,8 +32,8 @@ pub struct Settings {
     pub proot_images_dir: String,
     /// The default container image tag to use for all runtime commands.
     /// Format: "runtime:tag" where runtime is "proot" or "docker"
-    /// Example: "proot:mirror.gcr.io/yeicor/colmap-openmvs:latest"
-    /// or "docker:mirror.gcr.io/yeicor/colmap-openmvs:latest"
+    /// Example: "proot:docker.io/yeicor/colmap-openmvs:latest"
+    /// or "docker:docker.io/yeicor/colmap-openmvs:latest"
     #[serde(default)]
     pub default_image_tag: Option<String>,
     /// Custom mounts for all runtimes (for CUDA, debuggers, etc.)

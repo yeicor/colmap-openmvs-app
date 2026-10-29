@@ -1010,7 +1010,7 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
     let mut ready_search = use_signal(String::new);
     let mut available_search = use_signal(String::new);
 
-    const COLMAPOPENMVS_IMAGE: &str = "mirror.gcr.io/yeicor/colmap-openmvs";
+    const COLMAPOPENMVS_IMAGE: &str = "docker.io/yeicor/colmap-openmvs";
 
     /// Returns true if the tag uses the official COLMAP-OpenMVS image repo.
     fn is_official(tag: &str) -> bool {
@@ -1334,7 +1334,7 @@ fn RuntimeImagesSection(runtime_type: String, on_default_changed: EventHandler<(
                         div { class: "tags-item-top",
                             input {
                                 r#type: "text",
-                                placeholder: "mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest",
+                                placeholder: "docker.io/yeicor/colmap-openmvs:cpu-latest",
                                 class: "custom-tag-input",
                                 value: "{custom_tag}",
                                 oninput: move |e| custom_tag.set(e.value()),

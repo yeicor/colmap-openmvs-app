@@ -14,7 +14,7 @@
 ///
 /// Environment variable (optional):
 ///   `DOCKER_IMAGE` – Docker image tag to export
-///                    (default: mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest)
+///                    (default: docker.io/yeicor/colmap-openmvs:cpu-latest)
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
@@ -167,7 +167,7 @@ fn main() {
     // ── Android-specific setup ──────────────────────────────────────────
 
     let docker_image = std::env::var("DOCKER_IMAGE")
-        .unwrap_or_else(|_| "mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest".to_string());
+        .unwrap_or_else(|_| "docker.io/yeicor/colmap-openmvs:cpu-latest".to_string());
 
     let (docker_platform, _arch_abi, termux_arch) = match target.as_str() {
         t if t.contains("aarch64") => ("linux/arm64", "arm64-v8a", "aarch64"),

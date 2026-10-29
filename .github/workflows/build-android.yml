@@ -41,10 +41,16 @@ jobs:
       digest: ${{ steps.digest.outputs.digest }}
 
     steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: docker.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - id: digest
         run: |
           DIGEST=$(docker buildx imagetools inspect \
-            mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest \
+            docker.io/yeicor/colmap-openmvs:cpu-latest \
             --format '{{json .Manifest}}' |
             jq -r '.manifests[] | select(.platform.architecture=="amd64") | .digest')
 
@@ -195,10 +201,21 @@ jobs:
             curl -sSL https://dioxus.dev/install.sh | bash -s -- "$TAG"
           fi
 
+      # Log in to Docker Hub so that build.rs pulls the rootfs image with an
+      # authenticated identity (5 000 pulls/6 h) rather than as an anonymous
+      # client sharing the runner IP pool (100 pulls/6 h).
+      - uses: docker/login-action@v4
+        with:
+          registry: docker.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - shell: bash
+        env:
+          DOCKER_USERNAME: ${{ github.repository_owner }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           dx bundle --android --verbose --package-types ${{ matrix.package-type }} --features server --target ${{ matrix.target }} --release
-
       # `dx` parses cargo output as JSON and bails on `build-finished` before
       # reading cargo's plain-text error, so build-script panics and OOM/disk
       # kills show up as a bare "cargo build finished with errors" with no

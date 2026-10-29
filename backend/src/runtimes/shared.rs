@@ -156,6 +156,25 @@ pub(crate) fn parse_image_ref(image: &str) -> (String, String, String) {
 // OCI Registry HTTP helpers (ureq-based, sync)
 // ---------------------------------------------------------------------------
 
+/// Minimal standard Base64 encoder (RFC 4648 §4).  Used to build the
+/// `Authorization: Basic …` header without pulling in an external crate,
+/// because this file is shared between the normal crate and `build.rs` via
+/// `include!`, where the dependency list is different.
+pub(crate) fn base64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
+        out.push(TABLE[b0 >> 2] as char);
+        out.push(TABLE[((b0 & 3) << 4) | (b1 >> 4)] as char);
+        out.push(if chunk.len() > 1 { TABLE[((b1 & 0xf) << 2) | (b2 >> 6)] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[b2 & 0x3f] as char } else { '=' });
+    }
+    out
+}
+
 /// Retry an HTTP operation with exponential backoff. Registry/CDN blips are
 /// common enough (429/5xx, dropped connections) that a single failure should
 /// not abort a build that has already downloaded hundreds of megabytes.
@@ -178,6 +197,24 @@ fn retry_http<T>(what: &str, mut op: impl FnMut() -> Result<T, String>) -> T {
 }
 
 fn registry_token(registry: &str, _repo: &str) -> String {
+    // Read optional credentials from the environment.  When set, they are
+    // forwarded as HTTP Basic auth to the token endpoint so that the returned
+    // pull token carries an authenticated identity (Docker Hub: 5 000
+    // pulls/6 h per account vs 100/6 h anonymous).
+    //
+    // Supported env vars (checked in order):
+    //   DOCKER_USERNAME / DOCKER_PASSWORD  – generic, also used by docker/login-action
+    //   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN – Docker Hub-specific alternative
+    let (cred_user, cred_pass): (Option<String>, Option<String>) = {
+        let u = std::env::var("DOCKER_USERNAME")
+            .ok()
+            .or_else(|| std::env::var("DOCKERHUB_USERNAME").ok());
+        let p = std::env::var("DOCKER_PASSWORD")
+            .ok()
+            .or_else(|| std::env::var("DOCKERHUB_TOKEN").ok());
+        (u, p)
+    };
+
     let probe_url = format!("https://{}/v2/", registry);
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(std::time::Duration::from_secs(15)))
@@ -249,10 +286,17 @@ fn registry_token(registry: &str, _repo: &str) -> String {
     }
 
     let body = retry_http(&format!("GET {token_url}"), || {
-        agent
+        let mut req = agent
             .get(&token_url)
-            .header("Accept", "application/json")
-            .call()
+            .header("Accept", "application/json");
+        // Attach Basic auth when credentials are available so the returned
+        // token carries an authenticated identity (Docker Hub: 5 000
+        // pulls/6 h per account vs 100/6 h anonymous from a shared CI IP).
+        if let (Some(ref user), Some(ref pass)) = (&cred_user, &cred_pass) {
+            let credentials = base64_encode(format!("{user}:{pass}").as_bytes());
+            req = req.header("Authorization", &format!("Basic {credentials}"));
+        }
+        req.call()
             .map_err(|e| e.to_string())?
             .into_body()
             .read_to_string()

@@ -50,7 +50,7 @@ async fn test_generate_demo_data() {
         projects_folder: projects_folder.to_string_lossy().into_owned(),
         proot_binary_dir: proot_binary_dir.to_string_lossy().into_owned(),
         proot_images_dir: proot_images_dir.to_string_lossy().into_owned(),
-        default_image_tag: Some("proot:mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest".to_string()),
+        default_image_tag: Some("proot:docker.io/yeicor/colmap-openmvs:cpu-latest".to_string()),
         custom_mounts: vec![],
         theme_override: None,
         settings_file_path: Some(
@@ -113,7 +113,7 @@ async fn test_generate_demo_data() {
                     }
                     let mut s = settings.clone();
                     s.default_image_tag =
-                        Some("docker:mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest".to_string());
+                        Some("docker:docker.io/yeicor/colmap-openmvs:cpu-latest".to_string());
                     backend::update_settings(s.clone()).await.unwrap();
                     docker_info
                 } else {
@@ -148,7 +148,7 @@ async fn test_generate_demo_data() {
             // Switch to docker
             let mut s = settings.clone();
             s.default_image_tag =
-                Some("docker:mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest".to_string());
+                Some("docker:docker.io/yeicor/colmap-openmvs:cpu-latest".to_string());
             backend::update_settings(s.clone()).await.unwrap();
             docker_info
         }
@@ -205,7 +205,7 @@ async fn test_generate_demo_data() {
 
         let mut s = settings.clone();
         s.default_image_tag =
-            Some("docker:mirror.gcr.io/yeicor/colmap-openmvs:cpu-latest".to_string());
+            Some("docker:docker.io/yeicor/colmap-openmvs:cpu-latest".to_string());
         backend::update_settings(s).await.unwrap();
         let prep_task_id = backend::prepare_docker_image(image_tag.to_string())
             .await
