@@ -228,6 +228,12 @@ fn registry_token(registry: &str, _repo: &str) -> String {
     let probe_url = format!("https://{}/v2/", registry);
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(std::time::Duration::from_secs(15)))
+        // Do NOT follow redirects on the probe: registry-1.docker.io/v2/ correctly
+        // returns HTTP 401 with a www-authenticate header, but if a redirect is
+        // followed (e.g. to www.docker.com which returns 200) we'd see a success
+        // status with no auth challenge and emit an empty token, causing every
+        // subsequent manifest/blob fetch to fail with 401.
+        .max_redirects(0)
         .build()
         .into();
 
@@ -249,6 +255,15 @@ fn registry_token(registry: &str, _repo: &str) -> String {
     let status = response.status();
     if status.as_u16() == 401 {
         // 401 is expected — continue to parse auth challenge
+    } else if status.as_u16() / 100 == 3 {
+        // A 3xx with max_redirects(0) means the probe was redirected away from
+        // the OCI endpoint (e.g. registry-1.docker.io/v2/ redirecting to the
+        // Docker Hub marketing site).  Bail – something is wrong with the
+        // registry hostname.
+        tracing::warn!(
+            "Registry probe got redirect {status} — is the registry hostname correct?"
+        );
+        return String::new();
     } else if !status.is_success() {
         tracing::warn!("Registry probe returned {status}");
         return String::new();
