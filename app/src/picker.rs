@@ -108,6 +108,458 @@ pub async fn pick_file(accept: Option<&str>) -> Option<(String, Vec<u8>)> {
     }
 }
 
+/// Result of a sequential pick-and-process operation.
+#[derive(Debug, Default)]
+pub struct PickResult {
+    /// Number of files the user selected.
+    pub selected: usize,
+    /// Files that were read and processed successfully.
+    pub succeeded: Vec<String>,
+    /// Human-readable errors for files that could not be read or processed.
+    pub errors: Vec<String>,
+}
+
+/// Decode an `__error__:<url-encoded-name>:<message>` payload sent by the JS
+/// picker when a file could not be read.
+fn parse_picker_error(rest: &str) -> (String, String) {
+    let mut parts = rest.splitn(2, ':');
+    let name = parts
+        .next()
+        .and_then(|n| urlencoding::decode(n).ok())
+        .map(|n| n.into_owned())
+        .unwrap_or_else(|| "unknown file".to_string());
+    let message = parts.next().unwrap_or("read failed").to_string();
+    (name, message)
+}
+
+/// Open a native file-picker and process each selected file **one at a time**.
+///
+/// Unlike [`pick_files`], this never holds more than one file in memory at a
+/// time: the JavaScript side waits for an acknowledgement from Rust before it
+/// reads and sends the next file.  This is essential on Android, where reading
+/// several high-resolution photos into the WebView at once exhausts the
+/// renderer's memory (and can make later reads fail with `NotReadableError`).
+///
+/// Files are also encoded with `FileReader.readAsDataURL`, which performs the
+/// base64 conversion natively instead of building a giant JavaScript string one
+/// character at a time.
+///
+/// The `on_file` callback receives `(filename, bytes)` and returns `Ok(())` on
+/// success or an error message to report.  A failure for one file does not stop
+/// the remaining files from being processed.
+pub async fn pick_files_sequential<F, Fut>(
+    accept: Option<&str>,
+    multiple: bool,
+    mut on_file: F,
+) -> PickResult
+where
+    F: FnMut(String, Vec<u8>) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    // NOTE: `document::eval` treats the script as the *body* of an async
+    // function (Dioxus wraps it and closes the channel when the returned
+    // promise resolves).  Keep this as a plain body: wrapping it in an
+    // immediately-invoked async function would make the eval resolve right
+    // away, after which `Eval::send` (our acknowledgements) fails because the
+    // JS side of the channel is already closed.
+    const JS_TEMPLATE: &str = r#"
+    const acceptFilter = '__ACCEPT__';
+    const multipleFlag = __MULTIPLE__;
+
+    function fileToBase64(file) {
+        return new Promise(function(resolve, reject) {
+            const reader = new FileReader();
+            reader.onload = function() {
+                const s = String(reader.result);
+                const comma = s.indexOf(',');
+                resolve(comma >= 0 ? s.slice(comma + 1) : '');
+            };
+            reader.onerror = function() {
+                reject(reader.error || new Error('file read failed'));
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = multipleFlag;
+    if (acceptFilter) input.accept = acceptFilter;
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    const picked = await new Promise(function(resolve) {
+        input.addEventListener('change', function() { resolve(input.files); });
+        input.addEventListener('cancel', function() { resolve(null); });
+        input.click();
+    });
+    document.body.removeChild(input);
+
+    if (!picked || picked.length === 0) {
+        dioxus.send('__done__');
+        return;
+    }
+
+    dioxus.send(String(picked.length));
+
+    for (let i = 0; i < picked.length; i++) {
+        const file = picked[i];
+        let b64;
+        try {
+            b64 = await fileToBase64(file);
+        } catch (e) {
+            const msg = (e && e.message) ? e.message : String(e);
+            dioxus.send('__error__:' + encodeURIComponent(file.name) + ':' + msg.slice(0, 200));
+            await dioxus.recv();
+            continue;
+        }
+        dioxus.send('__name__:' + encodeURIComponent(file.name));
+        dioxus.send(b64);
+        await dioxus.recv();
+    }
+
+    dioxus.send('__done__');
+"#;
+
+    let js = JS_TEMPLATE
+        .replace("__ACCEPT__", &js_escape(accept.unwrap_or("")))
+        .replace("__MULTIPLE__", if multiple { "true" } else { "false" });
+
+    let mut eval_handle = eval(&js);
+
+    let first = match eval_handle.recv::<String>().await {
+        Ok(s) => s,
+        Err(_) => return PickResult::default(),
+    };
+
+    if first == "__done__" {
+        return PickResult::default();
+    }
+
+    let selected: usize = match first.parse() {
+        Ok(n) => n,
+        Err(_) => return PickResult::default(),
+    };
+
+    let mut result = PickResult {
+        selected,
+        succeeded: Vec::with_capacity(selected),
+        errors: Vec::new(),
+    };
+
+    for _ in 0..selected {
+        let msg = match eval_handle.recv::<String>().await {
+            Ok(m) => m,
+            Err(e) => {
+                result.errors.push(format!(
+                    "Upload channel closed unexpectedly ({} pending)",
+                    selected - result.succeeded.len() - result.errors.len()
+                ));
+                tracing::error!("Eval channel error during file pick: {:?}", e);
+                break;
+            }
+        };
+
+        if msg == "__done__" {
+            break;
+        }
+
+        if let Some(rest) = msg.strip_prefix("__error__:") {
+            let (name, message) = parse_picker_error(rest);
+            tracing::error!("Failed to read picked file '{}': {}", name, message);
+            result.errors.push(format!("{name}: {message}"));
+            let _ = eval_handle.send("__ack__");
+            continue;
+        }
+
+        let name = match msg.strip_prefix("__name__:") {
+            Some(encoded) => urlencoding::decode(encoded)
+                .map(|n| n.into_owned())
+                .unwrap_or_else(|_| encoded.to_string()),
+            None => {
+                result
+                    .errors
+                    .push(format!("Unexpected picker message: {msg}"));
+                let _ = eval_handle.send("__ack__");
+                break;
+            }
+        };
+        let b64 = match eval_handle.recv::<String>().await {
+            Ok(b) => b,
+            Err(e) => {
+                result
+                    .errors
+                    .push(format!("{name}: upload channel closed unexpectedly: {e}"));
+                break;
+            }
+        };
+
+        match base64::engine::general_purpose::STANDARD.decode(&b64) {
+            Ok(bytes) => match on_file(name.clone(), bytes).await {
+                Ok(()) => result.succeeded.push(name),
+                Err(e) => {
+                    tracing::error!("Failed to import picked file '{}': {}", name, e);
+                    result.errors.push(format!("{name}: {e}"));
+                }
+            },
+            Err(e) => {
+                tracing::error!("Failed to decode picked file '{}': {}", name, e);
+                result
+                    .errors
+                    .push(format!("{name}: base64 decode failed: {e}"));
+            }
+        }
+
+        let _ = eval_handle.send("__ack__");
+    }
+
+    result
+}
+
+/// Open a native file-picker and stream each selected file to `on_file` in
+/// chunks.
+///
+/// This is the native (desktop / Android) counterpart to
+/// [`upload_files_direct`]: there is no TCP server to stream a `fetch()` body
+/// to, so the bytes have to travel through the Dioxus eval channel.  Sending a
+/// whole video at once can be hundreds of megabytes of base64; instead, the
+/// JavaScript side reads fixed-size slices and waits for an acknowledgement
+/// after each one.  The Rust side feeds the chunks into the [`ByteStream`]
+/// passed to `on_file`, which can be handed straight to a server function.
+///
+/// `on_file` receives `(filename, expected_size, body)`.  The expected size
+/// lets the receiver detect a truncated upload if a chunk cannot be read.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn pick_files_chunked<F, Fut>(
+    accept: Option<&str>,
+    multiple: bool,
+    mut on_file: F,
+) -> PickResult
+where
+    F: FnMut(String, u64, crate::fullstack_compat::ByteStream) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    use futures::SinkExt as _;
+
+    // NOTE: `document::eval` treats the script as the *body* of an async
+    // function (Dioxus wraps it and closes the channel when the returned
+    // promise resolves).  Keep this as a plain body: wrapping it in an
+    // immediately-invoked async function would make the eval resolve right
+    // away, after which `Eval::send` (our acknowledgements) fails because the
+    // JS side of the channel is already closed.
+    const JS_TEMPLATE: &str = r#"
+    const acceptFilter = '__ACCEPT__';
+    const multipleFlag = __MULTIPLE__;
+    const CHUNK_SIZE = 512 * 1024;
+
+    function blobToBase64(blob) {
+        return new Promise(function(resolve, reject) {
+            const reader = new FileReader();
+            reader.onload = function() {
+                const s = String(reader.result);
+                const comma = s.indexOf(',');
+                resolve(comma >= 0 ? s.slice(comma + 1) : '');
+            };
+            reader.onerror = function() {
+                reject(reader.error || new Error('file read failed'));
+            };
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = multipleFlag;
+    if (acceptFilter) input.accept = acceptFilter;
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    const picked = await new Promise(function(resolve) {
+        input.addEventListener('change', function() { resolve(input.files); });
+        input.addEventListener('cancel', function() { resolve(null); });
+        input.click();
+    });
+    document.body.removeChild(input);
+
+    if (!picked || picked.length === 0) {
+        dioxus.send('__done__');
+        return;
+    }
+
+    dioxus.send(String(picked.length));
+
+    for (let i = 0; i < picked.length; i++) {
+        const file = picked[i];
+        dioxus.send('__file__');
+        dioxus.send(file.name);
+        dioxus.send(String(file.size));
+
+        let failed = false;
+        for (let offset = 0; offset < file.size; offset += CHUNK_SIZE) {
+            let b64;
+            try {
+                const end = Math.min(offset + CHUNK_SIZE, file.size);
+                b64 = await blobToBase64(file.slice(offset, end));
+            } catch (e) {
+                const msg = (e && e.message) ? e.message : String(e);
+                dioxus.send('__error__:' + encodeURIComponent(file.name) + ':' + msg.slice(0, 200));
+                failed = true;
+                break;
+            }
+            dioxus.send(b64);
+            await dioxus.recv();
+        }
+
+        if (!failed) dioxus.send('__eof__');
+        await dioxus.recv();
+    }
+
+    dioxus.send('__done__');
+"#;
+
+    let js = JS_TEMPLATE
+        .replace("__ACCEPT__", &js_escape(accept.unwrap_or("")))
+        .replace("__MULTIPLE__", if multiple { "true" } else { "false" });
+
+    let mut eval_handle = eval(&js);
+
+    let first = match eval_handle.recv::<String>().await {
+        Ok(s) => s,
+        Err(_) => return PickResult::default(),
+    };
+
+    if first == "__done__" {
+        return PickResult::default();
+    }
+
+    let selected: usize = match first.parse() {
+        Ok(n) => n,
+        Err(_) => return PickResult::default(),
+    };
+
+    let mut result = PickResult {
+        selected,
+        succeeded: Vec::with_capacity(selected),
+        errors: Vec::new(),
+    };
+
+    for _ in 0..selected {
+        let marker = match eval_handle.recv::<String>().await {
+            Ok(m) => m,
+            Err(e) => {
+                result
+                    .errors
+                    .push(format!("Upload channel closed unexpectedly: {e}"));
+                break;
+            }
+        };
+
+        if marker == "__done__" {
+            break;
+        }
+
+        if marker != "__file__" {
+            result
+                .errors
+                .push(format!("Unexpected picker message: {marker}"));
+            break;
+        }
+
+        let name = match eval_handle.recv::<String>().await {
+            Ok(n) => n,
+            Err(e) => {
+                result
+                    .errors
+                    .push(format!("Upload channel closed unexpectedly: {e}"));
+                break;
+            }
+        };
+
+        let expected_size = match eval_handle.recv::<String>().await {
+            Ok(s) => match s.parse::<u64>() {
+                Ok(n) => n,
+                Err(e) => {
+                    result
+                        .errors
+                        .push(format!("{name}: invalid file size '{s}': {e}"));
+                    break;
+                }
+            },
+            Err(e) => {
+                result
+                    .errors
+                    .push(format!("{name}: upload channel closed unexpectedly: {e}"));
+                break;
+            }
+        };
+
+        let (mut tx, rx) =
+            futures::channel::mpsc::channel::<crate::fullstack_compat::body::Bytes>(4);
+        let upload = on_file(
+            name.clone(),
+            expected_size,
+            crate::fullstack_compat::ByteStream::new(rx),
+        );
+
+        let pump = async {
+            let mut file_error: Option<String> = None;
+            loop {
+                let msg = match eval_handle.recv::<String>().await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        file_error = Some(format!("upload channel closed unexpectedly: {e}"));
+                        break;
+                    }
+                };
+
+                if msg == "__eof__" {
+                    break;
+                }
+
+                if let Some(rest) = msg.strip_prefix("__error__:") {
+                    let (_, message) = parse_picker_error(rest);
+                    file_error = Some(message);
+                    break;
+                }
+
+                match base64::engine::general_purpose::STANDARD.decode(&msg) {
+                    Ok(bytes) => {
+                        // If the upload future has already failed, keep
+                        // draining the file so the JS side does not stall on
+                        // an acknowledgement that will never come.
+                        let _ = tx
+                            .send(crate::fullstack_compat::body::Bytes::from(bytes))
+                            .await;
+                    }
+                    Err(e) => {
+                        file_error = Some(format!("base64 decode failed: {e}"));
+                        break;
+                    }
+                }
+
+                let _ = eval_handle.send("__ack__");
+            }
+            drop(tx);
+            file_error
+        };
+
+        let (upload_result, file_error) = futures::future::join(upload, pump).await;
+
+        // Acknowledge the end of this file so the picker moves on to the next.
+        let _ = eval_handle.send("__ack__");
+
+        if let Some(err) = file_error {
+            result.errors.push(format!("{name}: {err}"));
+        } else if let Err(err) = upload_result {
+            result.errors.push(format!("{name}: {err}"));
+        } else {
+            result.succeeded.push(name);
+        }
+    }
+
+    result
+}
+
 /// Escape a string for embedding in a JS single-quoted string literal.
 fn js_escape(s: &str) -> String {
     s.replace('\\', "\\\\")

@@ -1638,48 +1638,52 @@ pub fn GalleryTab(project_name: String) -> Element {
                                 let pn = project_name.clone();
                                 spawn(async move {
                                     // ── File picker (works everywhere: web, desktop, Android) ──
-                                                            // Opens the browser's native file-picker via a hidden
-                                                            // <input type="file"> element, reads each selected
-                                                            // file as bytes in the browser, and uploads them to
-                                                            // the server one-by-one through the existing
-                                                            // add_project_image endpoint.
-
-                                    let files = crate::picker::pick_files(Some("image/*"), true).await;
-
-                                    let count = files.len();
-                                    let mut imported: Vec<String> = Vec::new();
-                                    let mut failed: Vec<String> = Vec::new();
-
-                                    for (name, bytes) in files {
-                                        let byte_stream = crate::fullstack_compat::ByteStream::new(
-                                            futures::stream::once(async {
-                                                crate::fullstack_compat::body::Bytes::from(bytes)
-                                            }),
-                                        );
-                                        match crate::server::add_project_image(
-                                            pn.clone(),
-                                            name.clone(),
-                                            byte_stream,
-                                        )
-                                        .await
-                                        {
-                                            Ok(_) => imported.push(name),
-                                            Err(e) => {
-                                                error!("Failed to import image '{}': {}", name, e);
-                                                failed.push(name);
+                                    // Opens the browser's native file-picker via a hidden
+                                    // <input type="file"> element and uploads the selected
+                                    // files **one at a time** through the existing
+                                    // add_project_image endpoint.  Waiting for the import to
+                                    // finish before the next file is read keeps only a single
+                                    // image in memory, which is required on Android where
+                                    // reading many high-resolution photos at once exhausts the
+                                    // WebView renderer.
+                                    let pick = crate::picker::pick_files_sequential(
+                                        Some("image/*"),
+                                        true,
+                                        |name, bytes| {
+                                            let pn = pn.clone();
+                                            async move {
+                                                let byte_stream =
+                                                    crate::fullstack_compat::ByteStream::new(
+                                                        futures::stream::once(async {
+                                                            crate::fullstack_compat::body::Bytes::from(bytes)
+                                                        }),
+                                                    );
+                                                crate::server::add_project_image(
+                                                    pn, name, byte_stream,
+                                                )
+                                                .await
+                                                .map_err(|e| e.to_string())
                                             }
-                                        }
-                                    }
+                                        },
+                                    )
+                                    .await;
 
-                                    if count > 0 {
-                                        let fail_count = failed.len();
-                                        info_message.set(Some(
-                                            if fail_count > 0 {
-                                                format!("Imported {} image(s), {} failed", count, fail_count)
-                                            } else {
-                                                format!("Imported {} image(s). You may want to optimize them using the 'Resize Images' button.", count)
-                                            },
-                                        ));
+                                    let count = pick.succeeded.len();
+                                    if pick.selected > 0 {
+                                        if pick.errors.is_empty() {
+                                            info_message.set(Some(
+                                                format!("Imported {count} image(s). You may want to optimize them using the 'Resize Images' button."),
+                                            ));
+                                        } else {
+                                            info_message.set(Some(format!(
+                                                "Imported {} of {} image(s).",
+                                                count, pick.selected
+                                            )));
+                                            error_message.set(Some(format!(
+                                                "Some images could not be imported: {}",
+                                                pick.errors.join("; ")
+                                            )));
+                                        }
                                         if let Ok(project_images) = crate::server::get_project_images(pn).await {
                                             frame_count.set(project_images.frame_count);
                                             image_paths.set(project_images.images);
@@ -1711,19 +1715,51 @@ pub fn GalleryTab(project_name: String) -> Element {
                                 error_message.set(None);
                                 let pn = project_name.clone();
                                 spawn(async move {
-                                    let base = crate::backend_url::BACKEND_URL
-                                        .get()
-                                        .map(|s| s.trim_end_matches('/'))
-                                        .unwrap_or("");
-                                    let upload_prefix =
-                                        format!("{}/api/projects/{}/videos/",
-                                            base,
-                                            urlencoding::encode(&pn));
-                                    let (uploaded, upload_errors) = crate::picker::upload_files_direct(
-                                        Some("video/*,.mp4,.webm,.mkv,.avi,.mov,.m4v,.mpg,.mpeg,.wmv,.flv,.3gp"),
-                                        true,
-                                        &upload_prefix,
-                                    ).await;
+                                    // Web talks to a real HTTP backend, so stream the
+                                    // selected files straight from the browser with
+                                    // `fetch()` (no base64, no WASM memory).
+                                    //
+                                    // Native targets (desktop, Android) run the server
+                                    // functions in-process and have no TCP listener, so a
+                                    // relative `fetch()` would hit the WebView asset handler
+                                    // and fail with 404.  Instead stream the file through the
+                                    // eval channel in chunks and hand it to the
+                                    // `add_project_video` server function.
+                                    #[cfg(target_arch = "wasm32")]
+                                    let (uploaded, upload_errors) = {
+                                        let base = crate::backend_url::BACKEND_URL
+                                            .get()
+                                            .map(|s| s.trim_end_matches('/'))
+                                            .unwrap_or("");
+                                        let upload_prefix =
+                                            format!("{}/api/projects/{}/videos/",
+                                                base,
+                                                urlencoding::encode(&pn));
+                                        crate::picker::upload_files_direct(
+                                            Some("video/*,.mp4,.webm,.mkv,.avi,.mov,.m4v,.mpg,.mpeg,.wmv,.flv,.3gp"),
+                                            true,
+                                            &upload_prefix,
+                                        ).await
+                                    };
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    let (uploaded, upload_errors) = {
+                                        let pick = crate::picker::pick_files_chunked(
+                                            Some("video/*,.mp4,.webm,.mkv,.avi,.mov,.m4v,.mpg,.mpeg,.wmv,.flv,.3gp"),
+                                            true,
+                                            |name, _expected_size, body| {
+                                                let pn = pn.clone();
+                                                async move {
+                                                    crate::server::add_project_video(
+                                                        pn, name, body,
+                                                    )
+                                                    .await
+                                                    .map_err(|e| e.to_string())
+                                                }
+                                            },
+                                        )
+                                        .await;
+                                        (pick.succeeded, pick.errors)
+                                    };
 
                                     let count = uploaded.len();
                                     if count > 0 {
